@@ -1,71 +1,170 @@
-const std = @import("std");
-const Io = std.Io;
+const sokol = @import("sokol");
+const slog = sokol.log;
+const sg = sokol.gfx;
+const sapp = sokol.app;
+const sglue = sokol.glue;
+const sdtx = sokol.debugtext;
 
-const ink_ribbon_sokol = @import("ink_ribbon_sokol");
+const vec3 = @import("math.zig").Vec3;
+const mat4 = @import("math.zig").Mat4;
 
-pub fn main(init: std.process.Init) !void {
-    // Prints to stderr, unbuffered, ignoring potential errors.
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+const shd = @import("shader.zig");
 
-    // This is appropriate for anything that lives as long as the process.
-    const arena: std.mem.Allocator = init.arena.allocator();
+const state = struct {
+    var rx: f32 = 0.0;
+    var ry: f32 = 0.0;
+    var pip: sg.Pipeline = .{};
+    var bind: sg.Bindings = .{};
+    var pass_action: sg.PassAction = .{};
+    const view: mat4 = mat4.lookat(.{ .x = 0.0, .y = 1.5, .z = 6.0 }, vec3.zero(), vec3.up());
+};
 
-    // Accessing command line arguments:
-    const args = try init.minimal.args.toSlice(arena);
-    for (args) |arg| {
-        std.log.info("arg: {s}", .{arg});
-    }
+export fn init() void {
+    sg.setup(.{
+        .environment = sglue.environment(),
+        .logger = .{ .func = slog.func },
+    });
 
-    // In order to do I/O operations need an `Io` instance.
-    const io = init.io;
-
-    // Stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    var stdout_buffer: [1024]u8 = undefined;
-    var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
-    const stdout_writer = &stdout_file_writer.interface;
-
-    try ink_ribbon_sokol.printAnotherMessage(stdout_writer);
-
-    try stdout_writer.flush(); // Don't forget to flush!
-}
-
-test "simple test" {
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(i32) = .empty;
-    defer list.deinit(gpa); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(gpa, 42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
-
-test "fuzz example" {
-    try std.testing.fuzz({}, testOne, .{});
-}
-
-fn testOne(context: void, smith: *std.testing.Smith) !void {
-    _ = context;
-    // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
-
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(u8) = .empty;
-    defer list.deinit(gpa);
-    while (!smith.eos()) switch (smith.value(enum { add_data, dup_data })) {
-        .add_data => {
-            const slice = try list.addManyAsSlice(gpa, smith.value(u4));
-            smith.bytes(slice);
+    sdtx.setup(.{
+        .fonts = init: {
+            var f: [8]sdtx.FontDesc = @splat(.{});
+            f[0] = sdtx.fontKc853();
+            break :init f;
         },
-        .dup_data => {
-            if (list.items.len == 0) continue;
-            if (list.items.len > std.math.maxInt(u32)) return error.SkipZigTest;
-            const len = smith.valueRangeAtMost(u32, 1, @min(32, list.items.len));
-            const off = smith.valueRangeAtMost(u32, 0, @intCast(list.items.len - len));
-            try list.appendSlice(gpa, list.items[off..][0..len]);
-            try std.testing.expectEqualSlices(
-                u8,
-                list.items[off..][0..len],
-                list.items[list.items.len - len ..],
-            );
+        .logger = .{ .func = slog.func },
+    });
+
+    state.bind.vertex_buffers[0] = sg.makeBuffer(.{
+        .data = sg.asRange(&[_]f32{
+            // zig fmt: off
+            -1.0, -1.0, -1.0, 1.0, 0.0, 0.0, 1.0,
+             1.0, -1.0, -1.0, 1.0, 0.0, 0.0, 1.0,
+             1.0,  1.0, -1.0, 1.0, 0.0, 0.0, 1.0,
+            -1.0,  1.0, -1.0, 1.0, 0.0, 0.0, 1.0,
+
+            -1.0, -1.0,  1.0, 0.0, 1.0, 0.0, 1.0,
+             1.0, -1.0,  1.0, 0.0, 1.0, 0.0, 1.0,
+             1.0,  1.0,  1.0, 0.0, 1.0, 0.0, 1.0,
+            -1.0,  1.0,  1.0, 0.0, 1.0, 0.0, 1.0,
+
+            -1.0, -1.0, -1.0, 0.0, 0.0, 1.0, 1.0,
+            -1.0,  1.0, -1.0, 0.0, 0.0, 1.0, 1.0,
+            -1.0,  1.0,  1.0, 0.0, 0.0, 1.0, 1.0,
+            -1.0, -1.0,  1.0, 0.0, 0.0, 1.0, 1.0,
+
+             1.0, -1.0, -1.0, 1.0, 0.5, 0.0, 1.0,
+             1.0,  1.0, -1.0, 1.0, 0.5, 0.0, 1.0,
+             1.0,  1.0,  1.0, 1.0, 0.5, 0.0, 1.0,
+             1.0, -1.0,  1.0, 1.0, 0.5, 0.0, 1.0,
+
+            -1.0, -1.0, -1.0, 0.0, 0.5, 1.0, 1.0,
+            -1.0, -1.0,  1.0, 0.0, 0.5, 1.0, 1.0,
+             1.0, -1.0,  1.0, 0.0, 0.5, 1.0, 1.0,
+             1.0, -1.0, -1.0, 0.0, 0.5, 1.0, 1.0,
+
+            -1.0,  1.0, -1.0, 1.0, 0.0, 0.5, 1.0,
+            -1.0,  1.0,  1.0, 1.0, 0.0, 0.5, 1.0,
+             1.0,  1.0,  1.0, 1.0, 0.0, 0.5, 1.0,
+             1.0,  1.0, -1.0, 1.0, 0.0, 0.5, 1.0,
+            // zig fmt: on
+        }),
+    });
+
+    state.bind.index_buffer = sg.makeBuffer(.{
+        .usage = .{ .index_buffer = true },
+        .data = sg.asRange(&[_]u16{
+            // zig fmt: off
+            0,  1,  2,  0,  2,  3,
+            6,  5,  4,  7,  6,  4,
+            8,  9,  10, 8,  10, 11,
+            14, 13, 12, 15, 14, 12,
+            16, 17, 18, 16, 18, 19,
+            22, 21, 20, 23, 22, 20,
+            // zig fmt: on
+        }),
+    });
+
+    state.pip = sg.makePipeline(.{
+        .shader = sg.makeShader(shd.cubeShaderDesc(sg.queryBackend())),
+        .layout = init: {
+            var l = sg.VertexLayoutState{};
+            l.attrs[shd.ATTR_cube_position].format = .FLOAT3;
+            l.attrs[shd.ATTR_cube_color0].format = .FLOAT4;
+            break :init l;
         },
+        .index_type = .UINT16,
+        .depth = .{
+            .compare = .LESS_EQUAL,
+            .write_enabled = true,
+        },
+        .cull_mode = .BACK,
+        .color_count = 1,
+        .colors = init: {
+            var clrs: [8]sg.ColorTargetState = @splat(.{});
+            clrs[0].blend = .{
+                .enabled = true,
+                .src_factor_rgb = .SRC_ALPHA,
+                .dst_factor_rgb = .ONE_MINUS_SRC_ALPHA,
+            };
+            break :init clrs;
+        },
+    });
+
+    state.pass_action.colors[0] = .{
+        .load_action = .CLEAR,
+        .clear_value = .{ .r = 0.25, .g = 0.5, .b = 0.75, .a = 1 },
     };
+}
+
+export fn frame() void {
+    const frame_dt = sapp.frameDuration();
+    const dt: f32 = @floatCast(frame_dt * 60);
+    const fps: f64 = if (frame_dt > 0) 1.0 / frame_dt else 0;
+
+    sdtx.canvas(sapp.widthf(), sapp.heightf());
+    sdtx.pos(1, 1);
+    sdtx.color3b(255, 255, 255);
+    sdtx.print("FPS: {d:.1}\nFrame: {d:.3}ms", .{ fps, frame_dt * 1000 });
+
+    state.rx += 1.0 * dt;
+    state.ry += 2.0 * dt;
+
+    const vs_params = computeVsParams(state.rx, state.ry);
+
+    sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
+    sg.applyPipeline(state.pip);
+    sg.applyBindings(state.bind);
+    sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
+    sg.draw(0, 36, 1);
+    sdtx.draw();
+    sg.endPass();
+    sg.commit();
+}
+
+export fn cleanup() void {
+    sdtx.shutdown();
+    sg.shutdown();
+}
+
+pub fn main() void {
+    sapp.run(.{
+        .init_cb = init,
+        .frame_cb = frame,
+        .cleanup_cb = cleanup,
+        .width = 800,
+        .height = 600,
+        .sample_count = 4,
+        .icon = .{ .sokol_default = true },
+        .window_title = "ink-ribbon-sokol",
+        .logger = .{ .func = slog.func },
+    });
+}
+
+fn computeVsParams(rx: f32, ry: f32) shd.VsParams {
+    const rxm = mat4.rotate(rx, .{ .x = 1.0, .y = 0.0, .z = 0.0 });
+    const rym = mat4.rotate(ry, .{ .x = 0.0, .y = 1.0, .z = 0.0 });
+    const model = mat4.mul(rxm, rym);
+    const aspect = sapp.widthf() / sapp.heightf();
+    const proj = mat4.persp(60.0, aspect, 0.01, 10.0);
+    return shd.VsParams{ .mvp = mat4.mul(mat4.mul(proj, state.view), model) };
 }

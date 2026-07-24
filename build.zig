@@ -6,6 +6,7 @@ const Options = struct {
     mod: *Build.Module,
     mod_lib: *Build.Module,
     dep_sokol: *Build.Dependency,
+    shdc_step: *Build.Step,
 };
 
 pub fn build(b: *Build) !void {
@@ -20,7 +21,20 @@ pub fn build(b: *Build) !void {
     const emsdk_install = sokol.emSdkInstallStep(b, dep_sokol.builder.dependency("emsdk", .{}), .{});
     b.step("install-emsdk", "Install Emscripten SDK").dependOn(emsdk_install);
 
-    const mod_shader = try createShaderModule(b, dep_sokol);
+    const dep_shdc = dep_sokol.builder.dependency("shdc", .{});
+    const shdc_step = try sokol.shdc.createSourceFile(b, .{
+        .shdc_dep = dep_shdc,
+        .input = "src/cube.glsl",
+        .output = "src/shader.zig",
+        .slang = .{
+            .glsl410 = true,
+            .glsl300es = true,
+            .hlsl5 = true,
+            .metal_macos = true,
+            .wgsl = true,
+        },
+        .reflection = true,
+    });
 
     const mod_lib = b.addModule("ink_ribbon_sokol", .{
         .root_source_file = b.path("src/root.zig"),
@@ -34,11 +48,10 @@ pub fn build(b: *Build) !void {
         .imports = &.{
             .{ .name = "ink_ribbon_sokol", .module = mod_lib },
             .{ .name = "sokol", .module = dep_sokol.module("sokol") },
-            .{ .name = "shader", .module = mod_shader },
         },
     });
 
-    const opts = Options{ .mod = mod_exe, .mod_lib = mod_lib, .dep_sokol = dep_sokol };
+    const opts = Options{ .mod = mod_exe, .mod_lib = mod_lib, .dep_sokol = dep_sokol, .shdc_step = shdc_step };
 
     if (target.result.cpu.arch.isWasm()) {
         try buildWeb(b, opts);
@@ -52,6 +65,7 @@ fn buildNative(b: *Build, opts: Options) !void {
         .name = "ink_ribbon_sokol",
         .root_module = opts.mod,
     });
+    exe.step.dependOn(opts.shdc_step);
     b.installArtifact(exe);
 
     const run_step = b.step("run", "Run the app");
@@ -82,6 +96,7 @@ fn buildWeb(b: *Build, opts: Options) !void {
         .name = "ink_ribbon_sokol",
         .root_module = opts.mod,
     });
+    lib.step.dependOn(opts.shdc_step);
 
     const emsdk = opts.dep_sokol.builder.dependency("emsdk", .{});
     const link_step = try sokol.emLinkStep(b, .{
@@ -99,21 +114,4 @@ fn buildWeb(b: *Build, opts: Options) !void {
     const run = sokol.emRunStep(b, .{ .name = "ink_ribbon_sokol", .emsdk = emsdk });
     run.step.dependOn(&link_step.step);
     b.step("run", "Run the app").dependOn(&run.step);
-}
-
-fn createShaderModule(b: *Build, dep_sokol: *Build.Dependency) !*Build.Module {
-    const mod_sokol = dep_sokol.module("sokol");
-    const dep_shdc = dep_sokol.builder.dependency("shdc", .{});
-    return sokol.shdc.createModule(b, "shader", mod_sokol, .{
-        .shdc_dep = dep_shdc,
-        .input = "src/shader.glsl",
-        .output = "shader.zig",
-        .slang = .{
-            .glsl410 = true,
-            .glsl300es = true,
-            .hlsl4 = true,
-            .metal_macos = true,
-            .wgsl = true,
-        },
-    });
 }
