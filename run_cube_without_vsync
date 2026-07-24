@@ -1,1 +1,0 @@
-vblank_mode=0 zig build run-cube

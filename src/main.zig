@@ -153,6 +153,7 @@ pub fn main() void {
         .cleanup_cb = cleanup,
         .width = 800,
         .height = 600,
+        .fullscreen = true,
         .sample_count = 4,
         .icon = .{ .sokol_default = true },
         .window_title = "ink-ribbon-sokol",
