@@ -36,6 +36,14 @@
             .url = "git+https://github.com/floooh/sokol-zig.git#9bbabc13207ca6259d171f4c22e7d88a1f7030e9",
             .hash = "sokol-0.1.0-pb1HK2HlNwCWJkvotHqrVhf8Z_Vb-T8kViYbqeVM61tp",
         },
+        .cimgui = .{
+            .url = "git+https://github.com/floooh/dcimgui.git#b78819a94fe85676c7043b3a1ca7a210bda0797b",
+            .hash = "cimgui-0.1.0-44ClkR8dmgDIgUMPprFBFvquKmS06xKYMGhJ4Imxvn2C",
+        },
+        .box3d = .{
+            .url = "git+https://github.com/erincatto/box3d.git#c52908c9a907714e4d3a8a30be5272a1761158e1",
+            .hash = "N-V-__8AAP9nsQAa8wNoj3b0UePzOweNWEssNIi5KGWM9X1E",
+        },
     },
     .paths = .{
         "build.zig",
