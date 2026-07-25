@@ -1,0 +1,36 @@
+--- a/build.zig
++++ b/build.zig
+@@ -118,13 +118,6 @@
+     b.installArtifact(hello_client_exe);
+ 
+     const run_hello_client = b.addRunArtifact(hello_client_exe);
+-    if (b.args) |args| {
+-        run_hello_client.addArgs(args);
+-        if (args.len == 1) {
+-            run_hello_client.addArtifactArg(hello_server_exe);
+-        }
+-    }
+-
+     const run_hello_client_step = b.step("run-hello-client", "Run the hello-client example");
+     run_hello_client_step.dependOn(&run_hello_client.step);
+ 
+@@ -166,7 +159,7 @@
+ 
+     // ----------------------------- Code Coverage -----------------------------
+ 
+-    const kcov_bin = b.findProgram(&.{"kcov"}, &.{}) catch "kcov";
++    const kcov_bin = b.findProgram(.{ .names = &.{"kcov"} }) orelse "kcov";
+ 
+     const kcov_merge = std.Build.Step.Run.create(b, "kcov merge coverage");
+     kcov_merge.rename_step_with_output_arg = false;
+--- a/src/codegen/codegen.zig
++++ b/src/codegen/codegen.zig
+@@ -26,7 +26,7 @@
+     const source = try renderMetaModel(gpa, &parsed_meta_model.value);
+     defer gpa.free(source);
+ 
+-    var zig_tree: std.zig.Ast = try .parse(gpa, source, .zig);
++    var zig_tree: std.zig.Ast = try .parse(gpa, source, .{});
+     defer zig_tree.deinit(gpa);
+ 
+     std.Io.Dir.cwd().createDirPath(io, std.Io.Dir.path.dirname(out_file_path) orelse ".") catch {};

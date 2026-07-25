@@ -1,0 +1,11 @@
+--- a/build.zig
++++ b/build.zig
+@@ -31,7 +31,7 @@
+     const test_step = b.step("test", "Run all the tests");
+     test_step.dependOn(&run_tests.step);
+ 
+-    const kcov_bin = b.findProgram(&.{"kcov"}, &.{}) catch "kcov";
++    const kcov_bin = b.findProgram(.{ .names = &.{"kcov"} }) orelse "kcov";
+ 
+     const run_kcov = b.addSystemCommand(&.{
+         kcov_bin,

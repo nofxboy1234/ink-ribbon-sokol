@@ -1,0 +1,74 @@
+--- a/lib/std/meta.zig
++++ b/lib/std/meta.zig
+@@ -244,7 +244,70 @@
+ /// To be removed after Zig 0.17.0 is tagged.
+ pub const declarationInfo = @compileError("Deprecated; use '@hasDecl' instead");
+ /// To be removed after Zig 0.17.0 is tagged.
+-pub const fields = @compileError("Deprecated; use 'fieldNames' and 'fieldTypes' instead");
++const CompatStructField = struct {
++    name: [:0]const u8,
++    type: type,
++    default_value_ptr: ?*const anyopaque,
++    is_comptime: bool,
++    alignment: ?usize,
++};
++const CompatUnionField = struct {
++    name: [:0]const u8,
++    type: type,
++    alignment: ?usize,
++};
++const CompatEnumField = struct {
++    name: [:0]const u8,
++    value: comptime_int,
++};
++const CompatError = struct {
++    name: [:0]const u8,
++};
++
++pub inline fn fields(comptime T: type) switch (@typeInfo(T)) {
++    .@"struct" => []const CompatStructField,
++    .@"union" => []const CompatUnionField,
++    .@"enum" => []const CompatEnumField,
++    .error_set => []const CompatError,
++    else => @compileError("Expected struct, union, error set or enum type, found '" ++ @typeName(T) ++ "'"),
++} {
++    return switch (@typeInfo(T)) {
++        .@"struct" => |info| comptime blk: {
++            var result: [info.field_names.len]CompatStructField = undefined;
++            for (&result, info.field_names, info.field_types, info.field_attrs) |*field, name, FieldType, attrs| {
++                field.* = .{
++                    .name = name,
++                    .type = FieldType,
++                    .default_value_ptr = attrs.default_value_ptr,
++                    .is_comptime = attrs.@"comptime",
++                    .alignment = attrs.@"align",
++                };
++            }
++            break :blk &result;
++        },
++        .@"union" => |info| comptime blk: {
++            var result: [info.field_names.len]CompatUnionField = undefined;
++            for (&result, info.field_names, info.field_types, info.field_attrs) |*field, name, FieldType, attrs| {
++                field.* = .{ .name = name, .type = FieldType, .alignment = attrs.@"align" };
++            }
++            break :blk &result;
++        },
++        .@"enum" => |info| comptime blk: {
++            var result: [info.field_names.len]CompatEnumField = undefined;
++            for (&result, info.field_names, info.field_values) |*field, name, value| {
++                field.* = .{ .name = name, .value = value };
++            }
++            break :blk &result;
++        },
++        .error_set => |info| comptime blk: {
++            const names = info.error_names orelse @compileError("global error set has no fields");
++            var result: [names.len]CompatError = undefined;
++            for (&result, names) |*field, name| field.* = .{ .name = name };
++            break :blk &result;
++        },
++        else => @compileError("Expected struct, union, error set or enum type, found '" ++ @typeName(T) ++ "'"),
++    };
++}
+ 
+ pub fn fieldInfo(comptime T: type, comptime field: FieldEnum(T)) switch (@typeInfo(T)) {
+     .@"struct" => struct { name: [:0]const u8, type: type, attrs: Type.Struct.FieldAttributes },

@@ -2,7 +2,7 @@ const std = @import("std");
 const b3 = @import("box3d");
 const ig = @import("cimgui");
 const sokol = @import("sokol");
-const shd = @import("shader.zig");
+const shd = @import("generated/box3d_shader.zig");
 const math = @import("math.zig");
 
 const sapp = sokol.app;

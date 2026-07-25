@@ -57,22 +57,25 @@ const box3d_sources = &.{
 };
 
 const Options = struct {
-    mod: *Build.Module,
+    box3d_mod: *Build.Module,
+    cube_mod: *Build.Module,
     mod_lib: *Build.Module,
     dep_sokol: *Build.Dependency,
     box3d_lib: *Build.Step.Compile,
     cimgui_lib: *Build.Step.Compile,
-    shdc_step: *Build.Step,
+    box3d_shdc_step: *Build.Step,
+    cube_shdc_step: *Build.Step,
+    emsdk_install: *Build.Step,
 };
 
 pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const requested_optimize = b.standardOptimizeOption(.{});
-    // With this pinned Zig/Emscripten toolchain, non-ReleaseFast wasm objects
-    // leave sokol_gfx_imgui's cross-object trace callbacks with invalid table
-    // indices. Native builds still honor the requested optimization mode.
+    // Non-ReleaseFast wasm objects still leave sokol_gfx_imgui's cross-object
+    // trace callbacks with invalid table indices under Emscripten 6.0.0.
+    // Native builds continue to honor the requested optimization mode.
     const optimize: std.builtin.OptimizeMode =
-        if (target.result.cpu.arch.isWasm()) .ReleaseFast else requested_optimize;
+        if (target.result.cpu.arch.isWasm()) .fast else requested_optimize;
 
     const dep_sokol = b.dependency("sokol", .{
         .target = target,
@@ -98,37 +101,41 @@ pub fn build(b: *Build) !void {
 
     const box3d_lib = buildBox3d(b, dep_box3d, target, optimize);
 
-    // Zig 0.17 no longer has @cImport. Generate regular Zig modules from the
-    // public C APIs at build time with the compiler-matched translate-c tool.
-    const box3d_bindings = translateCModule(b, .{
-        .name = "box3d",
-        .header = dep_box3d.path("include/box3d/box3d.h"),
-        .include_dir = dep_box3d.path("include"),
+    // Zig 0.17 no longer has @cImport. These regular Zig modules are generated
+    // from the pinned public C headers by toolchain/bootstrap.sh via translate-c.
+    const box3d_bindings = b.createModule(.{
+        .root_source_file = b.path("src/generated/box3d.zig"),
         .target = target,
         .optimize = optimize,
-        .system_include_dir = if (target.result.cpu.arch.isWasm())
-            emsdk.path("upstream/emscripten/cache/sysroot/include")
-        else
-            null,
-        .depends_on = if (target.result.cpu.arch.isWasm()) emsdk_install else null,
+        .link_libc = true,
     });
     box3d_bindings.linkLibrary(box3d_lib);
-    const cimgui_bindings = translateCModule(b, .{
-        .name = "cimgui",
-        .header = dep_cimgui.path(b.fmt("{s}/cimgui.h", .{cimgui_conf.include_dir})),
-        .include_dir = dep_cimgui.path(cimgui_conf.include_dir),
-        // As in dcimgui's own build, translating for the host avoids requiring
-        // an installed Emscripten sysroot just to parse this platform-neutral API.
-        .target = b.graph.host,
+    const cimgui_bindings = b.createModule(.{
+        .root_source_file = b.path("src/generated/cimgui.zig"),
+        .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     cimgui_bindings.linkLibrary(cimgui_lib);
 
     const dep_shdc = dep_sokol.builder.dependency("shdc", .{});
-    const shdc_step = try sokol.shdc.createSourceFile(b, .{
+    const box3d_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
         .input = "src/box3d.glsl",
-        .output = "src/shader.zig",
+        .output = "src/generated/box3d_shader.zig",
+        .slang = .{
+            .glsl410 = true,
+            .glsl300es = true,
+            .hlsl5 = true,
+            .metal_macos = true,
+            .wgsl = true,
+        },
+        .reflection = true,
+    });
+    const cube_shdc_step = try sokol.shdc.createSourceFile(b, .{
+        .shdc_dep = dep_shdc,
+        .input = "src/cube.glsl",
+        .output = "src/generated/cube_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -144,8 +151,8 @@ pub fn build(b: *Build) !void {
         .target = target,
     });
 
-    const mod_exe = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
+    const box3d_mod = b.createModule(.{
+        .root_source_file = b.path("src/box3d.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -155,14 +162,26 @@ pub fn build(b: *Build) !void {
             .{ .name = "box3d", .module = box3d_bindings },
         },
     });
+    const cube_mod = b.createModule(.{
+        .root_source_file = b.path("src/cube.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "ink_ribbon_sokol", .module = mod_lib },
+            .{ .name = "sokol", .module = dep_sokol.module("sokol") },
+        },
+    });
 
     const opts = Options{
-        .mod = mod_exe,
+        .box3d_mod = box3d_mod,
+        .cube_mod = cube_mod,
         .mod_lib = mod_lib,
         .dep_sokol = dep_sokol,
         .box3d_lib = box3d_lib,
         .cimgui_lib = cimgui_lib,
-        .shdc_step = shdc_step,
+        .box3d_shdc_step = box3d_shdc_step,
+        .cube_shdc_step = cube_shdc_step,
+        .emsdk_install = emsdk_install,
     };
 
     if (target.result.cpu.arch.isWasm()) {
@@ -170,49 +189,6 @@ pub fn build(b: *Build) !void {
     } else {
         buildNative(b, opts);
     }
-}
-
-const TranslateCOptions = struct {
-    name: []const u8,
-    header: Build.LazyPath,
-    include_dir: Build.LazyPath,
-    target: Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    system_include_dir: ?Build.LazyPath = null,
-    depends_on: ?*Build.Step = null,
-};
-
-fn translateCModule(b: *Build, opts: TranslateCOptions) *Build.Module {
-    const run = b.addSystemCommand(&.{ b.graph.zig_exe, "translate-c" });
-    run.setName(b.fmt("translate-c {s}", .{opts.name}));
-    run.addArgs(&.{
-        "--global-cache-dir",
-        b.graph.global_cache_root.path.?,
-    });
-    run.addArg("-target");
-    run.addArg(opts.target.query.zigTriple(b.allocator) catch @panic("OOM"));
-    run.addArg(b.fmt("-O{t}", .{opts.optimize}));
-    run.addArg("-lc");
-    run.addArg("-I");
-    run.addDirectoryArg(opts.include_dir);
-    if (opts.system_include_dir) |include_dir| {
-        run.addArg("-isystem");
-        run.addDirectoryArg(include_dir);
-    }
-    if (opts.depends_on) |dependency| {
-        run.step.dependOn(dependency);
-    }
-    run.addFileArg(opts.header);
-    const output = run.captureStdOut(.{
-        .basename = b.fmt("{s}.zig", .{opts.name}),
-    });
-
-    return b.createModule(.{
-        .root_source_file = output,
-        .target = opts.target,
-        .optimize = opts.optimize,
-        .link_libc = true,
-    });
 }
 
 fn buildBox3d(
@@ -238,7 +214,7 @@ fn buildBox3d(
         flags.append(b.allocator, "-DBOX3D_DISABLE_SIMD") catch @panic("OOM");
         flags.append(b.allocator, "-fno-sanitize=undefined") catch @panic("OOM");
     }
-    if (optimize != .Debug) {
+    if (optimize != .debug) {
         flags.append(b.allocator, "-DNDEBUG") catch @panic("OOM");
     }
     mod.addCSourceFiles(.{
@@ -258,43 +234,63 @@ fn buildBox3d(
 }
 
 fn buildNative(b: *Build, opts: Options) void {
-    const exe = b.addExecutable(.{
-        .name = "ink_ribbon_sokol",
-        .root_module = opts.mod,
+    const box3d_exe = b.addExecutable(.{
+        .name = "ink_ribbon_box3d",
+        .root_module = opts.box3d_mod,
     });
-    exe.step.dependOn(opts.shdc_step);
-    b.installArtifact(exe);
+    box3d_exe.step.dependOn(opts.box3d_shdc_step);
+    b.installArtifact(box3d_exe);
 
-    const run_step = b.step("run", "Run the app");
-    const run_cmd = b.addRunArtifact(exe);
-    run_step.dependOn(&run_cmd.step);
-    run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    const cube_exe = b.addExecutable(.{
+        .name = "ink_ribbon_cube",
+        .root_module = opts.cube_mod,
+    });
+    cube_exe.step.dependOn(opts.cube_shdc_step);
+    b.installArtifact(cube_exe);
+
+    const run_box3d_cmd = b.addRunArtifact(box3d_exe);
+    run_box3d_cmd.step.dependOn(&box3d_exe.step);
+    b.step("run-box3d", "Run the Box3D example").dependOn(&run_box3d_cmd.step);
+    b.step("run", "Run the Box3D example").dependOn(&run_box3d_cmd.step);
+
+    const run_cube_cmd = b.addRunArtifact(cube_exe);
+    run_cube_cmd.step.dependOn(&cube_exe.step);
+    b.step("run-cube", "Run the spinning cube example").dependOn(&run_cube_cmd.step);
 
     const mod_tests = b.addTest(.{
         .root_module = opts.mod_lib,
     });
     const run_mod_tests = b.addRunArtifact(mod_tests);
 
-    const exe_tests = b.addTest(.{
-        .root_module = opts.mod,
+    const box3d_tests = b.addTest(.{
+        .root_module = opts.box3d_mod,
     });
-    exe_tests.step.dependOn(opts.shdc_step);
-    const run_exe_tests = b.addRunArtifact(exe_tests);
+    box3d_tests.step.dependOn(opts.box3d_shdc_step);
+    const run_box3d_tests = b.addRunArtifact(box3d_tests);
+
+    const cube_tests = b.addTest(.{
+        .root_module = opts.cube_mod,
+    });
+    cube_tests.step.dependOn(opts.cube_shdc_step);
+    const run_cube_tests = b.addRunArtifact(cube_tests);
 
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
-    test_step.dependOn(&run_exe_tests.step);
+    test_step.dependOn(&run_box3d_tests.step);
+    test_step.dependOn(&run_cube_tests.step);
 }
 
 fn buildWeb(b: *Build, opts: Options) !void {
-    const lib = b.addLibrary(.{
-        .name = "ink_ribbon_sokol",
-        .root_module = opts.mod,
+    const box3d_lib = b.addLibrary(.{
+        .name = "ink_ribbon_box3d",
+        .root_module = opts.box3d_mod,
     });
-    lib.step.dependOn(opts.shdc_step);
+    box3d_lib.step.dependOn(opts.box3d_shdc_step);
+    const cube_lib = b.addLibrary(.{
+        .name = "ink_ribbon_cube",
+        .root_module = opts.cube_mod,
+    });
+    cube_lib.step.dependOn(opts.cube_shdc_step);
 
     const emsdk = opts.dep_sokol.builder.dependency("emsdk", .{});
     const emsdk_include = emsdk.path("upstream/emscripten/cache/sysroot/include");
@@ -303,24 +299,42 @@ fn buildWeb(b: *Build, opts: Options) !void {
     // SDK install driven by sokol before compiling.
     const sokol_clib = opts.dep_sokol.artifact("sokol_clib");
     const cimgui_clib = opts.cimgui_lib;
+    sokol_clib.step.dependOn(opts.emsdk_install);
     cimgui_clib.root_module.addSystemIncludePath(emsdk_include);
     cimgui_clib.step.dependOn(&sokol_clib.step);
     opts.box3d_lib.root_module.addSystemIncludePath(emsdk_include);
     opts.box3d_lib.step.dependOn(&sokol_clib.step);
 
-    const link_step = try sokol.emLinkStep(b, .{
-        .lib_main = lib,
-        .target = opts.mod.resolved_target.?,
-        .optimize = opts.mod.optimize.?,
+    const box3d_link_step = try sokol.emLinkStep(b, .{
+        .lib_main = box3d_lib,
+        .target = opts.box3d_mod.resolved_target.?,
+        .optimize = opts.box3d_mod.optimize.?,
         .emsdk = emsdk,
         .use_webgl2 = true,
         .use_emmalloc = true,
         .use_filesystem = true,
         .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
     });
-    b.getInstallStep().dependOn(&link_step.step);
+    b.getInstallStep().dependOn(&box3d_link_step.step);
 
-    const run = sokol.emRunStep(b, .{ .name = "ink_ribbon_sokol", .emsdk = emsdk });
-    run.step.dependOn(&link_step.step);
-    b.step("run", "Run the app").dependOn(&run.step);
+    const cube_link_step = try sokol.emLinkStep(b, .{
+        .lib_main = cube_lib,
+        .target = opts.cube_mod.resolved_target.?,
+        .optimize = opts.cube_mod.optimize.?,
+        .emsdk = emsdk,
+        .use_webgl2 = true,
+        .use_emmalloc = true,
+        .use_filesystem = true,
+        .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
+    });
+    b.getInstallStep().dependOn(&cube_link_step.step);
+
+    const run_box3d = sokol.emRunStep(b, .{ .name = "ink_ribbon_box3d", .emsdk = emsdk });
+    run_box3d.step.dependOn(&box3d_link_step.step);
+    b.step("run-box3d", "Run the Box3D example").dependOn(&run_box3d.step);
+    b.step("run", "Run the Box3D example").dependOn(&run_box3d.step);
+
+    const run_cube = sokol.emRunStep(b, .{ .name = "ink_ribbon_cube", .emsdk = emsdk });
+    run_cube.step.dependOn(&cube_link_step.step);
+    b.step("run-cube", "Run the spinning cube example").dependOn(&run_cube.step);
 }

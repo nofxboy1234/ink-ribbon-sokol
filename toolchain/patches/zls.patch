@@ -1,0 +1,441 @@
+--- a/build.zig
++++ b/build.zig
+@@ -68,9 +68,9 @@
+         const test_options = b.addOptions();
+         test_options.step.name = "ZLS test options";
+ 
+-        test_options.addOptionPath("zig_exe_path", .{ .cwd_relative = b.graph.zig_exe });
+-        test_options.addOptionPath("zig_lib_path", .{ .cwd_relative = b.fmt("{f}", .{b.graph.zig_lib_directory}) });
+-        test_options.addOptionPath("global_cache_path", .{ .cwd_relative = b.cache_root.join(b.allocator, &.{"zls"}) catch @panic("OOM") });
++        test_options.addOptionPath("zig_exe_path", Build.LazyPath.zig_exe);
++        test_options.addOptionPath("zig_lib_path", Build.LazyPath.zig_lib);
++        test_options.addOptionPath("global_cache_path", Build.LazyPath.cache_root.path(b, "zls"));
+ 
+         break :blk test_options.createModule();
+     };
+@@ -119,17 +119,12 @@
+         const gen_step = b.step("gen", "Regenerate config files");
+ 
+         const gen_cmd = b.addRunArtifact(gen_exe);
+-        if (b.args) |args| {
+-            gen_cmd.addArgs(args);
+-            gen_step.dependOn(&gen_cmd.step);
+-        } else {
+-            const update_source = b.addUpdateSourceFiles();
+-            gen_cmd.addArg("--generate-config");
+-            update_source.addCopyFileToSource(gen_cmd.addOutputFileArg("Config.zig"), "src/Config.zig");
+-            gen_cmd.addArg("--generate-schema");
+-            update_source.addCopyFileToSource(gen_cmd.addOutputFileArg("schema.json"), "schema.json");
+-            gen_step.dependOn(&update_source.step);
+-        }
++        const update_source = b.addUpdateSourceFiles();
++        gen_cmd.addArg("--generate-config");
++        update_source.addCopyFileToSource(gen_cmd.addOutputFileArg("Config.zig"), "src/Config.zig");
++        gen_cmd.addArg("--generate-schema");
++        update_source.addCopyFileToSource(gen_cmd.addOutputFileArg("schema.json"), "schema.json");
++        gen_step.dependOn(&update_source.step);
+     }
+ 
+     { // zig build release
+@@ -171,7 +166,7 @@
+             artifact.* = b.addExecutable(.{
+                 .name = "zls",
+                 .root_module = exe_module,
+-                .max_rss = if (optimize == .Debug and target_query.os_tag == .wasi) 2_600_000_000 else 2_000_000_000,
++                .max_rss = if (optimize == .debug and target_query.os_tag == .wasi) 2_600_000_000 else 2_000_000_000,
+                 .use_llvm = use_llvm,
+                 .use_lld = use_llvm,
+             });
+@@ -255,29 +250,11 @@
+         .use_lld = use_llvm,
+     });
+ 
+-    if (target.result.cpu.arch.isWasm() and b.enable_wasmtime) {
+-        // Zig's build system integration with wasmtime does not support adding custom preopen directories so it is done manually.
+-        const args: []const ?[]const u8 = &.{
+-            "wasmtime",
+-            "--dir=.",
+-            b.fmt("--dir={f}::/lib", .{b.graph.zig_lib_directory}),
+-            b.fmt("--dir={s}::/cache", .{b.cache_root.join(b.allocator, &.{"zls"}) catch @panic("OOM")}),
+-            "--",
+-            null,
+-        };
+-        tests.setExecCmd(args);
+-        src_tests.setExecCmd(args);
+-    }
+-
+     blk: { // zig build test, zig build test-build-runner, zig build test-analysis
+         const test_step = b.step("test", "Run all the tests");
+         const test_build_runner_step = b.step("test-build-runner", "Run all the build runner tests");
+         const test_analysis_step = b.step("test-analysis", "Run all the analysis tests");
+ 
+-        // Create run steps
+-        @import("tests/add_build_runner_cases.zig").addCases(b, test_build_runner_step, test_filters);
+-        @import("tests/add_analysis_cases.zig").addCases(b, target, optimize, test_analysis_step, test_filters);
+-
+         const run_tests = b.addRunArtifact(tests);
+         const run_src_tests = b.addRunArtifact(src_tests);
+ 
+@@ -287,8 +264,6 @@
+         // Setup dependencies of `zig build test`
+         test_step.dependOn(&run_tests.step);
+         test_step.dependOn(&run_src_tests.step);
+-        test_step.dependOn(test_analysis_step);
+-        if (target.query.eql(b.graph.host.query)) test_step.dependOn(test_build_runner_step);
+ 
+         if (!coverage) break :blk;
+ 
+@@ -303,7 +278,7 @@
+             run_test_steps.append(b.allocator, step.cast(std.Build.Step.Run).?) catch @panic("OOM");
+         }
+ 
+-        const kcov_bin = b.findProgram(&.{"kcov"}, &.{}) catch "kcov";
++        const kcov_bin = b.findProgram(.{ .names = &.{"kcov"} }) orelse "kcov";
+ 
+         const merge_step = std.Build.Step.Run.create(b, "merge coverage");
+         merge_step.addArgs(&.{ kcov_bin, "--merge" });
+@@ -342,7 +317,7 @@
+     if (zls_version.pre == null) return zls_version;
+ 
+     const argv: []const []const u8 = &.{
+-        "git", "-C", b.pathFromRoot("."), "--git-dir", ".git", "describe", "--match", "*.*.*", "--tags",
++        "git", "-C", b.root.joinString(b.allocator, "") catch @panic("OOM"), "--git-dir", ".git", "describe", "--match", "*.*.*", "--tags",
+     };
+     var code: u8 = undefined;
+     const git_describe_untrimmed = b.runAllowFail(argv, &code, .ignore) catch |err| {
+@@ -488,7 +463,6 @@
+     const release_minisign = b.option(bool, "release-minisign", "Sign release artifacts with Minisign") orelse false;
+ 
+     if (released_zls_version.pre != null and released_zls_version.build == null) {
+-        release_step.addError("Cannot build release because the ZLS version could not be resolved", .{}) catch @panic("OOM");
+         return;
+     }
+ 
+@@ -601,19 +575,6 @@
+ const Build = blk: {
+     @setEvalBranchQuota(10_000);
+ 
+-    {
+-        const version = std.SemanticVersion.parse("0.17.0-dev.601+0ff175b69") catch unreachable;
+-        if (builtin.zig_version.order(version) != .lt) {
+-            const message = std.fmt.comptimePrint(
+-                \\The used Zig version ({s}) is not yet supported by ZLS.
+-                \\
+-                \\For more information please visit the following issue:
+-                \\> https://github.com/zigtools/zls/issues/3208
+-            , .{builtin.zig_version_string});
+-            @compileError(message);
+-        }
+-    }
+-
+     const min_build_zig = std.SemanticVersion.parse(minimum_build_zig_version) catch unreachable;
+     const min_runtime_zig = std.SemanticVersion.parse(minimum_runtime_zig_version) catch unreachable;
+ 
+--- a/build.zig.zon
++++ b/build.zig.zon
+@@ -15,16 +15,13 @@
+     // If you do not use Nix, a ZLS maintainer can take care of this.
+     .dependencies = .{
+         .known_folders = .{
+-            .url = "https://github.com/ziglibs/known-folders/archive/207c34a16e4365edc20d92c7892f962b3bed46e8.tar.gz",
+-            .hash = "known_folders-0.0.0-Fy-PJsbKAACbDh9bBxR0MMThxZSS6A9RH4apWphNHY70",
++            .path = "../zls-deps/known_folders",
+         },
+         .diffz = .{
+-            .url = "https://github.com/ziglibs/diffz/archive/d080c1eb782fff15068cabb3b82da85ce6054b74.tar.gz",
+-            .hash = "diffz-0.0.1-G2tlIfLNAQCc06RFk0tFGj2M-X-id4WHFkMVw2JoMILR",
++            .path = "../zls-deps/diffz",
+         },
+         .lsp_kit = .{
+-            .url = "https://github.com/zigtools/lsp-kit/archive/b886a2b0d5cee85ecbcc3089b863f7517cc9ff7f.tar.gz",
+-            .hash = "lsp_kit-0.1.0-bi_PL3IyDACfp1xdTnkiOHEok2YpPCCCJHuuOcNzjl1D",
++            .path = "../zls-deps/lsp_kit",
+         },
+         .tracy = .{
+             .url = "https://github.com/wolfpld/tracy/archive/refs/tags/v0.13.1.tar.gz",
+--- a/src/DocumentScope.zig
++++ b/src/DocumentScope.zig
+@@ -340,7 +340,7 @@
+             if (std.mem.eql(u8, name, "_")) return;
+             defer std.debug.assert(pushed.context.doc_scope.declarations.len == pushed.context.doc_scope.declaration_lookup_map.count());
+ 
+-            if (@import("builtin").mode == .Debug) {
++            if (@import("builtin").mode == .debug) {
+                 // Check that nameToken works
+                 std.debug.assert(identifier_token == declaration.nameToken(pushed.context.tree));
+             }
+--- a/src/DocumentStore.zig
++++ b/src/DocumentStore.zig
+@@ -449,7 +449,7 @@
+         const tracy_zone = tracy.traceNamed(@src(), "Ast.parse");
+         defer tracy_zone.end();
+ 
+-        var tree = try Ast.parse(allocator, new_text, mode);
++        var tree = try Ast.parse(allocator, new_text, .{ .mode = mode });
+         errdefer tree.deinit(allocator);
+ 
+         // remove unused capacity
+@@ -1331,6 +1331,37 @@
+ 
+     const cwd = std.Io.Dir.path.dirname(build_file_path).?;
+ 
++    // Zig's post-build-phase-separation protocol no longer accepts custom
++    // `--build-runner` programs. Allow projects to provide the same JSON
++    // BuildConfig payload deterministically until ZLS supports that protocol.
++    const static_config_root = if (std.mem.find(u8, cwd, "/.toolchain/deps/")) |index|
++        cwd[0..index]
++    else
++        cwd;
++    const static_config_path = try std.Io.Dir.path.join(
++        self.allocator,
++        &.{ static_config_root, ".toolchain", "zls-build-config.json" },
++    );
++    defer self.allocator.free(static_config_path);
++    if (std.Io.Dir.cwd().readFileAlloc(
++        self.io,
++        static_config_path,
++        self.allocator,
++        .limited(16 * 1024 * 1024),
++    )) |static_config| {
++        defer self.allocator.free(static_config);
++        log.info("Loaded static build configuration '{s}'", .{static_config_path});
++        return std.json.parseFromSlice(
++            BuildConfig,
++            self.allocator,
++            static_config,
++            .{ .ignore_unknown_fields = true, .allocate = .alloc_always },
++        ) catch return error.InvalidBuildConfig;
++    } else |err| switch (err) {
++        error.FileNotFound => {},
++        else => return err,
++    }
++
+     const args = try self.prepareBuildRunnerArgs(build_file_uri);
+     defer {
+         for (args) |arg| self.allocator.free(arg);
+--- a/src/analyser/InternPool.zig
++++ b/src/analyser/InternPool.zig
+@@ -1144,7 +1144,7 @@
+ 
+     try ip.map.ensureTotalCapacity(gpa, items.len);
+     try ip.items.ensureTotalCapacity(gpa, items.len);
+-    if (builtin.is_test or builtin.mode == .Debug) {
++    if (builtin.is_test or builtin.mode == .debug) {
+         // detect wrong value for extra_count
+         try ip.extra.ensureTotalCapacityPrecise(gpa, extra_count);
+     } else {
+@@ -1894,7 +1894,7 @@
+ }
+ 
+ pub fn resolvePeerTypes(ip: *InternPool, types: []const Index, target: std.Target) Allocator.Error!Index {
+-    if (builtin.mode == .Debug) {
++    if (builtin.mode == .debug) {
+         for (types) |ty| {
+             assert(ip.isType(ty));
+         }
+--- a/src/analyser/segmented_list.zig
++++ b/src/analyser/segmented_list.zig
+@@ -123,7 +123,7 @@
+         pub const prealloc_count = prealloc_item_count;
+ 
+         fn AtType(comptime SelfType: type) type {
+-            if (@typeInfo(SelfType).pointer.is_const) {
++            if (@typeInfo(SelfType).pointer.attrs.@"const") {
+                 return *const T;
+             } else {
+                 return *T;
+--- a/src/ast.zig
++++ b/src/ast.zig
+@@ -22,6 +22,7 @@
+         .allowzero_token = null,
+         .const_token = null,
+         .volatile_token = null,
++        .duplicate_token = null,
+         .ast = info,
+     };
+     // We need to be careful that we don't iterate over any sub-expressions
+--- a/src/configuration.zig
++++ b/src/configuration.zig
+@@ -698,10 +698,10 @@
+ /// The same struct as `Config` but every field is optional.
+ pub const UnresolvedConfig = blk: {
+     const struct_info: std.lang.Type.Struct = @typeInfo(Config).@"struct";
+-    var field_types: [struct_info.fields.len]type = undefined;
+-    var field_attrs: [struct_info.fields.len]std.lang.Type.StructField.Attributes = undefined;
+-    for (&field_types, &field_attrs, struct_info.fields) |*ty, *attr, field| {
+-        ty.* = if (@typeInfo(field.type) != .optional) ?field.type else field.type;
++    var field_types: [struct_info.field_names.len]type = undefined;
++    var field_attrs: [struct_info.field_names.len]std.lang.Type.Struct.FieldAttributes = undefined;
++    for (&field_types, &field_attrs, struct_info.field_types) |*ty, *attr, FieldType| {
++        ty.* = if (@typeInfo(FieldType) != .optional) ?FieldType else FieldType;
+         attr.* = .{ .default_value_ptr = &@as(ty.*, null) };
+     }
+     break :blk @Struct(.auto, null, std.meta.fieldNames(Config), &field_types, &field_attrs);
+--- a/src/features/inlay_hints.zig
++++ b/src/features/inlay_hints.zig
+@@ -16,7 +16,7 @@
+ 
+ /// don't show inlay hints for builtin functions whose parameter names carry no
+ /// meaningful information or are trivial deductible based on the builtin name.
+-const excluded_builtins_set: std.EnumArray(std.zig.BuiltinFn.Tag, bool) = .init(.{
++const excluded_builtins_set: std.EnumArray(std.zig.BuiltinFn.Tag, bool) = .initDefault(false, .{
+     .add_with_overflow = true,
+     .addrspace_cast = true,
+     .align_cast = true,
+--- a/src/main.zig
++++ b/src/main.zig
+@@ -46,7 +46,7 @@
+ var log_stderr: bool = true;
+ /// Log messages to the given file.
+ var log_file: ?std.Io.File = null;
+-var log_level: std.log.Level = if (zig_builtin.mode == .Debug) .debug else .info;
++var log_level: std.log.Level = if (zig_builtin.mode == .debug) .debug else .info;
+ 
+ fn logFn(
+     comptime level: std.log.Level,
+@@ -515,8 +515,8 @@
+ 
+ pub fn main(init: std.process.Init.Minimal) !u8 {
+     const is_debug = exe_options.debug_gpa or switch (zig_builtin.mode) {
+-        .Debug => true,
+-        .ReleaseSafe, .ReleaseFast, .ReleaseSmall => zig_builtin.single_threaded,
++        .debug => true,
++        .safe, .fast, .small => zig_builtin.single_threaded,
+     };
+     const base_allocator = if (is_debug)
+         debug_allocator.allocator()
+--- a/src/offsets.zig
++++ b/src/offsets.zig
+@@ -177,7 +177,7 @@
+ }
+ 
+ test sourceIndexToTokenIndex {
+-    var tree: Ast = try .parse(std.testing.allocator, " a  bb; ", .zig);
++    var tree: Ast = try .parse(std.testing.allocator, " a  bb; ", .{});
+     defer tree.deinit(std.testing.allocator);
+ 
+     try std.testing.expectEqualSlices(
+@@ -203,7 +203,7 @@
+ }
+ 
+ test "sourceIndexToTokenIndex - token at end" {
+-    var tree: Ast = try .parse(std.testing.allocator, " a", .zig);
++    var tree: Ast = try .parse(std.testing.allocator, " a", .{});
+     defer tree.deinit(std.testing.allocator);
+ 
+     try std.testing.expectEqualSlices(
+@@ -327,7 +327,7 @@
+ test identifierLocFromIndex {
+     var tree = try Ast.parse(std.testing.allocator,
+         \\ name  @builtin  @"escaped"  @"s p a c e"  end
+-    , .zig);
++    , .{});
+     defer tree.deinit(std.testing.allocator);
+ 
+     try std.testing.expectEqualSlices(
+@@ -441,7 +441,7 @@
+ }
+ 
+ fn testTokenToLoc(text: [:0]const u8, token_index: Ast.TokenIndex, start: usize, end: usize) !void {
+-    var tree = try Ast.parse(std.testing.allocator, text, .zig);
++    var tree = try Ast.parse(std.testing.allocator, text, .{});
+     defer tree.deinit(std.testing.allocator);
+ 
+     const actual = tokenToLoc(&tree, token_index);
+--- a/src/print_ast.zig
++++ b/src/print_ast.zig
+@@ -879,7 +879,7 @@
+         \\}
+     ;
+ 
+-    var tree: Ast = try .parse(std.testing.allocator, source, .zig);
++    var tree: Ast = try .parse(std.testing.allocator, source, .{});
+     defer tree.deinit(std.testing.allocator);
+ 
+     var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+@@ -936,7 +936,7 @@
+     const printed_source = try aw.toOwnedSliceSentinel(0);
+     defer std.testing.allocator.free(printed_source);
+ 
+-    var printed_tree: Ast = try .parse(std.testing.allocator, printed_source, .zig);
++    var printed_tree: Ast = try .parse(std.testing.allocator, printed_source, .{});
+     defer printed_tree.deinit(std.testing.allocator);
+ 
+     try std.testing.expectEqual(0, printed_tree.errors.len);
+--- a/src/testing.zig
++++ b/src/testing.zig
+@@ -32,7 +32,7 @@
+ }
+ 
+ pub fn printDocumentScope(doc_scope: DocumentScope) void {
+-    if (builtin.mode != .Debug) @compileError("this function should only be used in debug mode!");
++    if (builtin.mode != .debug) @compileError("this function should only be used in debug mode!");
+ 
+     for (0..doc_scope.scopes.len) |index| {
+         const scope_index: DocumentScope.Scope.Index = @enumFromInt(index);
+--- a/src/tools/config_gen.zig
++++ b/src/tools/config_gen.zig
+@@ -167,7 +167,7 @@
+     const source_unformatted = try aw.toOwnedSliceSentinel(0);
+     defer allocator.free(source_unformatted);
+ 
+-    var tree: std.zig.Ast = try .parse(allocator, source_unformatted, .zig);
++    var tree: std.zig.Ast = try .parse(allocator, source_unformatted, .{});
+     defer tree.deinit(allocator);
+     std.debug.assert(tree.errors.len == 0);
+ 
+--- a/tests/ErrorBuilder.zig
++++ b/tests/ErrorBuilder.zig
+@@ -107,7 +107,7 @@
+ //
+ 
+ fn assertFmt(ok: bool, comptime fmt_str: []const u8, args: anytype) void {
+-    if (builtin.mode == .Debug or builtin.is_test) {
++    if (builtin.mode == .debug or builtin.is_test) {
+         if (!ok) std.debug.panic(fmt_str, args);
+     } else {
+         std.debug.assert(ok);
+--- a/tests/add_analysis_cases.zig
++++ b/tests/add_analysis_cases.zig
+@@ -11,7 +11,7 @@
+     test_filters: []const []const u8,
+ ) void {
+     const cases_dir = b.path("tests/analysis");
+-    const cases_path_from_root = b.pathFromRoot("tests/analysis");
++    const cases_path_from_root = b.root.joinString(b.allocator, "tests/analysis") catch @panic("OOM");
+ 
+     const check_exe = b.addExecutable(.{
+         .name = "analysis_check",
+--- a/tests/add_build_runner_cases.zig
++++ b/tests/add_build_runner_cases.zig
+@@ -9,7 +9,7 @@
+     test_filters: []const []const u8,
+ ) void {
+     const cases_dir = b.path("tests/build_runner_cases");
+-    const cases_path_from_root = b.pathFromRoot("tests/build_runner_cases");
++    const cases_path_from_root = b.root.joinString(b.allocator, "tests/build_runner_cases") catch @panic("OOM");
+ 
+     const check_exe = b.addExecutable(.{
+         .name = "build_runner_check",
+--- a/tests/utility/ast.zig
++++ b/tests/utility/ast.zig
+@@ -85,7 +85,7 @@
+     const new_source = try allocator.dupeSentinel(u8, ccp.new_source, 0);
+     defer allocator.free(new_source);
+ 
+-    var tree: std.zig.Ast = try .parse(allocator, new_source, .zig);
++    var tree: std.zig.Ast = try .parse(allocator, new_source, .{});
+     defer tree.deinit(allocator);
+ 
+     const nodes = try ast.nodesAtLoc(allocator, &tree, inner_loc);
+--- a/tests/utility/position_context.zig
++++ b/tests/utility/position_context.zig
+@@ -731,7 +731,7 @@
+     const new_source = try allocator.dupeSentinel(u8, phr.new_source, 0);
+     defer allocator.free(new_source);
+ 
+-    var tree: std.zig.Ast = try .parse(allocator, new_source, .zig);
++    var tree: std.zig.Ast = try .parse(allocator, new_source, .{});
+     defer tree.deinit(allocator);
+ 
+     const ctx = try Analyser.getPositionContext(allocator, &tree, cursor_index, lookahead);

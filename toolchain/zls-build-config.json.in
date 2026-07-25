@@ -1,0 +1,56 @@
+{
+  "dependencies": {
+    "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/build.zig",
+    "shdc": "@PROJECT_ROOT@/.toolchain/deps/sokolshdc/build.zig",
+    "cimgui": "@PROJECT_ROOT@/.toolchain/deps/cimgui/build.zig",
+    "box3d": "@PROJECT_ROOT@/.toolchain/deps/box3d/build.zig"
+  },
+  "modules": {
+    "@PROJECT_ROOT@/src/box3d.zig": {
+      "import_table": {
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig",
+        "cimgui": "@PROJECT_ROOT@/src/generated/cimgui.zig",
+        "box3d": "@PROJECT_ROOT@/src/generated/box3d.zig"
+      }
+    },
+    "@PROJECT_ROOT@/src/cube.zig": {
+      "import_table": {
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
+      }
+    },
+    "@PROJECT_ROOT@/src/root.zig": {
+      "import_table": {}
+    },
+    "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig": {
+      "import_table": {}
+    },
+    "@PROJECT_ROOT@/src/generated/cimgui.zig": {
+      "import_table": {}
+    },
+    "@PROJECT_ROOT@/src/generated/box3d.zig": {
+      "import_table": {}
+    }
+  },
+  "compilations": [
+    {
+      "root_module": "@PROJECT_ROOT@/src/box3d.zig"
+    },
+    {
+      "root_module": "@PROJECT_ROOT@/src/cube.zig"
+    },
+    {
+      "root_module": "@PROJECT_ROOT@/src/root.zig"
+    }
+  ],
+  "top_level_steps": [
+    "install",
+    "run",
+    "run-box3d",
+    "run-cube",
+    "test",
+    "install-emsdk"
+  ],
+  "available_options": {}
+}

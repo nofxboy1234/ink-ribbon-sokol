@@ -1,0 +1,67 @@
+--- a/build.zig
++++ b/build.zig
+@@ -75,18 +75,6 @@
+     linkage: std.builtin.LinkMode,
+ };
+ 
+-fn translateC(b: *std.Build, options: std.Build.Step.TranslateC.Options) ?std.Build.LazyPath {
+-    const dep_translate_c = b.lazyDependency("translate_c", .{}) orelse return null;
+-    const mod_translate_c = b.lazyImport(@This(), "translate_c") orelse return null;
+-    const tc: mod_translate_c.Translator = .init(dep_translate_c, .{
+-        .c_source_file = options.root_source_file,
+-        .target = options.target,
+-        .optimize = options.optimize,
+-        .link_libc = options.link_libc,
+-    });
+-    return tc.output_file;
+-}
+-
+ fn buildModule(b: *std.Build, opts: BuildModuleOptions) !void {
+     var cflags_buf: [16][]const u8 = undefined;
+     var cflags = std.ArrayListUnmanaged([]const u8).initBuffer(&cflags_buf);
+@@ -118,25 +106,7 @@
+     // the Emscripten sysroot include path in the upstream project
+     b.installArtifact(clib);
+ 
+-    // translate-c the cimgui.h file
+-    // NOTE: running this step with the host target is intended to avoid
+-    // any Emscripten header search path shenanigans
+-    // NOTE: DO NOT USE cimgui_all.h HERE SINCE IT PULLS IN cimgui_internal.h
+-    // which doesn't work with Zig's translateC step because this
+-    // pulls in C bitfields which are not supported by trandlateC
+-    const translate_c_file = translateC(b, .{
+-        .root_source_file = b.path(b.fmt("{s}/cimgui.h", .{opts.subdir})),
+-        .target = b.graph.host,
+-        .optimize = opts.optimize,
+-    });
+-
+-    // ...and the Zig module for the generated bindings
+-    const mod = b.addModule(opts.modname, .{
+-        .root_source_file = translate_c_file,
+-        .target = opts.target,
+-        .optimize = opts.optimize,
+-        .link_libc = true,
+-        .link_libcpp = true,
+-    });
+-    mod.linkLibrary(clib);
++    // The parent project generates bindings with its compiler-matched
++    // translate-c bootstrap step. This package only needs to expose the C
++    // libraries while upstream translate-c catches up with Zig nightly.
+ }
+--- a/build.zig.zon
++++ b/build.zig.zon
+@@ -2,13 +2,7 @@
+     .name = .cimgui,
+     .version = "0.1.0",
+     .fingerprint = 0x49726f5f91a580e3,
+-    .dependencies = .{
+-        .translate_c = .{
+-            .url = "git+https://codeberg.org/ziglang/translate-c#f94ce1b138c8ad04959de2fea01fc8981cc2ae77",
+-            .hash = "translate_c-0.0.0-Q_BUWp84BwD-R_KrWywVjsMETfqkMv4iPdnBUx48FS6y",
+-            .lazy = true,
+-        },
+-    },
++    .dependencies = .{},
+     .paths = .{
+         "src",
+         "src-docking",
