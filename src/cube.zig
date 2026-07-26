@@ -1,86 +1,92 @@
 //------------------------------------------------------------------------------
-//  main.zig
+// Spinning cube: a small sokol graphics walkthrough
 //
-//  Renders a rotating colored cube in a window.
+// This example shows the basic path from CPU data to pixels:
 //
-//  Graphics concepts:
-//    GPU          - Specialized processor for graphics. You send it data/commands,
-//                   it draws pixels.
-//    Shader       - Small program that runs on the GPU. Vertex shader runs once per
-//                   vertex (point), fragment shader runs once per pixel.
-//    Vertex       - A single point in 3D space. 7 floats each: x,y,z,r,g,b,a.
-//    Vertex buffer - GPU memory holding vertex data. Sent once, reused every frame.
-//    Index buffer  - List of vertex indices that assemble into triangles.
-//                    Every 3 consecutive indices = 1 triangle (triangle list).
-//    Pipeline     - GPU state controlling HOW to draw: which shader, vertex layout,
-//                   depth testing, face culling. Created once at startup.
-//    Uniform      - Value constant across all vertices/pixels in a draw call.
-//                   The MVP matrix is sent as a uniform.
-//    MVP matrix   - Model x View x Projection. Transforms vertices from object-local
-//                   space into screen coordinates.
-//      Model       - Rotates/translates the object in the world.
-//      View        - Positions the camera (where you're looking from).
-//      Projection  - Adds perspective (far things look smaller).
-//    Pass         - A rendering pass: begin, apply state, draw, end.
-//    Swapchain    - Queue of 2-3 framebuffers swapping each frame to avoid tearing.
+//   CPU setup                           GPU work each frame
+//   -----------------------------       --------------------------------------
+//   create cube vertices/indices   ->   vertex shader transforms each vertex
+//   create a graphics pipeline          triangles are assembled and rasterized
+//   calculate a rotation matrix    ->   fragment shader colors covered pixels
 //
-//  Coordinate system: Right-handed, Y-up. +X=right, +Y=up, +Z=toward viewer.
+// The mesh and pipeline are created once. Each frame only the rotation matrix
+// changes, so the same GPU resources can be reused efficiently.
+//
+// Coordinate system: right-handed and Y-up. The cube is centered at the origin,
+// spans from -1 to +1 on each axis, and the camera looks toward it from +Z.
 //------------------------------------------------------------------------------
 
-// Import the sokol Zig bindings module.
+// The sokol-zig package provides portable windowing, graphics, logging, and
+// helper modules. Sokol selects the platform backend (OpenGL, Metal, D3D11,
+// WebGL, and so on) while this application code stays the same.
 const sokol = @import("sokol");
 
-// Shorthand aliases for sokol submodules.
-const slog = sokol.log; // logging
-const sg = sokol.gfx; // graphics/gpu commands (draw, makeBuffer, etc.)
-const sapp = sokol.app; // windowing, events, frame timing
-const sglue = sokol.glue; // bridge between sokol_app and sokol_gfx (swapchain, environment)
-const sdtx = sokol.debugtext;
+// Short aliases keep graphics code readable.
+const slog = sokol.log; // Sends sokol messages to the console.
+const sg = sokol.gfx; // Portable GPU API: buffers, pipelines, passes, and draws.
+const sapp = sokol.app; // Window, application lifecycle, and frame timing.
+const sglue = sokol.glue; // Connects sapp's window/context to sokol_gfx.
+const sdtx = sokol.debugtext; // Simple GPU-rendered text for the FPS display.
 
-// 3D vector and 4x4 matrix types from a local math library.
+// The local math library supplies vectors and 4x4 transformation matrices.
 const vec3 = @import("cube_math.zig").Vec3;
 const mat4 = @import("cube_math.zig").Mat4;
 
-// Compiled shader generated from cube.glsl by sokol-shdc.
-// Contains the shader binary for each GPU backend, plus Zig constants
-// for uniform slot indices (UB_vs_params) and vertex attribute indices
-// (ATTR_cube_position, ATTR_cube_color0).
+// sokol-shdc generated this Zig module from src/cube.glsl. It contains:
+//   - a shader variant for each graphics backend;
+//   - typed uniform structs such as VsParams;
+//   - constants identifying shader inputs and uniform binding slots.
 const shd = @import("generated/cube_shader.zig");
 
-// Global mutable state for the application.
-// Zig globals in a struct act like C file-scope statics.
+//------------------------------------------------------------------------------
+// Application state
+//
+// GPU objects are represented by small sokol handles. The backend owns their
+// actual memory; these values identify which resources later commands should use.
+//------------------------------------------------------------------------------
 const state = struct {
-    // Rotation angles around X and Y axes (in degrees). Incremented each frame.
+    // Current model rotation around the X and Y axes, measured in degrees.
     var rx: f32 = 0.0;
     var ry: f32 = 0.0;
 
-    // Pipeline: shader + GPU state (depth test, face culling, vertex layout).
+    // A pipeline packages the shader and fixed rendering rules: vertex layout,
+    // depth testing, face culling, blending, and render-target formats.
     var pip: sg.Pipeline = .{};
 
-    // Bindings: the vertex buffer and index buffer attached to the pipeline.
+    // Bindings connect resources such as buffers and textures to shader inputs.
+    // This example needs one vertex buffer and one index buffer.
     var bind: sg.Bindings = .{};
 
-    // What to do at the start of each rendering pass (clear the screen to a color).
+    // A pass action describes how render targets begin a pass. Here it clears the
+    // previous frame before the new cube is drawn.
     var pass_action: sg.PassAction = .{};
 
-    // View matrix: positions the camera. Camera sits at (0, 1.5, 6) looking at
-    // the origin (0,0,0) with Y pointing up. Computed once, never changes.
+    // The view matrix represents the camera. It sits at (0, 1.5, 6), looks at the
+    // origin, and treats +Y as up. Because the camera never moves, compute it once.
     const view: mat4 = mat4.lookat(.{ .x = 0.0, .y = 1.5, .z = 6.0 }, vec3.zero(), vec3.up());
 };
 
 //------------------------------------------------------------------------------
-// Called once at startup by the sokol runtime (via sapp.run below).
-// Sets up the GPU: buffers, shader, pipeline, clear color.
+// Initialization
+//
+// sokol_app calls init once after it has created the window and graphics context.
+// This is where long-lived GPU resources are created.
+// `export` gives the callback a stable C-visible symbol for native and WASM glue.
 //------------------------------------------------------------------------------
 export fn init() void {
-    // Initialize sokol_gfx. Queries the window system (Metal/D3D/GL/Vulkan)
-    // handles via sglue and routes log messages through sokol's logger.
+    // Initialize the portable graphics layer. sokol_glue supplies the native
+    // device/context created by sokol_app; sokol_log reports backend errors.
     sg.setup(.{
         .environment = sglue.environment(),
         .logger = .{ .func = slog.func },
     });
 
+    // Initialize sokol_debugtext for the FPS counter. It supports eight font
+    // slots; this demo places the built-in KC853 font in slot zero.
     sdtx.setup(.{
+        // `init:` is a labeled expression block. It lets us prepare the fixed
+        // array locally, then `break :init f` returns that array as the value of
+        // the `.fonts` field.
         .fonts = init: {
             var f: [8]sdtx.FontDesc = @splat(.{});
             f[0] = sdtx.fontKc853();
@@ -89,49 +95,60 @@ export fn init() void {
         .logger = .{ .func = slog.func },
     });
 
-    //--- Vertex buffer -------------------------------------------------------
-    // Upload cube geometry to GPU memory.
-    // vertex_buffers is an array (sokol supports up to 8 vertex buffer slots).
-    // Slot [0] is used because the shader only needs one vertex buffer.
+    //--------------------------------------------------------------------------
+    // Vertex buffer
+    //
+    // A vertex is one point supplied to the vertex shader. This buffer interleaves
+    // two attributes for every vertex:
+    //
+    //   position: x, y, z       3 floats
+    //   color:    r, g, b, a    4 floats
+    //
+    // "Interleaved" means position and color for vertex 0 are adjacent, followed
+    // by position and color for vertex 1, and so on. makeBuffer copies this
+    // immutable array into GPU-accessible memory.
     state.bind.vertex_buffers[0] = sg.makeBuffer(.{
         .data = sg.asRange(&[_]f32{
             // zig fmt: off
-            // 24 vertices. Each vertex = 7 floats: x, y, z, r, g, b, a.
-            // Colors are baked into the vertex data (no lighting/textures).
-            // The cube spans from -1 to 1 on all axes, centered at origin.
+            // A geometric cube has only eight unique corners, but this array uses
+            // 24 vertices: four for each face. Duplicating corners lets adjacent
+            // faces give the same position a different color.
+            //
+            // Colors are stored directly in the mesh. There are no lights or
+            // textures in this simple shader.
 
             // positions        colors
-            // Face 1: Red, facing -Z (visible from camera at z=6 looking inward)
+            // Face 1: red, facing -Z.
             -1.0, -1.0, -1.0, 1.0, 0.0, 0.0, 1.0, // bottom-left
              1.0, -1.0, -1.0, 1.0, 0.0, 0.0, 1.0, // bottom-right
              1.0,  1.0, -1.0, 1.0, 0.0, 0.0, 1.0, // top-right
             -1.0,  1.0, -1.0, 1.0, 0.0, 0.0, 1.0, // top-left
 
-            // Face 2: Green, facing +Z
+            // Face 2: green, facing +Z.
             -1.0, -1.0,  1.0, 0.0, 1.0, 0.0, 1.0,
              1.0, -1.0,  1.0, 0.0, 1.0, 0.0, 1.0,
              1.0,  1.0,  1.0, 0.0, 1.0, 0.0, 1.0,
             -1.0,  1.0,  1.0, 0.0, 1.0, 0.0, 1.0,
 
-            // Face 3: Blue, facing -X
+            // Face 3: blue, facing -X.
             -1.0, -1.0, -1.0, 0.0, 0.0, 1.0, 1.0,
             -1.0,  1.0, -1.0, 0.0, 0.0, 1.0, 1.0,
             -1.0,  1.0,  1.0, 0.0, 0.0, 1.0, 1.0,
             -1.0, -1.0,  1.0, 0.0, 0.0, 1.0, 1.0,
 
-            // Face 4: Orange, facing +X
+            // Face 4: orange, facing +X.
              1.0, -1.0, -1.0, 1.0, 0.5, 0.0, 1.0,
              1.0,  1.0, -1.0, 1.0, 0.5, 0.0, 1.0,
              1.0,  1.0,  1.0, 1.0, 0.5, 0.0, 1.0,
              1.0, -1.0,  1.0, 1.0, 0.5, 0.0, 1.0,
 
-            // Face 5: Cyan, facing -Y (bottom)
+            // Face 5: cyan, facing -Y (bottom).
             -1.0, -1.0, -1.0, 0.0, 0.5, 1.0, 1.0,
             -1.0, -1.0,  1.0, 0.0, 0.5, 1.0, 1.0,
              1.0, -1.0,  1.0, 0.0, 0.5, 1.0, 1.0,
              1.0, -1.0, -1.0, 0.0, 0.5, 1.0, 1.0,
 
-            // Face 6: Purple, facing +Y (top)
+            // Face 6: magenta, facing +Y (top).
             -1.0,  1.0, -1.0, 1.0, 0.0, 0.5, 1.0,
             -1.0,  1.0,  1.0, 1.0, 0.0, 0.5, 1.0,
              1.0,  1.0,  1.0, 1.0, 0.0, 0.5, 1.0,
@@ -140,16 +157,19 @@ export fn init() void {
         }),
     });
 
-    //--- Index buffer --------------------------------------------------------
-    // 36 u16 indices forming 12 triangles (2 per face).
-    // GPUs only draw triangles, so each square face is split into 2 triangles
-    // along a diagonal. Every 3 consecutive indices = 1 triangle (triangle list).
-    // Triangle 1: bottom-left -> bottom-right -> top-right (indices 0,1,2)
-    // Triangle 2: bottom-left -> top-right -> top-left (indices 0,2,3)
-    // Coincides share the common diagonal edge.
-    // Winding: counter-clockwise = front face, clockwise = back face (culled).
-
+    //--------------------------------------------------------------------------
+    // Index buffer
+    //
+    // GPUs render triangles. Each square face is split into two triangles, so the
+    // cube has 6 faces * 2 triangles * 3 indices = 36 indices.
+    //
+    // An index refers to a vertex in the buffer above. Reusing indices avoids
+    // repeating the two shared vertices along a face's diagonal.
+    //
+    // Vertex order is called winding. Viewed from the front, these triangles are
+    // counter-clockwise; the pipeline can therefore discard clockwise back faces.
     state.bind.index_buffer = sg.makeBuffer(.{
+        // Mark this buffer as indices rather than ordinary vertex data.
         .usage = .{ .index_buffer = true },
         .data = sg.asRange(&[_]u16{
             // zig fmt: off
@@ -163,44 +183,60 @@ export fn init() void {
         }),
     });
 
-    //--- Pipeline ------------------------------------------------------------
-    // Create the rendering pipeline: the shader and all fixed-function GPU state.
+    //--------------------------------------------------------------------------
+    // Graphics pipeline
+    //
+    // The pipeline tells the GPU how to interpret buffers and turn triangles into
+    // pixels. It is created once because none of these rules change per frame.
     state.pip = sg.makePipeline(.{
-        // Compile and load the right shader variant for the current GPU backend
-        // (GL/Metal/D3D11/Vulkan). cubeShaderDesc() comes from the generated
-        // cube.glsl.zig.
+        // queryBackend selects the shader variant for the active backend. The
+        // vertex shader transforms positions and forwards colors; the fragment
+        // shader writes that interpolated color for each covered pixel.
         .shader = sg.makeShader(shd.cubeShaderDesc(sg.queryBackend())),
 
-        // Describe the vertex memory layout so the GPU knows which floats are
-        // positions and which are colors.
+        // Map bytes in vertex-buffer slot 0 to the shader's named attributes.
+        // Because no offsets/stride are specified, sokol calculates the
+        // interleaved FLOAT3 + FLOAT4 layout automatically.
         .layout = init: {
+            // Another labeled block builds a temporary layout value and returns
+            // it directly into the pipeline descriptor.
             var l = sg.VertexLayoutState{};
-            // Attribute 0: position -- 3 floats (x, y, z)
+            // Position consumes three consecutive 32-bit floats.
             l.attrs[shd.ATTR_cube_position].format = .FLOAT3;
-            // Attribute 1: color -- 4 floats (r, g, b, a)
+            // Color immediately follows and consumes four floats.
             l.attrs[shd.ATTR_cube_color0].format = .FLOAT4;
             break :init l;
         },
 
-        // Indices are 16-bit unsigned integers.
+        // Match the u16 type used by the index array.
         .index_type = .UINT16,
 
-        // Depth testing: closer pixels occlude farther ones.
+        // The depth buffer stores how far away the nearest drawn surface is at
+        // each pixel. LESS_EQUAL lets a new fragment pass if it is no farther
+        // away, and write_enabled records its depth for later triangles.
         .depth = .{
             .compare = .LESS_EQUAL,
             .write_enabled = true,
         },
 
-        // Cull back faces (triangles facing away from the camera).
-        // Counter-clockwise = front, clockwise = back (discarded).
+        // Skip triangles facing away from the camera. Their pixels cannot be seen
+        // on this closed cube, so culling avoids unnecessary fragment work.
         .cull_mode = .BACK,
 
-        // Alpha blending: color_count must be set (default is 0 = no color targets).
-        // Blending is per-color-target, configured inside .colors[0].blend.
-        // Standard alpha blending: result = src * src_alpha + dst * (1 - src_alpha).
+        // This pass writes to one color target: the window's back buffer.
         .color_count = 1,
         .colors = init: {
+            // Sokol descriptors use fixed-size arrays for portability. Initialize
+            // every possible target to defaults, customize target 0, and return it.
             var clrs: [8]sg.ColorTargetState = @splat(.{});
+
+            // Alpha blending combines a new source color with the color already
+            // in the framebuffer:
+            //
+            // result = source * source_alpha + destination * (1 - source_alpha)
+            //
+            // Every cube vertex currently has alpha 1, so it remains opaque; the
+            // state is useful if those alpha values are changed later.
             clrs[0].blend = .{
                 .enabled = true,
                 .src_factor_rgb = .SRC_ALPHA,
@@ -210,9 +246,9 @@ export fn init() void {
         },
     });
 
-    //--- Clear color ---------------------------------------------------------
-    // At the start of each frame, clear the screen to this blue-purple color
-    // before drawing the cube on top.
+    // Begin every display pass by replacing the old framebuffer contents with a
+    // blue background. Without CLEAR, pixels not covered this frame could retain
+    // stale or undefined data.
     state.pass_action.colors[0] = .{
         .load_action = .CLEAR,
         .clear_value = .{ .r = 0.25, .g = 0.5, .b = 0.75, .a = 1 },
@@ -220,59 +256,72 @@ export fn init() void {
 }
 
 //------------------------------------------------------------------------------
-// Called every frame (~60 times/sec) by the sokol runtime.
-// Updates rotation, computes the MVP matrix (Model x View x Projection),
-// and issues a draw call to render the cube.
+// Frame rendering
+//
+// sokol_app calls frame repeatedly. A frame records GPU commands in this order:
+// begin a pass, apply pipeline/resources/uniforms, draw, end, then commit.
+// Like init and cleanup, it is exported for sokol's platform glue.
 //------------------------------------------------------------------------------
 export fn frame() void {
+    // Frame duration is real elapsed time in seconds. Multiplying by 60 expresses
+    // it relative to an ideal 60 Hz frame: about 1.0 at 60 Hz, 2.0 at 30 Hz.
     const frame_dt = sapp.frameDuration();
-    // Get frame duration (in seconds) multiplied by 60 to normalize speed.
-    // This makes rotation independent of framerate.
     const dt: f32 = @floatCast(frame_dt * 60);
+
+    // FPS is the reciprocal of seconds per frame. Guard zero to avoid division
+    // by zero during unusual startup/timing conditions.
     const fps: f64 = if (frame_dt > 0) 1.0 / frame_dt else 0;
 
+    // Prepare a screen-sized text canvas and queue a white performance readout.
+    // sdtx.draw below turns this queued text into GPU draw commands.
     sdtx.canvas(sapp.widthf(), sapp.heightf());
     sdtx.pos(1, 1);
     sdtx.color3b(255, 255, 255);
     sdtx.print("FPS: {d:.1}\nFrame: {d:.3}ms", .{ fps, frame_dt * 1000 });
 
-    // Increment rotation angles. Y rotates twice as fast as X.
+    // Advance both angles using elapsed time rather than a fixed amount per
+    // frame. This keeps rotation speed consistent across different refresh rates.
+    // Y rotates twice as quickly as X.
     state.rx += 1.0 * dt;
     state.ry += 2.0 * dt;
 
-    // Compute the MVP (Model-View-Projection) matrix for the current frame.
-    // This uniform is sent to the vertex shader to transform each vertex
-    // from object-local space -> world space -> camera space -> screen space.
+    // Build the current model-view-projection matrix. A uniform is a small value
+    // shared by all shader invocations in one draw call; unlike vertex data, it
+    // does not vary from vertex to vertex.
     const vs_params = computeVsParams(state.rx, state.ry);
 
-    //--- Rendering pass ------------------------------------------------------
-    // Begin a pass: clear the screen using state.pass_action, target the
-    // swapchain (back buffer that gets swapped to the display each frame).
+    // Begin the on-screen render pass. A swapchain manages displayable images:
+    // the GPU renders into a back buffer while another image may be on screen,
+    // then the completed image is presented.
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
 
-    // Activate the pipeline (shader + GPU state).
+    // Select the shaders and fixed graphics state created during init.
     sg.applyPipeline(state.pip);
 
-    // Bind the vertex buffer and index buffer so the GPU knows the geometry.
+    // Connect the cube's vertex and index buffers to that pipeline.
     sg.applyBindings(state.bind);
 
-    // Send the MVP matrix uniform to the vertex shader.
-    // UB_vs_params is the uniform block binding slot (layout(binding=0) in the GLSL).
+    // Upload the matrix to the binding slot generated from cube.glsl's
+    // `vs_params` block. sg.asRange describes the struct's address and byte size.
     sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
 
-    // Draw 36 indices (= 12 triangles = 6 faces), starting at index 0, 1 instance.
+    // Consume 36 indices starting at index 0. Instance count 1 means draw one
+    // copy of the mesh. The GPU assembles 12 triangles and rasterizes them.
     sg.draw(0, 36, 1);
 
+    // Draw the queued FPS text in the same pass so it appears over the cube.
     sdtx.draw();
 
-    // End the pass and submit all commands to the GPU for execution.
+    // Finish recording this pass, then submit the complete frame to the backend.
     sg.endPass();
     sg.commit();
 }
 
 //------------------------------------------------------------------------------
-// Called once when the window closes.
-// Releases all GPU resources.
+// Cleanup
+//
+// sokol_app calls cleanup once as the program exits. Shut helpers down before the
+// graphics device they use. Sokol releases the buffers and pipeline with sg.
 //------------------------------------------------------------------------------
 export fn cleanup() void {
     sdtx.shutdown();
@@ -280,19 +329,22 @@ export fn cleanup() void {
 }
 
 //------------------------------------------------------------------------------
-// Program entry point.
-// Opens a fullscreen borderless window with 4x MSAA (anti-aliasing), wires up
-// the three callbacks (init, frame, cleanup), and enters the sokol event loop.
+// Entry point
 //------------------------------------------------------------------------------
 pub fn main() void {
+    // sokol_app owns the platform-specific event loop. The application supplies
+    // lifecycle callbacks and a portable window description.
     sapp.run(.{
         .init_cb = init,
         .frame_cb = frame,
         .cleanup_cb = cleanup,
         .width = 800,
         .height = 600,
+        // Fullscreen uses the current display rather than a normal window.
         .fullscreen = true,
-        .sample_count = 4, // 4x multisampling for smoother edges
+        // Four samples per pixel provide multisample anti-aliasing (MSAA), which
+        // smooths jagged triangle edges before the image is presented.
+        .sample_count = 4,
         .icon = .{ .sokol_default = true },
         .window_title = "ink-ribbon-sokol",
         .logger = .{ .func = slog.func },
@@ -300,38 +352,39 @@ pub fn main() void {
 }
 
 //------------------------------------------------------------------------------
-// Build the MVP (Model-View-Projection) matrix each frame:
-//   1. Build an X-axis rotation matrix
-//   2. Build a Y-axis rotation matrix
-//   3. Combine them: model = rx_rotation x ry_rotation
-//   4. Build a perspective projection (60 degree field of view, matches screen aspect,
-//      clipping range 0.01 to 10.0)
-//   5. Combine: result = projection x view x model
+// Transform construction
 //
-// Returns a VsParams struct containing the final MVP matrix for the vertex shader.
-// The uniforms block is sent to the vertex shader via sg.applyUniforms.
+// A vertex begins in model/local space: coordinates relative to the cube's own
+// center. Three transformations move it toward the final screen:
+//
+//   model       rotates the cube in the 3D world
+//   view        expresses the world relative to the camera
+//   projection  applies perspective and maps the view into GPU clip space
+//
+// The combined MVP matrix lets the vertex shader perform all three with one
+// matrix-vector multiplication.
 //------------------------------------------------------------------------------
 fn computeVsParams(rx: f32, ry: f32) shd.VsParams {
-    // Rotation matrix around the X axis.
+    // Rotate around the X axis (tilting the cube forward/backward).
     const rxm = mat4.rotate(rx, .{ .x = 1.0, .y = 0.0, .z = 0.0 });
 
-    // Rotation matrix around the Y axis.
+    // Rotate around the Y axis (turning the cube left/right).
     const rym = mat4.rotate(ry, .{ .x = 0.0, .y = 1.0, .z = 0.0 });
 
-    // Model matrix: combines both rotations (applied to the cube). The cube
-    // is centered at the origin, so rotation spins it around its own center.
+    // Combine the rotations into the model transform. Because the cube is
+    // centered at the origin and has no translation, it spins around its center.
     const model = mat4.mul(rxm, rym);
 
-    // Screen aspect ratio -- needed so the perspective projection doesn't stretch.
+    // Aspect ratio is framebuffer width divided by height. The projection uses
+    // it to keep circles and squares from stretching when the window is not square.
     const aspect = sapp.widthf() / sapp.heightf();
 
-    // Perspective projection: 60 degree field of view, objects closer than 0.01 or
-    // farther than 10.0 are clipped (not drawn).
+    // Perspective makes distant geometry appear smaller. The field of view is
+    // 60 degrees; geometry nearer than 0.01 or farther than 10 is clipped.
     const proj = mat4.persp(60.0, aspect, 0.01, 10.0);
 
-    // Combine: projection x view x model.
-    //   model   -- rotates the cube (object -> world space)
-    //   view    -- positions the camera (world -> camera/eye space)
-    //   proj    -- applies perspective (camera -> screen/clip space)
+    // Package the combined matrix in the exact uniform struct generated by
+    // sokol-shdc. Matrix order follows this math library's multiplication
+    // convention and matches the shader's `gl_Position = mvp * position`.
     return shd.VsParams{ .mvp = mat4.mul(mat4.mul(proj, state.view), model) };
 }
