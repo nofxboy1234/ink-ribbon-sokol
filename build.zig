@@ -59,12 +59,14 @@ const box3d_sources = &.{
 const Options = struct {
     box3d_mod: *Build.Module,
     cube_mod: *Build.Module,
+    triangle_mod: *Build.Module,
     mod_lib: *Build.Module,
     dep_sokol: *Build.Dependency,
     box3d_lib: *Build.Step.Compile,
     cimgui_lib: *Build.Step.Compile,
     box3d_shdc_step: *Build.Step,
     cube_shdc_step: *Build.Step,
+    triangle_shdc_step: *Build.Step,
     emsdk_install: *Build.Step,
 };
 
@@ -145,6 +147,19 @@ pub fn build(b: *Build) !void {
         },
         .reflection = true,
     });
+    const triangle_shdc_step = try sokol.shdc.createSourceFile(b, .{
+        .shdc_dep = dep_shdc,
+        .input = "src/triangle.glsl",
+        .output = "src/generated/triangle_shader.zig",
+        .slang = .{
+            .glsl410 = true,
+            .glsl300es = true,
+            .hlsl5 = true,
+            .metal_macos = true,
+            .wgsl = true,
+        },
+        .reflection = true,
+    });
 
     const mod_lib = b.addModule("ink_ribbon_sokol", .{
         .root_source_file = b.path("src/root.zig"),
@@ -171,16 +186,27 @@ pub fn build(b: *Build) !void {
             .{ .name = "sokol", .module = dep_sokol.module("sokol") },
         },
     });
+    const triangle_mod = b.createModule(.{
+        .root_source_file = b.path("src/triangle.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "ink_ribbon_sokol", .module = mod_lib },
+            .{ .name = "sokol", .module = dep_sokol.module("sokol") },
+        },
+    });
 
     const opts = Options{
         .box3d_mod = box3d_mod,
         .cube_mod = cube_mod,
+        .triangle_mod = triangle_mod,
         .mod_lib = mod_lib,
         .dep_sokol = dep_sokol,
         .box3d_lib = box3d_lib,
         .cimgui_lib = cimgui_lib,
         .box3d_shdc_step = box3d_shdc_step,
         .cube_shdc_step = cube_shdc_step,
+        .triangle_shdc_step = triangle_shdc_step,
         .emsdk_install = emsdk_install,
     };
 
@@ -248,6 +274,13 @@ fn buildNative(b: *Build, opts: Options) void {
     cube_exe.step.dependOn(opts.cube_shdc_step);
     b.installArtifact(cube_exe);
 
+    const triangle_exe = b.addExecutable(.{
+        .name = "ink_ribbon_triangle",
+        .root_module = opts.triangle_mod,
+    });
+    triangle_exe.step.dependOn(opts.triangle_shdc_step);
+    b.installArtifact(triangle_exe);
+
     const run_box3d_cmd = b.addRunArtifact(box3d_exe);
     run_box3d_cmd.step.dependOn(&box3d_exe.step);
     b.step("run-box3d", "Run the Box3D example").dependOn(&run_box3d_cmd.step);
@@ -256,6 +289,10 @@ fn buildNative(b: *Build, opts: Options) void {
     const run_cube_cmd = b.addRunArtifact(cube_exe);
     run_cube_cmd.step.dependOn(&cube_exe.step);
     b.step("run-cube", "Run the spinning cube example").dependOn(&run_cube_cmd.step);
+
+    const run_triangle_cmd = b.addRunArtifact(triangle_exe);
+    run_triangle_cmd.step.dependOn(&triangle_exe.step);
+    b.step("run-triangle", "Run the triangle example").dependOn(&run_triangle_cmd.step);
 
     const mod_tests = b.addTest(.{
         .root_module = opts.mod_lib,
@@ -274,10 +311,17 @@ fn buildNative(b: *Build, opts: Options) void {
     cube_tests.step.dependOn(opts.cube_shdc_step);
     const run_cube_tests = b.addRunArtifact(cube_tests);
 
+    const triangle_tests = b.addTest(.{
+        .root_module = opts.triangle_mod,
+    });
+    triangle_tests.step.dependOn(opts.triangle_shdc_step);
+    const run_triangle_tests = b.addRunArtifact(triangle_tests);
+
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_box3d_tests.step);
     test_step.dependOn(&run_cube_tests.step);
+    test_step.dependOn(&run_triangle_tests.step);
 }
 
 fn buildWeb(b: *Build, opts: Options) !void {
@@ -291,6 +335,11 @@ fn buildWeb(b: *Build, opts: Options) !void {
         .root_module = opts.cube_mod,
     });
     cube_lib.step.dependOn(opts.cube_shdc_step);
+    const triangle_lib = b.addLibrary(.{
+        .name = "ink_ribbon_triangle",
+        .root_module = opts.triangle_mod,
+    });
+    triangle_lib.step.dependOn(opts.triangle_shdc_step);
 
     const emsdk = opts.dep_sokol.builder.dependency("emsdk", .{});
     const emsdk_include = emsdk.path("upstream/emscripten/cache/sysroot/include");
@@ -329,6 +378,18 @@ fn buildWeb(b: *Build, opts: Options) !void {
     });
     b.getInstallStep().dependOn(&cube_link_step.step);
 
+    const triangle_link_step = try sokol.emLinkStep(b, .{
+        .lib_main = triangle_lib,
+        .target = opts.triangle_mod.resolved_target.?,
+        .optimize = opts.triangle_mod.optimize.?,
+        .emsdk = emsdk,
+        .use_webgl2 = true,
+        .use_emmalloc = true,
+        .use_filesystem = true,
+        .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
+    });
+    b.getInstallStep().dependOn(&triangle_link_step.step);
+
     const run_box3d = sokol.emRunStep(b, .{ .name = "ink_ribbon_box3d", .emsdk = emsdk });
     run_box3d.step.dependOn(&box3d_link_step.step);
     b.step("run-box3d", "Run the Box3D example").dependOn(&run_box3d.step);
@@ -337,4 +398,8 @@ fn buildWeb(b: *Build, opts: Options) !void {
     const run_cube = sokol.emRunStep(b, .{ .name = "ink_ribbon_cube", .emsdk = emsdk });
     run_cube.step.dependOn(&cube_link_step.step);
     b.step("run-cube", "Run the spinning cube example").dependOn(&run_cube.step);
+
+    const run_triangle = sokol.emRunStep(b, .{ .name = "ink_ribbon_triangle", .emsdk = emsdk });
+    run_triangle.step.dependOn(&triangle_link_step.step);
+    b.step("run-triangle", "Run the triangle example").dependOn(&run_triangle.step);
 }

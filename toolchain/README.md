@@ -37,6 +37,7 @@ Run either example natively:
 ```sh
 zig build run-box3d
 zig build run-cube
+zig build run-triangle
 ```
 
 Select the equivalent WASM page with the same steps:
@@ -44,8 +45,10 @@ Select the equivalent WASM page with the same steps:
 ```sh
 zig build run-box3d -Dtarget=wasm32-emscripten
 zig build run-cube -Dtarget=wasm32-emscripten
+zig build run-triangle -Dtarget=wasm32-emscripten
 ```
 
 The generated pages are also installed as
 `zig-out/web/ink_ribbon_box3d.html` and
-`zig-out/web/ink_ribbon_cube.html`.
+`zig-out/web/ink_ribbon_cube.html`, and
+`zig-out/web/ink_ribbon_triangle.html`.
