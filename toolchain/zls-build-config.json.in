@@ -26,6 +26,12 @@
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
+    "@PROJECT_ROOT@/src/texcube.zig": {
+      "import_table": {
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
+      }
+    },
     "@PROJECT_ROOT@/src/root.zig": {
       "import_table": {}
     },
@@ -50,6 +56,9 @@
       "root_module": "@PROJECT_ROOT@/src/triangle.zig"
     },
     {
+      "root_module": "@PROJECT_ROOT@/src/texcube.zig"
+    },
+    {
       "root_module": "@PROJECT_ROOT@/src/root.zig"
     }
   ],
@@ -59,6 +68,7 @@
     "run-box3d",
     "run-cube",
     "run-triangle",
+    "run-texcube",
     "test",
     "install-emsdk"
   ],
