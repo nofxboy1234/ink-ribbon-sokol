@@ -64,6 +64,9 @@ pub fn main() void {
         .cleanup_cb = cleanup,
         .width = 640,
         .height = 480,
+        // This 2D example never performs depth testing, so it does not need a
+        // depth buffer alongside the window's color buffer.
+        .depth_format = .NONE,
         .icon = .{ .sokol_default = true },
         .window_title = "triangle.zig",
         .logger = .{ .func = slog.func },
