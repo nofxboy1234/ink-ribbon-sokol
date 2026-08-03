@@ -58,6 +58,7 @@ const box3d_sources = &.{
 
 const Options = struct {
     box3d_mod: *Build.Module,
+    colors_mod: *Build.Module,
     cube_mod: *Build.Module,
     triangle_mod: *Build.Module,
     texcube_mod: *Build.Module,
@@ -66,6 +67,7 @@ const Options = struct {
     box3d_lib: *Build.Step.Compile,
     cimgui_lib: *Build.Step.Compile,
     box3d_shdc_step: *Build.Step,
+    colors_shdc_step: *Build.Step,
     cube_shdc_step: *Build.Step,
     triangle_shdc_step: *Build.Step,
     texcube_shdc_step: *Build.Step,
@@ -127,6 +129,19 @@ pub fn build(b: *Build) !void {
         .shdc_dep = dep_shdc,
         .input = "src/box3d.glsl",
         .output = "src/generated/box3d_shader.zig",
+        .slang = .{
+            .glsl410 = true,
+            .glsl300es = true,
+            .hlsl5 = true,
+            .metal_macos = true,
+            .wgsl = true,
+        },
+        .reflection = true,
+    });
+    const colors_shdc_step = try sokol.shdc.createSourceFile(b, .{
+        .shdc_dep = dep_shdc,
+        .input = "src/colors.glsl",
+        .output = "src/generated/colors_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -201,6 +216,15 @@ pub fn build(b: *Build) !void {
             .{ .name = "sokol", .module = dep_sokol.module("sokol") },
         },
     });
+    const colors_mod = b.createModule(.{
+        .root_source_file = b.path("src/colors.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "ink_ribbon_sokol", .module = mod_lib },
+            .{ .name = "sokol", .module = dep_sokol.module("sokol") },
+        },
+    });
     const triangle_mod = b.createModule(.{
         .root_source_file = b.path("src/triangle.zig"),
         .target = target,
@@ -222,6 +246,7 @@ pub fn build(b: *Build) !void {
 
     const opts = Options{
         .box3d_mod = box3d_mod,
+        .colors_mod = colors_mod,
         .cube_mod = cube_mod,
         .triangle_mod = triangle_mod,
         .texcube_mod = texcube_mod,
@@ -230,6 +255,7 @@ pub fn build(b: *Build) !void {
         .box3d_lib = box3d_lib,
         .cimgui_lib = cimgui_lib,
         .box3d_shdc_step = box3d_shdc_step,
+        .colors_shdc_step = colors_shdc_step,
         .cube_shdc_step = cube_shdc_step,
         .triangle_shdc_step = triangle_shdc_step,
         .texcube_shdc_step = texcube_shdc_step,
@@ -293,6 +319,13 @@ fn buildNative(b: *Build, opts: Options) void {
     box3d_exe.step.dependOn(opts.box3d_shdc_step);
     b.installArtifact(box3d_exe);
 
+    const colors_exe = b.addExecutable(.{
+        .name = "ink_ribbon_colors",
+        .root_module = opts.colors_mod,
+    });
+    colors_exe.step.dependOn(opts.colors_shdc_step);
+    b.installArtifact(colors_exe);
+
     const cube_exe = b.addExecutable(.{
         .name = "ink_ribbon_cube",
         .root_module = opts.cube_mod,
@@ -318,6 +351,10 @@ fn buildNative(b: *Build, opts: Options) void {
     run_box3d_cmd.step.dependOn(&box3d_exe.step);
     b.step("run-box3d", "Run the Box3D example").dependOn(&run_box3d_cmd.step);
     b.step("run", "Run the Box3D example").dependOn(&run_box3d_cmd.step);
+
+    const run_colors_cmd = b.addRunArtifact(colors_exe);
+    run_colors_cmd.step.dependOn(&colors_exe.step);
+    b.step("run-colors", "Run the LearnOpenGL Colors example").dependOn(&run_colors_cmd.step);
 
     const run_cube_cmd = b.addRunArtifact(cube_exe);
     run_cube_cmd.step.dependOn(&cube_exe.step);
@@ -348,6 +385,12 @@ fn buildNative(b: *Build, opts: Options) void {
     cube_tests.step.dependOn(opts.cube_shdc_step);
     const run_cube_tests = b.addRunArtifact(cube_tests);
 
+    const colors_tests = b.addTest(.{
+        .root_module = opts.colors_mod,
+    });
+    colors_tests.step.dependOn(opts.colors_shdc_step);
+    const run_colors_tests = b.addRunArtifact(colors_tests);
+
     const triangle_tests = b.addTest(.{
         .root_module = opts.triangle_mod,
     });
@@ -363,6 +406,7 @@ fn buildNative(b: *Build, opts: Options) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_box3d_tests.step);
+    test_step.dependOn(&run_colors_tests.step);
     test_step.dependOn(&run_cube_tests.step);
     test_step.dependOn(&run_triangle_tests.step);
     test_step.dependOn(&run_texcube_tests.step);
@@ -374,6 +418,11 @@ fn buildWeb(b: *Build, opts: Options) !void {
         .root_module = opts.box3d_mod,
     });
     box3d_lib.step.dependOn(opts.box3d_shdc_step);
+    const colors_lib = b.addLibrary(.{
+        .name = "ink_ribbon_colors",
+        .root_module = opts.colors_mod,
+    });
+    colors_lib.step.dependOn(opts.colors_shdc_step);
     const cube_lib = b.addLibrary(.{
         .name = "ink_ribbon_cube",
         .root_module = opts.cube_mod,
@@ -415,6 +464,18 @@ fn buildWeb(b: *Build, opts: Options) !void {
     });
     b.getInstallStep().dependOn(&box3d_link_step.step);
 
+    const colors_link_step = try sokol.emLinkStep(b, .{
+        .lib_main = colors_lib,
+        .target = opts.colors_mod.resolved_target.?,
+        .optimize = opts.colors_mod.optimize.?,
+        .emsdk = emsdk,
+        .use_webgl2 = true,
+        .use_emmalloc = true,
+        .use_filesystem = true,
+        .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
+    });
+    b.getInstallStep().dependOn(&colors_link_step.step);
+
     const cube_link_step = try sokol.emLinkStep(b, .{
         .lib_main = cube_lib,
         .target = opts.cube_mod.resolved_target.?,
@@ -455,6 +516,10 @@ fn buildWeb(b: *Build, opts: Options) !void {
     run_box3d.step.dependOn(&box3d_link_step.step);
     b.step("run-box3d", "Run the Box3D example").dependOn(&run_box3d.step);
     b.step("run", "Run the Box3D example").dependOn(&run_box3d.step);
+
+    const run_colors = sokol.emRunStep(b, .{ .name = "ink_ribbon_colors", .emsdk = emsdk });
+    run_colors.step.dependOn(&colors_link_step.step);
+    b.step("run-colors", "Run the LearnOpenGL Colors example").dependOn(&run_colors.step);
 
     const run_cube = sokol.emRunStep(b, .{ .name = "ink_ribbon_cube", .emsdk = emsdk });
     run_cube.step.dependOn(&cube_link_step.step);
