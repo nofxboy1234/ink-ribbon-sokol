@@ -1,19 +1,19 @@
 //------------------------------------------------------------------------------
-// Spinning cube: a small sokol graphics walkthrough
+// Spinning shapes: a small sokol graphics walkthrough
 //
 // This example shows the basic path from CPU data to pixels:
 //
 //   CPU setup                           GPU work each frame
 //   -----------------------------       --------------------------------------
-//   create cube vertices/indices   ->   vertex shader transforms each vertex
+//   create mesh vertices/indices   ->   vertex shader transforms each vertex
 //   create a graphics pipeline          triangles are assembled and rasterized
 //   calculate a rotation matrix    ->   fragment shader colors covered pixels
 //
 // The mesh and pipeline are created once. Each frame only the rotation matrix
 // changes, so the same GPU resources can be reused efficiently.
 //
-// Coordinate system: right-handed and Y-up. The cube is centered at the origin,
-// spans from -1 to +1 on each axis, and the camera looks toward it from +Z.
+// Coordinate system: right-handed and Y-up. The original cube is centered at the
+// origin, with a pyramid to its left and another cube to its right.
 //------------------------------------------------------------------------------
 
 // The sokol-zig package provides portable windowing, graphics, logging, and
@@ -54,11 +54,12 @@ const state = struct {
     var pip: sg.Pipeline = .{};
 
     // Bindings connect resources such as buffers and textures to shader inputs.
-    // This example needs one vertex buffer and one index buffer.
-    var bind: sg.Bindings = .{};
+    // The cube and pyramid use separate meshes but share the same pipeline.
+    var cube_bind: sg.Bindings = .{};
+    var pyramid_bind: sg.Bindings = .{};
 
     // A pass action describes how render targets begin a pass. Here it clears the
-    // previous frame before the new cube is drawn.
+    // previous frame before the new shapes are drawn.
     var pass_action: sg.PassAction = .{};
 
     // The view matrix represents the camera. It sits at (0, 1.5, 6), looks at the
@@ -107,7 +108,7 @@ export fn init() void {
     // "Interleaved" means position and color for vertex 0 are adjacent, followed
     // by position and color for vertex 1, and so on. makeBuffer copies this
     // immutable array into GPU-accessible memory.
-    state.bind.vertex_buffers[0] = sg.makeBuffer(.{
+    state.cube_bind.vertex_buffers[0] = sg.makeBuffer(.{
         .data = sg.asRange(&[_]f32{
             // zig fmt: off
             // A geometric cube has only eight unique corners, but this array uses
@@ -168,7 +169,7 @@ export fn init() void {
     //
     // Vertex order is called winding. Viewed from the front, these triangles are
     // counter-clockwise; the pipeline can therefore discard clockwise back faces.
-    state.bind.index_buffer = sg.makeBuffer(.{
+    state.cube_bind.index_buffer = sg.makeBuffer(.{
         // Mark this buffer as indices rather than ordinary vertex data.
         .usage = .{ .index_buffer = true },
         .data = sg.asRange(&[_]u16{
@@ -179,6 +180,38 @@ export fn init() void {
             14, 13, 12, 15, 14, 12,  // Face 4: orange, +X
             16, 17, 18, 16, 18, 19,  // Face 5: cyan, -Y (bottom)
             22, 21, 20, 23, 22, 20,  // Face 6: purple, +Y (top)
+            // zig fmt: on
+        }),
+    });
+
+    //--------------------------------------------------------------------------
+    // Pyramid mesh
+    //
+    // This second mesh has a square base and one apex. It uses the same
+    // position-plus-color vertex layout as the cube, so no second pipeline is
+    // needed. Sharing the four base vertices makes their colors blend smoothly
+    // across adjoining faces.
+    state.pyramid_bind.vertex_buffers[0] = sg.makeBuffer(.{
+        .data = sg.asRange(&[_]f32{
+            // zig fmt: off
+            // positions        colors
+            -1.0, -1.0, -1.0, 1.0, 0.0, 0.0, 1.0, // base back-left: red
+             1.0, -1.0, -1.0, 0.0, 1.0, 0.0, 1.0, // base back-right: green
+             1.0, -1.0,  1.0, 0.0, 0.0, 1.0, 1.0, // base front-right: blue
+            -1.0, -1.0,  1.0, 1.0, 0.5, 0.0, 1.0, // base front-left: orange
+             0.0,  1.0,  0.0, 1.0, 0.0, 1.0, 1.0, // apex: magenta
+            // zig fmt: on
+        }),
+    });
+    state.pyramid_bind.index_buffer = sg.makeBuffer(.{
+        .usage = .{ .index_buffer = true },
+        .data = sg.asRange(&[_]u16{
+            // zig fmt: off
+            0, 3, 2,  0, 2, 1, // square base: two triangles
+            0, 1, 4,           // -Z side
+            1, 2, 4,           // +X side
+            2, 3, 4,           // +Z side
+            3, 0, 4,           // -X side
             // zig fmt: on
         }),
     });
@@ -220,7 +253,7 @@ export fn init() void {
         },
 
         // Skip triangles facing away from the camera. Their pixels cannot be seen
-        // on this closed cube, so culling avoids unnecessary fragment work.
+        // on these closed meshes, so culling avoids unnecessary fragment work.
         .cull_mode = .BACK,
 
         // This pass writes to one color target: the window's back buffer.
@@ -285,10 +318,20 @@ export fn frame() void {
     state.rx += 1.0 * dt;
     state.ry += 2.0 * dt;
 
-    // Build the current model-view-projection matrix. A uniform is a small value
-    // shared by all shader invocations in one draw call; unlike vertex data, it
-    // does not vary from vertex to vertex.
-    const vs_params = computeVsParams(state.rx, state.ry);
+    // All three objects reuse the same pipeline and rotation. Their different
+    // world positions produce different MVP uniform values. The cubes also reuse
+    // one mesh; the pyramid has its own bindings because its geometry differs.
+    const first_cube_vs_params = computeVsParams(state.rx, state.ry, vec3.zero());
+    const right_cube_vs_params = computeVsParams(
+        state.rx,
+        state.ry,
+        .{ .x = 2.5, .y = 0.0, .z = 0.0 },
+    );
+    const pyramid_vs_params = computeVsParams(
+        state.rx,
+        state.ry,
+        .{ .x = -2.5, .y = 0.0, .z = 0.0 },
+    );
 
     // Begin the on-screen render pass. A swapchain manages displayable images:
     // the GPU renders into a back buffer while another image may be on screen,
@@ -299,17 +342,29 @@ export fn frame() void {
     sg.applyPipeline(state.pip);
 
     // Connect the cube's vertex and index buffers to that pipeline.
-    sg.applyBindings(state.bind);
+    sg.applyBindings(state.cube_bind);
 
-    // Upload the matrix to the binding slot generated from cube.glsl's
-    // `vs_params` block. sg.asRange describes the struct's address and byte size.
-    sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
+    // Upload the first cube's matrix to the binding slot generated from
+    // cube.glsl's `vs_params` block. A uniform remains active until replaced.
+    sg.applyUniforms(shd.UB_vs_params, sg.asRange(&first_cube_vs_params));
 
     // Consume 36 indices starting at index 0. Instance count 1 means draw one
     // copy of the mesh. The GPU assembles 12 triangles and rasterizes them.
     sg.draw(0, 36, 1);
 
-    // Draw the queued FPS text in the same pass so it appears over the cube.
+    // Reuse the same bound geometry, but replace the MVP before drawing again.
+    // The translation inside this matrix places the second cube to the right.
+    sg.applyUniforms(shd.UB_vs_params, sg.asRange(&right_cube_vs_params));
+    sg.draw(0, 36, 1);
+
+    // Switch only the bound mesh and MVP; the pyramid's vertex format is
+    // compatible with the pipeline already in use. Its 18 indices form six
+    // triangles: two for the base and one for each of the four sides.
+    sg.applyBindings(state.pyramid_bind);
+    sg.applyUniforms(shd.UB_vs_params, sg.asRange(&pyramid_vs_params));
+    sg.draw(0, 18, 1);
+
+    // Draw the queued FPS text in the same pass so it appears over the shapes.
     sdtx.draw();
 
     // Finish recording this pass, then submit the complete frame to the backend.
@@ -364,16 +419,19 @@ pub fn main() void {
 // The combined MVP matrix lets the vertex shader perform all three with one
 // matrix-vector multiplication.
 //------------------------------------------------------------------------------
-fn computeVsParams(rx: f32, ry: f32) shd.VsParams {
+fn computeVsParams(rx: f32, ry: f32, position: vec3) shd.VsParams {
     // Rotate around the X axis (tilting the cube forward/backward).
     const rxm = mat4.rotate(rx, .{ .x = 1.0, .y = 0.0, .z = 0.0 });
 
     // Rotate around the Y axis (turning the cube left/right).
     const rym = mat4.rotate(ry, .{ .x = 0.0, .y = 1.0, .z = 0.0 });
 
-    // Combine the rotations into the model transform. Because the cube is
-    // centered at the origin and has no translation, it spins around its center.
-    const model = mat4.mul(rxm, rym);
+    // Combine the rotations first, then place the rotated cube in the world.
+    // With column vectors, `translation * rotation * vertex` rotates around the
+    // cube's own origin before translating it, so each cube spins in place.
+    const rotation = mat4.mul(rxm, rym);
+    const translation = mat4.translate(position);
+    const model = mat4.mul(translation, rotation);
 
     // Aspect ratio is framebuffer width divided by height. The projection uses
     // it to keep circles and squares from stretching when the window is not square.
