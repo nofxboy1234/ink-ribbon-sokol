@@ -57,6 +57,7 @@ const box3d_sources = &.{
 };
 
 const Options = struct {
+    basic_lighting_mod: *Build.Module,
     box3d_mod: *Build.Module,
     colors_mod: *Build.Module,
     cube_mod: *Build.Module,
@@ -67,6 +68,7 @@ const Options = struct {
     box3d_lib: *Build.Step.Compile,
     cimgui_lib: *Build.Step.Compile,
     box3d_shdc_step: *Build.Step,
+    basic_lighting_shdc_step: *Build.Step,
     colors_shdc_step: *Build.Step,
     cube_shdc_step: *Build.Step,
     triangle_shdc_step: *Build.Step,
@@ -129,6 +131,19 @@ pub fn build(b: *Build) !void {
         .shdc_dep = dep_shdc,
         .input = "src/box3d.glsl",
         .output = "src/generated/box3d_shader.zig",
+        .slang = .{
+            .glsl410 = true,
+            .glsl300es = true,
+            .hlsl5 = true,
+            .metal_macos = true,
+            .wgsl = true,
+        },
+        .reflection = true,
+    });
+    const basic_lighting_shdc_step = try sokol.shdc.createSourceFile(b, .{
+        .shdc_dep = dep_shdc,
+        .input = "src/basic_lighting.glsl",
+        .output = "src/generated/basic_lighting_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -207,6 +222,15 @@ pub fn build(b: *Build) !void {
             .{ .name = "box3d", .module = box3d_bindings },
         },
     });
+    const basic_lighting_mod = b.createModule(.{
+        .root_source_file = b.path("src/basic_lighting.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "ink_ribbon_sokol", .module = mod_lib },
+            .{ .name = "sokol", .module = dep_sokol.module("sokol") },
+        },
+    });
     const cube_mod = b.createModule(.{
         .root_source_file = b.path("src/cube.zig"),
         .target = target,
@@ -245,6 +269,7 @@ pub fn build(b: *Build) !void {
     });
 
     const opts = Options{
+        .basic_lighting_mod = basic_lighting_mod,
         .box3d_mod = box3d_mod,
         .colors_mod = colors_mod,
         .cube_mod = cube_mod,
@@ -255,6 +280,7 @@ pub fn build(b: *Build) !void {
         .box3d_lib = box3d_lib,
         .cimgui_lib = cimgui_lib,
         .box3d_shdc_step = box3d_shdc_step,
+        .basic_lighting_shdc_step = basic_lighting_shdc_step,
         .colors_shdc_step = colors_shdc_step,
         .cube_shdc_step = cube_shdc_step,
         .triangle_shdc_step = triangle_shdc_step,
@@ -312,6 +338,13 @@ fn buildBox3d(
 }
 
 fn buildNative(b: *Build, opts: Options) void {
+    const basic_lighting_exe = b.addExecutable(.{
+        .name = "ink_ribbon_basic_lighting",
+        .root_module = opts.basic_lighting_mod,
+    });
+    basic_lighting_exe.step.dependOn(opts.basic_lighting_shdc_step);
+    b.installArtifact(basic_lighting_exe);
+
     const box3d_exe = b.addExecutable(.{
         .name = "ink_ribbon_box3d",
         .root_module = opts.box3d_mod,
@@ -352,6 +385,10 @@ fn buildNative(b: *Build, opts: Options) void {
     b.step("run-box3d", "Run the Box3D example").dependOn(&run_box3d_cmd.step);
     b.step("run", "Run the Box3D example").dependOn(&run_box3d_cmd.step);
 
+    const run_basic_lighting_cmd = b.addRunArtifact(basic_lighting_exe);
+    run_basic_lighting_cmd.step.dependOn(&basic_lighting_exe.step);
+    b.step("run-basic-lighting", "Run the LearnOpenGL Basic Lighting example").dependOn(&run_basic_lighting_cmd.step);
+
     const run_colors_cmd = b.addRunArtifact(colors_exe);
     run_colors_cmd.step.dependOn(&colors_exe.step);
     b.step("run-colors", "Run the LearnOpenGL Colors example").dependOn(&run_colors_cmd.step);
@@ -379,6 +416,12 @@ fn buildNative(b: *Build, opts: Options) void {
     box3d_tests.step.dependOn(opts.box3d_shdc_step);
     const run_box3d_tests = b.addRunArtifact(box3d_tests);
 
+    const basic_lighting_tests = b.addTest(.{
+        .root_module = opts.basic_lighting_mod,
+    });
+    basic_lighting_tests.step.dependOn(opts.basic_lighting_shdc_step);
+    const run_basic_lighting_tests = b.addRunArtifact(basic_lighting_tests);
+
     const cube_tests = b.addTest(.{
         .root_module = opts.cube_mod,
     });
@@ -405,6 +448,7 @@ fn buildNative(b: *Build, opts: Options) void {
 
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
+    test_step.dependOn(&run_basic_lighting_tests.step);
     test_step.dependOn(&run_box3d_tests.step);
     test_step.dependOn(&run_colors_tests.step);
     test_step.dependOn(&run_cube_tests.step);
@@ -413,6 +457,11 @@ fn buildNative(b: *Build, opts: Options) void {
 }
 
 fn buildWeb(b: *Build, opts: Options) !void {
+    const basic_lighting_lib = b.addLibrary(.{
+        .name = "ink_ribbon_basic_lighting",
+        .root_module = opts.basic_lighting_mod,
+    });
+    basic_lighting_lib.step.dependOn(opts.basic_lighting_shdc_step);
     const box3d_lib = b.addLibrary(.{
         .name = "ink_ribbon_box3d",
         .root_module = opts.box3d_mod,
@@ -463,6 +512,18 @@ fn buildWeb(b: *Build, opts: Options) !void {
         .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
     });
     b.getInstallStep().dependOn(&box3d_link_step.step);
+
+    const basic_lighting_link_step = try sokol.emLinkStep(b, .{
+        .lib_main = basic_lighting_lib,
+        .target = opts.basic_lighting_mod.resolved_target.?,
+        .optimize = opts.basic_lighting_mod.optimize.?,
+        .emsdk = emsdk,
+        .use_webgl2 = true,
+        .use_emmalloc = true,
+        .use_filesystem = true,
+        .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
+    });
+    b.getInstallStep().dependOn(&basic_lighting_link_step.step);
 
     const colors_link_step = try sokol.emLinkStep(b, .{
         .lib_main = colors_lib,
@@ -516,6 +577,10 @@ fn buildWeb(b: *Build, opts: Options) !void {
     run_box3d.step.dependOn(&box3d_link_step.step);
     b.step("run-box3d", "Run the Box3D example").dependOn(&run_box3d.step);
     b.step("run", "Run the Box3D example").dependOn(&run_box3d.step);
+
+    const run_basic_lighting = sokol.emRunStep(b, .{ .name = "ink_ribbon_basic_lighting", .emsdk = emsdk });
+    run_basic_lighting.step.dependOn(&basic_lighting_link_step.step);
+    b.step("run-basic-lighting", "Run the LearnOpenGL Basic Lighting example").dependOn(&run_basic_lighting.step);
 
     const run_colors = sokol.emRunStep(b, .{ .name = "ink_ribbon_colors", .emsdk = emsdk });
     run_colors.step.dependOn(&colors_link_step.step);
