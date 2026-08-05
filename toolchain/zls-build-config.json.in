@@ -32,6 +32,12 @@
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
+    "@PROJECT_ROOT@/src/materials.zig": {
+      "import_table": {
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
+      }
+    },
     "@PROJECT_ROOT@/src/triangle.zig": {
       "import_table": {
         "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
@@ -71,6 +77,9 @@
       "root_module": "@PROJECT_ROOT@/src/cube.zig"
     },
     {
+      "root_module": "@PROJECT_ROOT@/src/materials.zig"
+    },
+    {
       "root_module": "@PROJECT_ROOT@/src/triangle.zig"
     },
     {
@@ -87,6 +96,7 @@
     "run-box3d",
     "run-colors",
     "run-cube",
+    "run-materials",
     "run-triangle",
     "run-texcube",
     "test",
