@@ -61,6 +61,7 @@ const Options = struct {
     box3d_mod: *Build.Module,
     colors_mod: *Build.Module,
     cube_mod: *Build.Module,
+    lighting_maps_mod: *Build.Module,
     materials_mod: *Build.Module,
     triangle_mod: *Build.Module,
     texcube_mod: *Build.Module,
@@ -72,6 +73,7 @@ const Options = struct {
     basic_lighting_shdc_step: *Build.Step,
     colors_shdc_step: *Build.Step,
     cube_shdc_step: *Build.Step,
+    lighting_maps_shdc_step: *Build.Step,
     materials_shdc_step: *Build.Step,
     triangle_shdc_step: *Build.Step,
     texcube_shdc_step: *Build.Step,
@@ -181,6 +183,19 @@ pub fn build(b: *Build) !void {
         },
         .reflection = true,
     });
+    const lighting_maps_shdc_step = try sokol.shdc.createSourceFile(b, .{
+        .shdc_dep = dep_shdc,
+        .input = "src/lighting_maps.glsl",
+        .output = "src/generated/lighting_maps_shader.zig",
+        .slang = .{
+            .glsl410 = true,
+            .glsl300es = true,
+            .hlsl5 = true,
+            .metal_macos = true,
+            .wgsl = true,
+        },
+        .reflection = true,
+    });
     const cube_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
         .input = "src/cube.glsl",
@@ -273,6 +288,15 @@ pub fn build(b: *Build) !void {
             .{ .name = "sokol", .module = dep_sokol.module("sokol") },
         },
     });
+    const lighting_maps_mod = b.createModule(.{
+        .root_source_file = b.path("src/lighting_maps.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "ink_ribbon_sokol", .module = mod_lib },
+            .{ .name = "sokol", .module = dep_sokol.module("sokol") },
+        },
+    });
     const triangle_mod = b.createModule(.{
         .root_source_file = b.path("src/triangle.zig"),
         .target = target,
@@ -297,6 +321,7 @@ pub fn build(b: *Build) !void {
         .box3d_mod = box3d_mod,
         .colors_mod = colors_mod,
         .cube_mod = cube_mod,
+        .lighting_maps_mod = lighting_maps_mod,
         .materials_mod = materials_mod,
         .triangle_mod = triangle_mod,
         .texcube_mod = texcube_mod,
@@ -308,6 +333,7 @@ pub fn build(b: *Build) !void {
         .basic_lighting_shdc_step = basic_lighting_shdc_step,
         .colors_shdc_step = colors_shdc_step,
         .cube_shdc_step = cube_shdc_step,
+        .lighting_maps_shdc_step = lighting_maps_shdc_step,
         .materials_shdc_step = materials_shdc_step,
         .triangle_shdc_step = triangle_shdc_step,
         .texcube_shdc_step = texcube_shdc_step,
@@ -392,6 +418,13 @@ fn buildNative(b: *Build, opts: Options) void {
     materials_exe.step.dependOn(opts.materials_shdc_step);
     b.installArtifact(materials_exe);
 
+    const lighting_maps_exe = b.addExecutable(.{
+        .name = "ink_ribbon_lighting_maps",
+        .root_module = opts.lighting_maps_mod,
+    });
+    lighting_maps_exe.step.dependOn(opts.lighting_maps_shdc_step);
+    b.installArtifact(lighting_maps_exe);
+
     const cube_exe = b.addExecutable(.{
         .name = "ink_ribbon_cube",
         .root_module = opts.cube_mod,
@@ -429,6 +462,10 @@ fn buildNative(b: *Build, opts: Options) void {
     const run_materials_cmd = b.addRunArtifact(materials_exe);
     run_materials_cmd.step.dependOn(&materials_exe.step);
     b.step("run-materials", "Run the LearnOpenGL Materials example").dependOn(&run_materials_cmd.step);
+
+    const run_lighting_maps_cmd = b.addRunArtifact(lighting_maps_exe);
+    run_lighting_maps_cmd.step.dependOn(&lighting_maps_exe.step);
+    b.step("run-lighting-maps", "Run the LearnOpenGL Lighting Maps example").dependOn(&run_lighting_maps_cmd.step);
 
     const run_cube_cmd = b.addRunArtifact(cube_exe);
     run_cube_cmd.step.dependOn(&cube_exe.step);
@@ -477,6 +514,12 @@ fn buildNative(b: *Build, opts: Options) void {
     materials_tests.step.dependOn(opts.materials_shdc_step);
     const run_materials_tests = b.addRunArtifact(materials_tests);
 
+    const lighting_maps_tests = b.addTest(.{
+        .root_module = opts.lighting_maps_mod,
+    });
+    lighting_maps_tests.step.dependOn(opts.lighting_maps_shdc_step);
+    const run_lighting_maps_tests = b.addRunArtifact(lighting_maps_tests);
+
     const triangle_tests = b.addTest(.{
         .root_module = opts.triangle_mod,
     });
@@ -495,6 +538,7 @@ fn buildNative(b: *Build, opts: Options) void {
     test_step.dependOn(&run_box3d_tests.step);
     test_step.dependOn(&run_colors_tests.step);
     test_step.dependOn(&run_cube_tests.step);
+    test_step.dependOn(&run_lighting_maps_tests.step);
     test_step.dependOn(&run_materials_tests.step);
     test_step.dependOn(&run_triangle_tests.step);
     test_step.dependOn(&run_texcube_tests.step);
@@ -521,6 +565,11 @@ fn buildWeb(b: *Build, opts: Options) !void {
         .root_module = opts.materials_mod,
     });
     materials_lib.step.dependOn(opts.materials_shdc_step);
+    const lighting_maps_lib = b.addLibrary(.{
+        .name = "ink_ribbon_lighting_maps",
+        .root_module = opts.lighting_maps_mod,
+    });
+    lighting_maps_lib.step.dependOn(opts.lighting_maps_shdc_step);
     const cube_lib = b.addLibrary(.{
         .name = "ink_ribbon_cube",
         .root_module = opts.cube_mod,
@@ -598,6 +647,18 @@ fn buildWeb(b: *Build, opts: Options) !void {
     });
     b.getInstallStep().dependOn(&materials_link_step.step);
 
+    const lighting_maps_link_step = try sokol.emLinkStep(b, .{
+        .lib_main = lighting_maps_lib,
+        .target = opts.lighting_maps_mod.resolved_target.?,
+        .optimize = opts.lighting_maps_mod.optimize.?,
+        .emsdk = emsdk,
+        .use_webgl2 = true,
+        .use_emmalloc = true,
+        .use_filesystem = true,
+        .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
+    });
+    b.getInstallStep().dependOn(&lighting_maps_link_step.step);
+
     const cube_link_step = try sokol.emLinkStep(b, .{
         .lib_main = cube_lib,
         .target = opts.cube_mod.resolved_target.?,
@@ -650,6 +711,10 @@ fn buildWeb(b: *Build, opts: Options) !void {
     const run_materials = sokol.emRunStep(b, .{ .name = "ink_ribbon_materials", .emsdk = emsdk });
     run_materials.step.dependOn(&materials_link_step.step);
     b.step("run-materials", "Run the LearnOpenGL Materials example").dependOn(&run_materials.step);
+
+    const run_lighting_maps = sokol.emRunStep(b, .{ .name = "ink_ribbon_lighting_maps", .emsdk = emsdk });
+    run_lighting_maps.step.dependOn(&lighting_maps_link_step.step);
+    b.step("run-lighting-maps", "Run the LearnOpenGL Lighting Maps example").dependOn(&run_lighting_maps.step);
 
     const run_cube = sokol.emRunStep(b, .{ .name = "ink_ribbon_cube", .emsdk = emsdk });
     run_cube.step.dependOn(&cube_link_step.step);
