@@ -25,8 +25,12 @@ const state = struct {
     var pass_action: sg.PassAction = .{};
 
     const light_position = vec3{ .x = 1.2, .y = 1.0, .z = 2.0 };
-    const camera_position = vec3{ .x = 0.0, .y = 1.0, .z = 6.0 };
-    const view = mat4.lookat(camera_position, vec3.zero(), vec3.up());
+    // The tutorial's screenshot was taken after moving its interactive camera.
+    // This fixed pose closely matches that framing: the camera sits to the left
+    // of the cube and aims between the cube and lamp.
+    const camera_position = vec3{ .x = -2.03, .y = -0.75, .z = 3.33 };
+    const camera_target = vec3{ .x = -0.12, .y = -0.10, .z = 1.52 };
+    const view = mat4.lookat(camera_position, camera_target, vec3.up());
 };
 
 export fn init() void {
@@ -118,7 +122,10 @@ fn makeLampPipeline() sg.Pipeline {
 }
 
 export fn frame() void {
-    const projection = mat4.persp(45.0, sapp.widthf() / sapp.heightf(), 0.1, 100.0);
+    const aspect = sapp.widthf() / sapp.heightf();
+    // cube_math.persp expresses a horizontal FOV. About 58.1 degrees horizontal
+    // at 4:3 matches the tutorial's GLM perspective with a 45-degree vertical FOV.
+    const projection = mat4.persp(58.1, aspect, 0.1, 100.0);
     const view_projection = mat4.mul(projection, state.view);
     const object_model = mat4.identity();
 
