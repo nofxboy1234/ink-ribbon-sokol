@@ -66,6 +66,7 @@ const Options = struct {
     light_casters_spotlight_mod: *Build.Module,
     lighting_maps_mod: *Build.Module,
     materials_mod: *Build.Module,
+    model_loading_mod: *Build.Module,
     multiple_lights_mod: *Build.Module,
     triangle_mod: *Build.Module,
     texcube_mod: *Build.Module,
@@ -80,6 +81,7 @@ const Options = struct {
     light_casters_shdc_step: *Build.Step,
     lighting_maps_shdc_step: *Build.Step,
     materials_shdc_step: *Build.Step,
+    model_loading_shdc_step: *Build.Step,
     multiple_lights_shdc_step: *Build.Step,
     triangle_shdc_step: *Build.Step,
     texcube_shdc_step: *Build.Step,
@@ -206,6 +208,19 @@ pub fn build(b: *Build) !void {
         .shdc_dep = dep_shdc,
         .input = "src/multiple_lights.glsl",
         .output = "src/generated/multiple_lights_shader.zig",
+        .slang = .{
+            .glsl410 = true,
+            .glsl300es = true,
+            .hlsl5 = true,
+            .metal_macos = true,
+            .wgsl = true,
+        },
+        .reflection = true,
+    });
+    const model_loading_shdc_step = try sokol.shdc.createSourceFile(b, .{
+        .shdc_dep = dep_shdc,
+        .input = "src/model_loading.glsl",
+        .output = "src/generated/model_loading_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -365,6 +380,15 @@ pub fn build(b: *Build) !void {
             .{ .name = "sokol", .module = dep_sokol.module("sokol") },
         },
     });
+    const model_loading_mod = b.createModule(.{
+        .root_source_file = b.path("src/model_loading.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "ink_ribbon_sokol", .module = mod_lib },
+            .{ .name = "sokol", .module = dep_sokol.module("sokol") },
+        },
+    });
     const triangle_mod = b.createModule(.{
         .root_source_file = b.path("src/triangle.zig"),
         .target = target,
@@ -394,6 +418,7 @@ pub fn build(b: *Build) !void {
         .light_casters_spotlight_mod = light_casters_spotlight_mod,
         .lighting_maps_mod = lighting_maps_mod,
         .materials_mod = materials_mod,
+        .model_loading_mod = model_loading_mod,
         .multiple_lights_mod = multiple_lights_mod,
         .triangle_mod = triangle_mod,
         .texcube_mod = texcube_mod,
@@ -408,6 +433,7 @@ pub fn build(b: *Build) !void {
         .light_casters_shdc_step = light_casters_shdc_step,
         .lighting_maps_shdc_step = lighting_maps_shdc_step,
         .materials_shdc_step = materials_shdc_step,
+        .model_loading_shdc_step = model_loading_shdc_step,
         .multiple_lights_shdc_step = multiple_lights_shdc_step,
         .triangle_shdc_step = triangle_shdc_step,
         .texcube_shdc_step = texcube_shdc_step,
@@ -525,6 +551,13 @@ fn buildNative(b: *Build, opts: Options) void {
     multiple_lights_exe.step.dependOn(opts.multiple_lights_shdc_step);
     b.installArtifact(multiple_lights_exe);
 
+    const model_loading_exe = b.addExecutable(.{
+        .name = "ink_ribbon_model_loading",
+        .root_module = opts.model_loading_mod,
+    });
+    model_loading_exe.step.dependOn(opts.model_loading_shdc_step);
+    b.installArtifact(model_loading_exe);
+
     const cube_exe = b.addExecutable(.{
         .name = "ink_ribbon_cube",
         .root_module = opts.cube_mod,
@@ -581,6 +614,10 @@ fn buildNative(b: *Build, opts: Options) void {
     const run_multiple_lights_cmd = b.addRunArtifact(multiple_lights_exe);
     run_multiple_lights_cmd.step.dependOn(&multiple_lights_exe.step);
     b.step("run-multiple-lights", "Run the LearnOpenGL Multiple Lights example").dependOn(&run_multiple_lights_cmd.step);
+
+    const run_model_loading_cmd = b.addRunArtifact(model_loading_exe);
+    run_model_loading_cmd.step.dependOn(&model_loading_exe.step);
+    b.step("run-model-loading", "Run the LearnOpenGL Model Loading example").dependOn(&run_model_loading_cmd.step);
 
     const run_cube_cmd = b.addRunArtifact(cube_exe);
     run_cube_cmd.step.dependOn(&cube_exe.step);
@@ -649,6 +686,10 @@ fn buildNative(b: *Build, opts: Options) void {
     multiple_lights_tests.step.dependOn(opts.multiple_lights_shdc_step);
     const run_multiple_lights_tests = b.addRunArtifact(multiple_lights_tests);
 
+    const model_loading_tests = b.addTest(.{ .root_module = opts.model_loading_mod });
+    model_loading_tests.step.dependOn(opts.model_loading_shdc_step);
+    const run_model_loading_tests = b.addRunArtifact(model_loading_tests);
+
     const triangle_tests = b.addTest(.{
         .root_module = opts.triangle_mod,
     });
@@ -672,6 +713,7 @@ fn buildNative(b: *Build, opts: Options) void {
     test_step.dependOn(&run_light_casters_point_tests.step);
     test_step.dependOn(&run_light_casters_spotlight_tests.step);
     test_step.dependOn(&run_multiple_lights_tests.step);
+    test_step.dependOn(&run_model_loading_tests.step);
     test_step.dependOn(&run_materials_tests.step);
     test_step.dependOn(&run_triangle_tests.step);
     test_step.dependOn(&run_texcube_tests.step);
@@ -723,6 +765,11 @@ fn buildWeb(b: *Build, opts: Options) !void {
         .root_module = opts.multiple_lights_mod,
     });
     multiple_lights_lib.step.dependOn(opts.multiple_lights_shdc_step);
+    const model_loading_lib = b.addLibrary(.{
+        .name = "ink_ribbon_model_loading",
+        .root_module = opts.model_loading_mod,
+    });
+    model_loading_lib.step.dependOn(opts.model_loading_shdc_step);
     const cube_lib = b.addLibrary(.{
         .name = "ink_ribbon_cube",
         .root_module = opts.cube_mod,
@@ -858,6 +905,21 @@ fn buildWeb(b: *Build, opts: Options) !void {
     });
     b.getInstallStep().dependOn(&multiple_lights_link_step.step);
 
+    const model_loading_link_step = try sokol.emLinkStep(b, .{
+        .lib_main = model_loading_lib,
+        .target = opts.model_loading_mod.resolved_target.?,
+        .optimize = opts.model_loading_mod.optimize.?,
+        .emsdk = emsdk,
+        .use_webgl2 = true,
+        .use_emmalloc = true,
+        .use_filesystem = true,
+        // The embedded OBJ plus the expanded vertex array need more than
+        // Emscripten's small default heap while the model is being imported.
+        .extra_args = &.{ "-sINITIAL_MEMORY=67108864", "-sALLOW_MEMORY_GROWTH=1" },
+        .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
+    });
+    b.getInstallStep().dependOn(&model_loading_link_step.step);
+
     const cube_link_step = try sokol.emLinkStep(b, .{
         .lib_main = cube_lib,
         .target = opts.cube_mod.resolved_target.?,
@@ -929,6 +991,10 @@ fn buildWeb(b: *Build, opts: Options) !void {
     const run_multiple_lights = sokol.emRunStep(b, .{ .name = "ink_ribbon_multiple_lights", .emsdk = emsdk });
     run_multiple_lights.step.dependOn(&multiple_lights_link_step.step);
     b.step("run-multiple-lights", "Run the LearnOpenGL Multiple Lights example").dependOn(&run_multiple_lights.step);
+
+    const run_model_loading = sokol.emRunStep(b, .{ .name = "ink_ribbon_model_loading", .emsdk = emsdk });
+    run_model_loading.step.dependOn(&model_loading_link_step.step);
+    b.step("run-model-loading", "Run the LearnOpenGL Model Loading example").dependOn(&run_model_loading.step);
 
     const run_cube = sokol.emRunStep(b, .{ .name = "ink_ribbon_cube", .emsdk = emsdk });
     run_cube.step.dependOn(&cube_link_step.step);
