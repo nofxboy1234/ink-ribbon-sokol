@@ -38,6 +38,12 @@
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
+    "@PROJECT_ROOT@/src/multiple_lights.zig": {
+      "import_table": {
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
+      }
+    },
     "@PROJECT_ROOT@/src/lighting_maps.zig": {
       "import_table": {
         "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
@@ -110,6 +116,9 @@
       "root_module": "@PROJECT_ROOT@/src/materials.zig"
     },
     {
+      "root_module": "@PROJECT_ROOT@/src/multiple_lights.zig"
+    },
+    {
       "root_module": "@PROJECT_ROOT@/src/lighting_maps.zig"
     },
     {
@@ -139,6 +148,7 @@
     "run-colors",
     "run-cube",
     "run-materials",
+    "run-multiple-lights",
     "run-lighting-maps",
     "run-light-casters",
     "run-light-casters-directional",

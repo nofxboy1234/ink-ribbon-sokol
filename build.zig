@@ -66,6 +66,7 @@ const Options = struct {
     light_casters_spotlight_mod: *Build.Module,
     lighting_maps_mod: *Build.Module,
     materials_mod: *Build.Module,
+    multiple_lights_mod: *Build.Module,
     triangle_mod: *Build.Module,
     texcube_mod: *Build.Module,
     mod_lib: *Build.Module,
@@ -79,6 +80,7 @@ const Options = struct {
     light_casters_shdc_step: *Build.Step,
     lighting_maps_shdc_step: *Build.Step,
     materials_shdc_step: *Build.Step,
+    multiple_lights_shdc_step: *Build.Step,
     triangle_shdc_step: *Build.Step,
     texcube_shdc_step: *Build.Step,
     emsdk_install: *Build.Step,
@@ -191,6 +193,19 @@ pub fn build(b: *Build) !void {
         .shdc_dep = dep_shdc,
         .input = "src/lighting_maps.glsl",
         .output = "src/generated/lighting_maps_shader.zig",
+        .slang = .{
+            .glsl410 = true,
+            .glsl300es = true,
+            .hlsl5 = true,
+            .metal_macos = true,
+            .wgsl = true,
+        },
+        .reflection = true,
+    });
+    const multiple_lights_shdc_step = try sokol.shdc.createSourceFile(b, .{
+        .shdc_dep = dep_shdc,
+        .input = "src/multiple_lights.glsl",
+        .output = "src/generated/multiple_lights_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -341,6 +356,15 @@ pub fn build(b: *Build) !void {
             .{ .name = "sokol", .module = dep_sokol.module("sokol") },
         },
     });
+    const multiple_lights_mod = b.createModule(.{
+        .root_source_file = b.path("src/multiple_lights.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "ink_ribbon_sokol", .module = mod_lib },
+            .{ .name = "sokol", .module = dep_sokol.module("sokol") },
+        },
+    });
     const triangle_mod = b.createModule(.{
         .root_source_file = b.path("src/triangle.zig"),
         .target = target,
@@ -370,6 +394,7 @@ pub fn build(b: *Build) !void {
         .light_casters_spotlight_mod = light_casters_spotlight_mod,
         .lighting_maps_mod = lighting_maps_mod,
         .materials_mod = materials_mod,
+        .multiple_lights_mod = multiple_lights_mod,
         .triangle_mod = triangle_mod,
         .texcube_mod = texcube_mod,
         .mod_lib = mod_lib,
@@ -383,6 +408,7 @@ pub fn build(b: *Build) !void {
         .light_casters_shdc_step = light_casters_shdc_step,
         .lighting_maps_shdc_step = lighting_maps_shdc_step,
         .materials_shdc_step = materials_shdc_step,
+        .multiple_lights_shdc_step = multiple_lights_shdc_step,
         .triangle_shdc_step = triangle_shdc_step,
         .texcube_shdc_step = texcube_shdc_step,
         .emsdk_install = emsdk_install,
@@ -492,6 +518,13 @@ fn buildNative(b: *Build, opts: Options) void {
     light_casters_spotlight_exe.step.dependOn(opts.light_casters_shdc_step);
     b.installArtifact(light_casters_spotlight_exe);
 
+    const multiple_lights_exe = b.addExecutable(.{
+        .name = "ink_ribbon_multiple_lights",
+        .root_module = opts.multiple_lights_mod,
+    });
+    multiple_lights_exe.step.dependOn(opts.multiple_lights_shdc_step);
+    b.installArtifact(multiple_lights_exe);
+
     const cube_exe = b.addExecutable(.{
         .name = "ink_ribbon_cube",
         .root_module = opts.cube_mod,
@@ -544,6 +577,10 @@ fn buildNative(b: *Build, opts: Options) void {
     run_light_casters_spotlight_cmd.step.dependOn(&light_casters_spotlight_exe.step);
     b.step("run-light-casters-spotlight", "Run the LearnOpenGL Spotlight example").dependOn(&run_light_casters_spotlight_cmd.step);
     b.step("run-light-casters", "Run the LearnOpenGL Spotlight example").dependOn(&run_light_casters_spotlight_cmd.step);
+
+    const run_multiple_lights_cmd = b.addRunArtifact(multiple_lights_exe);
+    run_multiple_lights_cmd.step.dependOn(&multiple_lights_exe.step);
+    b.step("run-multiple-lights", "Run the LearnOpenGL Multiple Lights example").dependOn(&run_multiple_lights_cmd.step);
 
     const run_cube_cmd = b.addRunArtifact(cube_exe);
     run_cube_cmd.step.dependOn(&cube_exe.step);
@@ -608,6 +645,10 @@ fn buildNative(b: *Build, opts: Options) void {
     light_casters_spotlight_tests.step.dependOn(opts.light_casters_shdc_step);
     const run_light_casters_spotlight_tests = b.addRunArtifact(light_casters_spotlight_tests);
 
+    const multiple_lights_tests = b.addTest(.{ .root_module = opts.multiple_lights_mod });
+    multiple_lights_tests.step.dependOn(opts.multiple_lights_shdc_step);
+    const run_multiple_lights_tests = b.addRunArtifact(multiple_lights_tests);
+
     const triangle_tests = b.addTest(.{
         .root_module = opts.triangle_mod,
     });
@@ -630,6 +671,7 @@ fn buildNative(b: *Build, opts: Options) void {
     test_step.dependOn(&run_light_casters_directional_tests.step);
     test_step.dependOn(&run_light_casters_point_tests.step);
     test_step.dependOn(&run_light_casters_spotlight_tests.step);
+    test_step.dependOn(&run_multiple_lights_tests.step);
     test_step.dependOn(&run_materials_tests.step);
     test_step.dependOn(&run_triangle_tests.step);
     test_step.dependOn(&run_texcube_tests.step);
@@ -676,6 +718,11 @@ fn buildWeb(b: *Build, opts: Options) !void {
         .root_module = opts.light_casters_spotlight_mod,
     });
     light_casters_spotlight_lib.step.dependOn(opts.light_casters_shdc_step);
+    const multiple_lights_lib = b.addLibrary(.{
+        .name = "ink_ribbon_multiple_lights",
+        .root_module = opts.multiple_lights_mod,
+    });
+    multiple_lights_lib.step.dependOn(opts.multiple_lights_shdc_step);
     const cube_lib = b.addLibrary(.{
         .name = "ink_ribbon_cube",
         .root_module = opts.cube_mod,
@@ -799,6 +846,18 @@ fn buildWeb(b: *Build, opts: Options) !void {
     });
     b.getInstallStep().dependOn(&light_casters_spotlight_link_step.step);
 
+    const multiple_lights_link_step = try sokol.emLinkStep(b, .{
+        .lib_main = multiple_lights_lib,
+        .target = opts.multiple_lights_mod.resolved_target.?,
+        .optimize = opts.multiple_lights_mod.optimize.?,
+        .emsdk = emsdk,
+        .use_webgl2 = true,
+        .use_emmalloc = true,
+        .use_filesystem = true,
+        .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
+    });
+    b.getInstallStep().dependOn(&multiple_lights_link_step.step);
+
     const cube_link_step = try sokol.emLinkStep(b, .{
         .lib_main = cube_lib,
         .target = opts.cube_mod.resolved_target.?,
@@ -866,6 +925,10 @@ fn buildWeb(b: *Build, opts: Options) !void {
     run_light_casters_spotlight.step.dependOn(&light_casters_spotlight_link_step.step);
     b.step("run-light-casters-spotlight", "Run the LearnOpenGL Spotlight example").dependOn(&run_light_casters_spotlight.step);
     b.step("run-light-casters", "Run the LearnOpenGL Spotlight example").dependOn(&run_light_casters_spotlight.step);
+
+    const run_multiple_lights = sokol.emRunStep(b, .{ .name = "ink_ribbon_multiple_lights", .emsdk = emsdk });
+    run_multiple_lights.step.dependOn(&multiple_lights_link_step.step);
+    b.step("run-multiple-lights", "Run the LearnOpenGL Multiple Lights example").dependOn(&run_multiple_lights.step);
 
     const run_cube = sokol.emRunStep(b, .{ .name = "ink_ribbon_cube", .emsdk = emsdk });
     run_cube.step.dependOn(&cube_link_step.step);
