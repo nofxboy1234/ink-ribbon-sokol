@@ -50,6 +50,24 @@
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
+    "@PROJECT_ROOT@/src/light_casters_directional.zig": {
+      "import_table": {
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
+      }
+    },
+    "@PROJECT_ROOT@/src/light_casters_point.zig": {
+      "import_table": {
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
+      }
+    },
+    "@PROJECT_ROOT@/src/light_casters_spotlight.zig": {
+      "import_table": {
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
+      }
+    },
     "@PROJECT_ROOT@/src/triangle.zig": {
       "import_table": {
         "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
@@ -95,7 +113,13 @@
       "root_module": "@PROJECT_ROOT@/src/lighting_maps.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/light_casters.zig"
+      "root_module": "@PROJECT_ROOT@/src/light_casters_directional.zig"
+    },
+    {
+      "root_module": "@PROJECT_ROOT@/src/light_casters_point.zig"
+    },
+    {
+      "root_module": "@PROJECT_ROOT@/src/light_casters_spotlight.zig"
     },
     {
       "root_module": "@PROJECT_ROOT@/src/triangle.zig"
@@ -117,6 +141,9 @@
     "run-materials",
     "run-lighting-maps",
     "run-light-casters",
+    "run-light-casters-directional",
+    "run-light-casters-point",
+    "run-light-casters-spotlight",
     "run-triangle",
     "run-texcube",
     "test",

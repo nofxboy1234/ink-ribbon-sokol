@@ -1,10 +1,8 @@
 //------------------------------------------------------------------------------
 // LearnOpenGL: Lighting / Light casters
 //
-// This recreates the chapter's final scene: a smooth-edged flashlight shining
-// from the camera onto ten textured crates. The camera is kept static so the
-// relationship between the light calculations and the rendered image is easy
-// to study.
+// Shared renderer for three small entry points. Keeping the geometry, camera,
+// and material identical makes it easier to compare only the light model.
 //------------------------------------------------------------------------------
 const std = @import("std");
 const sokol = @import("sokol");
@@ -15,6 +13,12 @@ const sglue = sokol.glue;
 const vec3 = @import("cube_math.zig").Vec3;
 const mat4 = @import("cube_math.zig").Mat4;
 const shd = @import("generated/light_casters_shader.zig");
+
+pub const Scene = enum {
+    directional,
+    point,
+    spotlight,
+};
 
 const texture_width = 500;
 const texture_height = 500;
@@ -62,7 +66,7 @@ const state = struct {
     };
 };
 
-export fn init() void {
+pub fn init() void {
     sg.setup(.{
         .environment = sglue.environment(),
         .logger = .{ .func = slog.func },
@@ -162,17 +166,36 @@ fn makeTextureView(pixels: []const u8) sg.View {
     });
 }
 
-export fn frame() void {
+pub fn frame(comptime scene: Scene) void {
     const aspect = sapp.widthf() / sapp.heightf();
     // cube_math.persp accepts a horizontal FOV. 58.1 degrees at 4:3 is the
     // equivalent of LearnOpenGL/GLM's 45-degree vertical FOV.
     const projection = mat4.persp(58.1, aspect, 0.1, 100.0);
     const view_projection = mat4.mul(projection, state.view);
 
+    // Directional light has no meaningful position. Point light uses the
+    // chapter's earlier lamp position. Spotlight attaches both its position
+    // and direction to the camera, making it behave like a flashlight.
+    const light_position = switch (scene) {
+        .directional => vec3.zero(),
+        .point => vec3{ .x = 1.2, .y = 1.0, .z = 2.0 },
+        .spotlight => state.camera_position,
+    };
+    const light_direction = switch (scene) {
+        .directional => vec3{ .x = -0.2, .y = -1.0, .z = -0.3 },
+        .point => vec3.zero(),
+        .spotlight => state.camera_forward,
+    };
+    const scene_number: f32 = switch (scene) {
+        .directional => 0.0,
+        .point => 1.0,
+        .spotlight => 2.0,
+    };
+
     const lighting_fs_params = shd.LightingFsParams{
         .material_properties = .{ 32.0, 0.0, 0.0, 0.0 },
-        .light_position = .{ state.camera_position.x, state.camera_position.y, state.camera_position.z, 1.0 },
-        .light_direction = .{ state.camera_forward.x, state.camera_forward.y, state.camera_forward.z, 0.0 },
+        .light_position = .{ light_position.x, light_position.y, light_position.z, 1.0 },
+        .light_direction = .{ light_direction.x, light_direction.y, light_direction.z, 0.0 },
         .light_ambient = .{ 0.1, 0.1, 0.1, 1.0 },
         .light_diffuse = .{ 0.8, 0.8, 0.8, 1.0 },
         .light_specular = .{ 1.0, 1.0, 1.0, 1.0 },
@@ -184,6 +207,7 @@ export fn frame() void {
             0.0,
         },
         .view_position = .{ state.camera_position.x, state.camera_position.y, state.camera_position.z, 1.0 },
+        .light_type = .{ scene_number, 0.0, 0.0, 0.0 },
     };
 
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
@@ -210,20 +234,6 @@ export fn frame() void {
     sg.commit();
 }
 
-export fn cleanup() void {
+pub fn cleanup() void {
     sg.shutdown();
-}
-
-pub fn main() void {
-    sapp.run(.{
-        .init_cb = init,
-        .frame_cb = frame,
-        .cleanup_cb = cleanup,
-        .width = 800,
-        .height = 600,
-        .sample_count = 4,
-        .icon = .{ .sokol_default = true },
-        .window_title = "LearnOpenGL Light Casters — Sokol + Zig",
-        .logger = .{ .func = slog.func },
-    });
 }

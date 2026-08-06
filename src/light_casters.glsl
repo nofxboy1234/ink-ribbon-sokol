@@ -1,4 +1,4 @@
-// LearnOpenGL "Light casters": a smooth-edged flashlight/spotlight.
+// LearnOpenGL "Light casters": directional, point, and spotlight scenes.
 @header const m = @import("../cube_math.zig")
 @ctype mat4 m.Mat4
 
@@ -34,6 +34,7 @@ layout(binding = 1) uniform lighting_fs_params {
     vec4 attenuation_terms;   // x: constant, y: linear, z: quadratic
     vec4 spotlight_cutoffs;   // x: cos(inner angle), y: cos(outer angle)
     vec4 view_position;
+    vec4 light_type;          // x: 0 directional, 1 point, 2 spotlight
 };
 
 layout(binding = 0) uniform texture2D diffuse_texture;
@@ -47,8 +48,14 @@ out vec4 frag_color;
 
 void main() {
     vec3 normal = normalize(world_normal);
-    // This points from the fragment back toward the flashlight.
-    vec3 to_light = normalize(light_position.xyz - fragment_position);
+    // Directional rays are parallel, so every fragment uses the same vector.
+    // Point lights and spotlights instead calculate a vector from each
+    // fragment to the light's world-space position.
+    bool is_directional = light_type.x < 0.5;
+    bool is_spotlight = light_type.x > 1.5;
+    vec3 to_light = is_directional
+        ? normalize(-light_direction.xyz)
+        : normalize(light_position.xyz - fragment_position);
     vec3 to_viewer = normalize(view_position.xyz - fragment_position);
     vec3 reflected_light = reflect(-to_light, normal);
 
@@ -67,18 +74,24 @@ void main() {
     //               1
     //   ---------------------------
     //   constant + linear*d + quadratic*d*d
-    float distance_to_light = length(light_position.xyz - fragment_position);
-    float attenuation = 1.0 / (
-        attenuation_terms.x +
-        attenuation_terms.y * distance_to_light +
-        attenuation_terms.z * distance_to_light * distance_to_light
-    );
+    float attenuation = 1.0;
+    if (!is_directional) {
+        float distance_to_light = length(light_position.xyz - fragment_position);
+        attenuation = 1.0 / (
+            attenuation_terms.x +
+            attenuation_terms.y * distance_to_light +
+            attenuation_terms.z * distance_to_light * distance_to_light
+        );
+    }
 
     // Both vectors point away from the flashlight here, so their dot product
     // measures how close this fragment is to the middle of its cone.
-    float theta = dot(to_light, normalize(-light_direction.xyz));
-    float epsilon = spotlight_cutoffs.x - spotlight_cutoffs.y;
-    float intensity = clamp((theta - spotlight_cutoffs.y) / epsilon, 0.0, 1.0);
+    float intensity = 1.0;
+    if (is_spotlight) {
+        float theta = dot(to_light, normalize(-light_direction.xyz));
+        float epsilon = spotlight_cutoffs.x - spotlight_cutoffs.y;
+        intensity = clamp((theta - spotlight_cutoffs.y) / epsilon, 0.0, 1.0);
+    }
 
     // The cone affects direct light. Ambient remains as the faint illumination
     // outside the beam, matching the final LearnOpenGL example.
