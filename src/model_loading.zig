@@ -75,7 +75,7 @@ export fn init() void {
 
     state.pass_action.colors[0] = .{
         .load_action = .CLEAR,
-        .clear_value = .{ .r = 0.05, .g = 0.05, .b = 0.05, .a = 1.0 },
+        .clear_value = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 },
     };
 }
 
@@ -160,28 +160,50 @@ fn makeTextureView(pixels: []const u8) sg.View {
 }
 
 export fn frame() void {
-    const camera_position = vec3{ .x = 0.0, .y = 0.6, .z = 7.5 };
+    const camera_position = vec3{ .x = 0.0, .y = 0.6, .z = 8.5 };
     const camera_target = vec3{ .x = 0.0, .y = 0.5, .z = -0.5 };
     const view = mat4.lookat(camera_position, camera_target, vec3.up());
     const projection = mat4.persp(58.1, sapp.widthf() / sapp.heightf(), 0.1, 100.0);
-    // Center the backpack's imported bounds around the world origin.
-    const model = mat4.translate(.{ .x = 0.05, .y = -0.57, .z = 0.94 });
-
-    const vs_params = shd.VsParams{
-        .mvp = mat4.mul(mat4.mul(projection, view), model),
-        .model = model,
-    };
-    const fs_params = shd.FsParams{
-        .light_position = .{ 2.5, 4.0, 4.0, 1.0 },
-        .view_position = .{ camera_position.x, camera_position.y, camera_position.z, 1.0 },
-    };
-
+    const view_projection = mat4.mul(projection, view);
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
     sg.applyPipeline(state.pipeline);
     sg.applyBindings(state.bindings);
-    sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
-    sg.applyUniforms(shd.UB_fs_params, sg.asRange(&fs_params));
-    sg.draw(0, state.vertex_count, 1);
+
+    // The reference image presents the model twice: an illuminated front view
+    // and a darker rear view. Both draws reuse the exact same vertex buffer,
+    // textures, sampler, and pipeline; only the model/MVP uniforms change.
+    const object_transforms = [_]struct {
+        x: f32,
+        angle: f32,
+        light_position: [4]f32,
+    }{
+        .{ .x = -2.25, .angle = 18.0, .light_position = .{ -3.0, 4.0, 4.0, 1.0 } },
+        // For the rear presentation, the key light remains on the model's
+        // front side. The side facing us therefore receives only ambient and
+        // grazing light, as it does in the chapter's final comparison image.
+        .{ .x = 2.25, .angle = 145.0, .light_position = .{ 3.0, 4.0, -4.0, 1.0 } },
+    };
+    for (object_transforms) |object| {
+        const model = mat4.mul(
+            mat4.translate(.{ .x = object.x, .y = 0.18, .z = 0.0 }),
+            mat4.mul(
+                mat4.rotate(object.angle, .{ .x = 0.0, .y = 1.0, .z = 0.0 }),
+                // Center the imported OBJ bounds around its local origin.
+                mat4.translate(.{ .x = 0.05, .y = -0.57, .z = 0.94 }),
+            ),
+        );
+        const vs_params = shd.VsParams{
+            .mvp = mat4.mul(view_projection, model),
+            .model = model,
+        };
+        const fs_params = shd.FsParams{
+            .light_position = object.light_position,
+            .view_position = .{ camera_position.x, camera_position.y, camera_position.z, 1.0 },
+        };
+        sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
+        sg.applyUniforms(shd.UB_fs_params, sg.asRange(&fs_params));
+        sg.draw(0, state.vertex_count, 1);
+    }
     sg.endPass();
     sg.commit();
 }
