@@ -66,6 +66,16 @@ prepare_dependencies() {
         "$staged_deps/box3d"
 
     fetch_archive \
+        "https://github.com/jkuhlmann/cgltf/archive/85cd62382dfea638278962690cf515023f33ed00.tar.gz" \
+        "793aba47e4bbe7a1a4c5822313e0b187c07cdb0a610d1ff65dcbd0619e90a65b" \
+        "$staged_deps/cgltf"
+
+    fetch_archive \
+        "https://github.com/nothings/stb/archive/2c980bb59875b0d32144a71867fbdebb2f77cd20.tar.gz" \
+        "9a955b1b49a4410088a2e0ee2a9c057c3c907d0c1d75454144cb980aca0ba515" \
+        "$staged_deps/stb"
+
+    fetch_archive \
         "https://github.com/zigtools/zls/archive/$zls_revision.tar.gz" \
         "621bbf0eddfcd909499338767a6d48941a9ab3d6fd3302ce72f0ccf3ebba4d43" \
         "$staged_deps/zls"
@@ -111,12 +121,21 @@ generate_bindings() {
             -I "$deps_root/cimgui/src" \
             -target x86_64-linux-gnu \
             "$deps_root/cimgui/src/cimgui.h" > "$generated/cimgui.zig"
+        "$zig" translate-c -lc \
+            -I "$deps_root/cgltf" \
+            -target x86_64-linux-gnu \
+            "$deps_root/cgltf/cgltf.h" > "$generated/cgltf.zig"
+        "$zig" translate-c -lc \
+            -target x86_64-linux-gnu \
+            "$project_root/src/c/model_image.h" > "$generated/model_image.zig"
     )
 
-    sed -i "s#$project_root/.toolchain/deps/##g" "$generated/box3d.zig" "$generated/cimgui.zig"
+    sed -i "s#$project_root/.toolchain/deps/##g" "$generated/box3d.zig" "$generated/cimgui.zig" "$generated/cgltf.zig" "$generated/model_image.zig"
     mkdir -p "$project_root/src/generated"
     mv "$generated/box3d.zig" "$project_root/src/generated/box3d.zig"
     mv "$generated/cimgui.zig" "$project_root/src/generated/cimgui.zig"
+    mv "$generated/cgltf.zig" "$project_root/src/generated/cgltf.zig"
+    mv "$generated/model_image.zig" "$project_root/src/generated/model_image.zig"
 }
 
 install_zls() {
@@ -144,3 +163,5 @@ printf 'zig: %s\n' "$("$HOME/.local/bin/zig" version)"
 printf 'zls:  %s\n' "$("$HOME/.local/bin/zls" --version)"
 printf 'sokol: 9bbabc13207ca6259d171f4c22e7d88a1f7030e9\n'
 printf 'shdc: 9adef5465d8b9e7f412b0ffd48017e2741628c27\n'
+printf 'cgltf: 85cd62382dfea638278962690cf515023f33ed00\n'
+printf 'stb: 2c980bb59875b0d32144a71867fbdebb2f77cd20\n'

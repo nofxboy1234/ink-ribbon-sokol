@@ -74,6 +74,7 @@ const Options = struct {
     dep_sokol: *Build.Dependency,
     box3d_lib: *Build.Step.Compile,
     cimgui_lib: *Build.Step.Compile,
+    cgltf_lib: *Build.Step.Compile,
     box3d_shdc_step: *Build.Step,
     basic_lighting_shdc_step: *Build.Step,
     colors_shdc_step: *Build.Step,
@@ -120,6 +121,13 @@ pub fn build(b: *Build) !void {
     );
 
     const box3d_lib = buildBox3d(b, dep_box3d, target, optimize);
+    const cgltf_lib = buildCgltf(
+        b,
+        b.path(".toolchain/deps/cgltf"),
+        b.path(".toolchain/deps/stb"),
+        target,
+        optimize,
+    );
 
     // Zig 0.17 no longer has @cImport. These regular Zig modules are generated
     // from the pinned public C headers by toolchain/bootstrap.sh via translate-c.
@@ -137,6 +145,20 @@ pub fn build(b: *Build) !void {
         .link_libc = true,
     });
     cimgui_bindings.linkLibrary(cimgui_lib);
+    const cgltf_bindings = b.createModule(.{
+        .root_source_file = b.path("src/generated/cgltf.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    cgltf_bindings.linkLibrary(cgltf_lib);
+    const model_image_bindings = b.createModule(.{
+        .root_source_file = b.path("src/generated/model_image.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    model_image_bindings.linkLibrary(cgltf_lib);
 
     const dep_shdc = dep_sokol.builder.dependency("shdc", .{});
     const box3d_shdc_step = try sokol.shdc.createSourceFile(b, .{
@@ -387,6 +409,8 @@ pub fn build(b: *Build) !void {
         .imports = &.{
             .{ .name = "ink_ribbon_sokol", .module = mod_lib },
             .{ .name = "sokol", .module = dep_sokol.module("sokol") },
+            .{ .name = "cgltf", .module = cgltf_bindings },
+            .{ .name = "model_image", .module = model_image_bindings },
         },
     });
     const triangle_mod = b.createModule(.{
@@ -426,6 +450,7 @@ pub fn build(b: *Build) !void {
         .dep_sokol = dep_sokol,
         .box3d_lib = box3d_lib,
         .cimgui_lib = cimgui_lib,
+        .cgltf_lib = cgltf_lib,
         .box3d_shdc_step = box3d_shdc_step,
         .basic_lighting_shdc_step = basic_lighting_shdc_step,
         .colors_shdc_step = colors_shdc_step,
@@ -445,6 +470,26 @@ pub fn build(b: *Build) !void {
     } else {
         buildNative(b, opts);
     }
+}
+
+fn buildCgltf(
+    b: *Build,
+    cgltf_root: Build.LazyPath,
+    stb_root: Build.LazyPath,
+    target: Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *Build.Step.Compile {
+    const mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    mod.addIncludePath(cgltf_root);
+    mod.addIncludePath(stb_root);
+    mod.addIncludePath(b.path("src/c"));
+    mod.addCSourceFile(.{ .file = b.path("src/c/cgltf.c"), .flags = &.{"-std=c99"} });
+    mod.addCSourceFile(.{ .file = b.path("src/c/model_image.c"), .flags = &.{"-std=c99"} });
+    return b.addLibrary(.{ .name = "cgltf", .linkage = .static, .root_module = mod });
 }
 
 fn buildBox3d(
@@ -798,6 +843,8 @@ fn buildWeb(b: *Build, opts: Options) !void {
     cimgui_clib.step.dependOn(&sokol_clib.step);
     opts.box3d_lib.root_module.addSystemIncludePath(emsdk_include);
     opts.box3d_lib.step.dependOn(&sokol_clib.step);
+    opts.cgltf_lib.root_module.addSystemIncludePath(emsdk_include);
+    opts.cgltf_lib.step.dependOn(&sokol_clib.step);
 
     const box3d_link_step = try sokol.emLinkStep(b, .{
         .lib_main = box3d_lib,
@@ -913,11 +960,19 @@ fn buildWeb(b: *Build, opts: Options) !void {
         .use_webgl2 = true,
         .use_emmalloc = true,
         .use_filesystem = true,
-        // The embedded OBJ plus the expanded vertex array need more than
-        // Emscripten's small default heap while the model is being imported.
+        // The asynchronous fetch buffers and cgltf scene allocations need
+        // more than Emscripten's small default heap during loading.
         .extra_args = &.{ "-sINITIAL_MEMORY=67108864", "-sALLOW_MEMORY_GROWTH=1" },
         .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
     });
+    const install_model_gltf = b.addInstallFileWithDir(b.path("src/assets/backpack/backpack.gltf"), .{ .custom = "web" }, "backpack.gltf");
+    const install_model_vertices = b.addInstallFileWithDir(b.path("src/assets/backpack/vertices.bin"), .{ .custom = "web" }, "vertices.bin");
+    const install_model_diffuse = b.addInstallFileWithDir(b.path("src/assets/backpack/diffuse.png"), .{ .custom = "web" }, "diffuse.png");
+    const install_model_specular = b.addInstallFileWithDir(b.path("src/assets/backpack/specular.png"), .{ .custom = "web" }, "specular.png");
+    model_loading_link_step.step.dependOn(&install_model_gltf.step);
+    model_loading_link_step.step.dependOn(&install_model_vertices.step);
+    model_loading_link_step.step.dependOn(&install_model_diffuse.step);
+    model_loading_link_step.step.dependOn(&install_model_specular.step);
     b.getInstallStep().dependOn(&model_loading_link_step.step);
 
     const cube_link_step = try sokol.emLinkStep(b, .{
