@@ -40,15 +40,8 @@ const Vertex = extern struct {
 const state = struct {
     var bind: sg.Bindings = .{};
     var pipeline: sg.Pipeline = .{};
+    var lamp_pipeline: sg.Pipeline = .{};
     var pass_action: sg.PassAction = .{};
-
-    // The original program starts here and aims straight down world -Z. Since
-    // this lesson's flashlight is attached to the camera, these are also the
-    // light's position and direction.
-    const camera_position = vec3{ .x = 0.0, .y = 0.0, .z = 3.0 };
-    const camera_forward = vec3{ .x = 0.0, .y = 0.0, .z = -1.0 };
-    const camera_target = vec3.add(camera_position, camera_forward);
-    const view = mat4.lookat(camera_position, camera_target, vec3.up());
 
     // These are the ten positions used by LearnOpenGL. Every draw uses the
     // same cube vertex buffer but gets a different model matrix.
@@ -143,6 +136,16 @@ pub fn init() void {
     pipeline_desc.layout.attrs[shd.ATTR_object_texcoord0].format = .FLOAT2;
     state.pipeline = sg.makePipeline(pipeline_desc);
 
+    var lamp_pipeline_desc: sg.PipelineDesc = .{
+        .shader = sg.makeShader(shd.lampShaderDesc(sg.queryBackend())),
+        .index_type = .UINT16,
+        .depth = .{ .compare = .LESS_EQUAL, .write_enabled = true },
+        .cull_mode = .BACK,
+    };
+    lamp_pipeline_desc.layout.buffers[0].stride = @sizeOf(Vertex);
+    lamp_pipeline_desc.layout.attrs[shd.ATTR_lamp_position].format = .FLOAT3;
+    state.lamp_pipeline = sg.makePipeline(lamp_pipeline_desc);
+
     state.pass_action.colors[0] = .{
         .load_action = .CLEAR,
         .clear_value = .{ .r = 0.1, .g = 0.1, .b = 0.1, .a = 1.0 },
@@ -170,8 +173,10 @@ pub fn frame(comptime scene: Scene) void {
     const aspect = sapp.widthf() / sapp.heightf();
     // cube_math.persp accepts a horizontal FOV. 58.1 degrees at 4:3 is the
     // equivalent of LearnOpenGL/GLM's 45-degree vertical FOV.
+    const camera = cameraForScene(scene);
     const projection = mat4.persp(58.1, aspect, 0.1, 100.0);
-    const view_projection = mat4.mul(projection, state.view);
+    const view = mat4.lookat(camera.position, camera.target, vec3.up());
+    const view_projection = mat4.mul(projection, view);
 
     // Directional light has no meaningful position. Point light uses the
     // chapter's earlier lamp position. Spotlight attaches both its position
@@ -179,12 +184,12 @@ pub fn frame(comptime scene: Scene) void {
     const light_position = switch (scene) {
         .directional => vec3.zero(),
         .point => vec3{ .x = 1.2, .y = 1.0, .z = 2.0 },
-        .spotlight => state.camera_position,
+        .spotlight => camera.position,
     };
     const light_direction = switch (scene) {
         .directional => vec3{ .x = -0.2, .y = -1.0, .z = -0.3 },
         .point => vec3.zero(),
-        .spotlight => state.camera_forward,
+        .spotlight => vec3.norm(vec3.sub(camera.target, camera.position)),
     };
     const scene_number: f32 = switch (scene) {
         .directional => 0.0,
@@ -206,7 +211,7 @@ pub fn frame(comptime scene: Scene) void {
             0.0,
             0.0,
         },
-        .view_position = .{ state.camera_position.x, state.camera_position.y, state.camera_position.z, 1.0 },
+        .view_position = .{ camera.position.x, camera.position.y, camera.position.z, 1.0 },
         .light_type = .{ scene_number, 0.0, 0.0, 0.0 },
     };
 
@@ -230,8 +235,57 @@ pub fn frame(comptime scene: Scene) void {
         sg.draw(0, 36, 1);
     }
 
+    if (scene == .point) {
+        // The small white cube makes the point light's world-space position
+        // visible, just like the final point-light frame in the chapter.
+        const lamp_model = mat4.mul(mat4.translate(light_position), uniformScale(0.2));
+        const lamp_vs_params = shd.LampVsParams{
+            .mvp = mat4.mul(view_projection, lamp_model),
+        };
+        sg.applyPipeline(state.lamp_pipeline);
+        sg.applyBindings(state.bind);
+        sg.applyUniforms(shd.UB_lamp_vs_params, sg.asRange(&lamp_vs_params));
+        sg.draw(0, 36, 1);
+    }
+
     sg.endPass();
     sg.commit();
+}
+
+const Camera = struct {
+    position: vec3,
+    target: vec3,
+};
+
+fn cameraForScene(comptime scene: Scene) Camera {
+    return switch (scene) {
+        // Pulled back so the ten separated crates fit into the frame, as in
+        // the chapter's final directional-light image.
+        .directional => .{
+            .position = .{ .x = 0.0, .y = 0.0, .z = 6.0 },
+            .target = .{ .x = 0.0, .y = 0.0, .z = 0.0 },
+        },
+        // Slightly raised and pulled back. This keeps the point-light marker
+        // on the right while collecting most crates near the middle.
+        .point => .{
+            .position = .{ .x = -1.7, .y = 1.0, .z = 9.0 },
+            .target = .{ .x = 0.0, .y = 0.0, .z = -3.0 },
+        },
+        // Close and aimed to the right of the origin, producing the crowded,
+        // off-centre flashlight composition of the final spotlight frame.
+        .spotlight => .{
+            .position = .{ .x = -0.35, .y = 0.15, .z = 2.55 },
+            .target = .{ .x = 0.85, .y = -0.15, .z = 0.0 },
+        },
+    };
+}
+
+fn uniformScale(amount: f32) mat4 {
+    var result = mat4.identity();
+    result.m[0][0] = amount;
+    result.m[1][1] = amount;
+    result.m[2][2] = amount;
+    return result;
 }
 
 pub fn cleanup() void {

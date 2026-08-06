@@ -103,3 +103,28 @@ void main() {
 @end
 
 @program object object_vs object_fs
+
+// The point-light reference frame draws a small white cube at the light's
+// position. Directional lights have no position, and a camera flashlight would
+// place this marker around the viewer, so those two scenes do not draw it.
+@vs lamp_vs
+layout(binding = 2) uniform lamp_vs_params {
+    mat4 mvp;
+};
+
+in vec4 position;
+
+void main() {
+    gl_Position = mvp * position;
+}
+@end
+
+@fs lamp_fs
+out vec4 frag_color;
+
+void main() {
+    frag_color = vec4(1.0);
+}
+@end
+
+@program lamp lamp_vs lamp_fs
