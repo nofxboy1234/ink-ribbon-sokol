@@ -47,7 +47,9 @@
     "@PROJECT_ROOT@/src/model_loading.zig": {
       "import_table": {
         "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
-        "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
+        "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig",
+        "cgltf": "@PROJECT_ROOT@/src/generated/cgltf.zig",
+        "model_image": "@PROJECT_ROOT@/src/generated/model_image.zig"
       }
     },
     "@PROJECT_ROOT@/src/lighting_maps.zig": {
@@ -102,6 +104,12 @@
       "import_table": {}
     },
     "@PROJECT_ROOT@/src/generated/box3d.zig": {
+      "import_table": {}
+    },
+    "@PROJECT_ROOT@/src/generated/cgltf.zig": {
+      "import_table": {}
+    },
+    "@PROJECT_ROOT@/src/generated/model_image.zig": {
       "import_table": {}
     }
   },
