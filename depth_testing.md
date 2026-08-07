@@ -14,10 +14,10 @@ zig build run-depth-testing -Dtarget=wasm32-emscripten
 
 Controls:
 
-| Key | Result |
-|---|---|
-| `Z` | Toggle normal colour and linearized depth visualization |
-| `D` | Toggle the `LESS` and `ALWAYS` depth comparisons |
+| Key | Result                                                   |
+|-----|----------------------------------------------------------|
+| `Z` | Toggle normal colour and linearized depth visualization  |
+| `D` | Toggle the `LESS` and `ALWAYS` depth comparisons         |
 
 ## 1. Why a depth buffer is needed
 
@@ -139,16 +139,16 @@ Without a clear, this frame would inherit stale depths from the previous frame.
 
 ## 4. Depth comparison functions
 
-| OpenGL | Sokol | Passes when new depth is... |
-|---|---|---|
-| `GL_NEVER` | `.NEVER` | never accepted |
-| `GL_LESS` | `.LESS` | less than stored depth |
-| `GL_EQUAL` | `.EQUAL` | equal to stored depth |
-| `GL_LEQUAL` | `.LESS_EQUAL` | less than or equal |
-| `GL_GREATER` | `.GREATER` | greater than stored depth |
-| `GL_NOTEQUAL` | `.NOT_EQUAL` | different from stored depth |
-| `GL_GEQUAL` | `.GREATER_EQUAL` | greater than or equal |
-| `GL_ALWAYS` | `.ALWAYS` | always accepted |
+| OpenGL        | Sokol            | Passes when new depth is...   |
+|---------------|------------------|-------------------------------|
+| `GL_NEVER`    | `.NEVER`         | never accepted                |
+| `GL_LESS`     | `.LESS`          | less than stored depth        |
+| `GL_EQUAL`    | `.EQUAL`         | equal to stored depth         |
+| `GL_LEQUAL`   | `.LESS_EQUAL`    | less than or equal            |
+| `GL_GREATER`  | `.GREATER`       | greater than stored depth     |
+| `GL_NOTEQUAL` | `.NOT_EQUAL`     | different from stored depth   |
+| `GL_GEQUAL`   | `.GREATER_EQUAL` | greater than or equal         |
+| `GL_ALWAYS`   | `.ALWAYS`        | always accepted               |
 
 Sokol pipelines are immutable after creation. The example therefore creates:
 
@@ -311,16 +311,16 @@ a floor instead of making its bottom face exactly coplanar with the floor.
 
 ## 10. Complete OpenGL → Sokol mapping
 
-| LearnOpenGL/OpenGL | Sokol + Zig |
-|---|---|
-| `glEnable(GL_DEPTH_TEST)` | Configure depth testing in `sg.PipelineDesc.depth` |
-| `glDepthFunc(...)` | `.depth.compare` |
-| `glDepthMask(...)` | `.depth.write_enabled` |
-| Clear `GL_DEPTH_BUFFER_BIT` | `sg.PassAction.depth.load_action = .CLEAR` |
-| Depth clear value | `sg.PassAction.depth.clear_value` |
-| Change depth function | Apply a different pre-created `sg.Pipeline` |
-| `gl_FragCoord.z` | The same GLSL built-in in the Sokol shader source |
-| Draw cubes and plane | `sg.applyBindings`, `sg.applyUniforms`, `sg.draw` |
+| LearnOpenGL/OpenGL           | Sokol + Zig                                               |
+|------------------------------|-----------------------------------------------------------|
+| `glEnable(GL_DEPTH_TEST)`    | Configure depth testing in `sg.PipelineDesc.depth`        |
+| `glDepthFunc(...)`           | `.depth.compare`                                          |
+| `glDepthMask(...)`           | `.depth.write_enabled`                                    |
+| Clear `GL_DEPTH_BUFFER_BIT`  | `sg.PassAction.depth.load_action = .CLEAR`                |
+| Depth clear value            | `sg.PassAction.depth.clear_value`                         |
+| Change depth function        | Apply a different pre-created `sg.Pipeline`               |
+| `gl_FragCoord.z`             | The same GLSL built-in in the Sokol shader source         |
+| Draw cubes and plane         | `sg.applyBindings`, `sg.applyUniforms`, `sg.draw`         |
 
 The important mental model is:
 
