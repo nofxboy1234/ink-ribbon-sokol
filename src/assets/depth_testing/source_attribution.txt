@@ -1,0 +1,9 @@
+Textures used by the LearnOpenGL Depth Testing chapter:
+
+https://github.com/JoeyDeVries/LearnOpenGL/tree/master/resources/textures
+
+marble.jpg SHA-256:
+b86f64b4594ce149e7078c073212c9cebedc02a2d77feefdb0186456ded20bb3
+
+metal.png SHA-256:
+910813e381423943aea96e84f26e45b4700501b879bd65c65937b45450ded5e6
