@@ -8,10 +8,10 @@ patches_root="$project_root/toolchain/patches"
 staging_root=$(mktemp -d "${TMPDIR:-/tmp}/ink-ribbon-toolchain.XXXXXX")
 trap 'rm -rf -- "$staging_root"' EXIT
 
-zig_version="0.17.0-dev.1464+6aff551f1"
+zig_version="0.17.0-dev.1622+2b242157b"
 zig_dir_name="zig-x86_64-linux-$zig_version"
 zig_url="https://ziglang.org/builds/$zig_dir_name.tar.xz"
-zig_sha256="f0fcc0f1d028a983eb66d873adf2687b504a710789dcc52409a5535c3ddbedc2"
+zig_sha256="9bde4645e8d918eaa840bfcc1c8cfa9b6567cb612f7d5fe4496244e86dee702f"
 
 zls_revision="8da87d4f3305a550e7b739bad764e34bf1e46a08"
 zls_version="0.17.0-dev.44+8da87d4f"
@@ -44,25 +44,25 @@ prepare_dependencies() {
     local staged_deps="$staging_root/deps"
 
     fetch_archive \
-        "https://github.com/floooh/sokol-zig/archive/9bbabc13207ca6259d171f4c22e7d88a1f7030e9.tar.gz" \
-        "7f230d939b9ee4963446a64804b70f2783e504a2073a8669c7892cf81711d60f" \
+        "https://github.com/floooh/sokol-zig/archive/6977361859207ad33f59b33d0ac20512da6394a0.tar.gz" \
+        "ad9dbfd17b97e599bf952cd790f23b8685e0df3d9dc587652a67b2c9694b2ffe" \
         "$staged_deps/sokol"
     patch -d "$staged_deps/sokol" -p1 < "$patches_root/sokol-build.patch"
 
     fetch_archive \
-        "https://github.com/floooh/sokol-tools-bin/archive/9adef5465d8b9e7f412b0ffd48017e2741628c27.tar.gz" \
-        "2128334092d2484f1c2ce1f53105099dcea8403d53dae32048fda6ceb622b642" \
+        "https://github.com/floooh/sokol-tools-bin/archive/6801e61ab7ea64dd9369ae9ff2f46d20c61fc655.tar.gz" \
+        "f680d811e3e101e03230685f2196cea5bc8127700f748eeb62c454b4cd3a633b" \
         "$staged_deps/sokolshdc"
 
     fetch_archive \
-        "https://github.com/floooh/dcimgui/archive/b78819a94fe85676c7043b3a1ca7a210bda0797b.tar.gz" \
-        "75bcd423ae3e108e6438fd5ee3bc88d17f7b790858a1c7ded53be609bc9b7124" \
+        "https://github.com/floooh/dcimgui/archive/3a571541d522692c457482e1aaa39e9f0996f926.tar.gz" \
+        "2547df48db0da7e215a4acc11dd95ba39faaeaec89a4bb2e8331ae2f4af806d4" \
         "$staged_deps/cimgui"
     patch -d "$staged_deps/cimgui" -p1 < "$patches_root/cimgui-build.patch"
 
     fetch_archive \
-        "https://github.com/erincatto/box3d/archive/c52908c9a907714e4d3a8a30be5272a1761158e1.tar.gz" \
-        "14de7d9dab29ea4ef7e268769d45cbd11690466896250f0196aac998f62edb03" \
+        "https://github.com/erincatto/box3d/archive/3fc20f5b453ba9e14cdf54ecafa87a2a4bcdf53c.tar.gz" \
+        "3ce36c2c5c39d24a811e880910327c9a3cc31e4c6278d8d2e5da2b0a48f94df6" \
         "$staged_deps/box3d"
 
     fetch_archive \
@@ -161,7 +161,12 @@ install_zls
 
 printf 'zig: %s\n' "$("$HOME/.local/bin/zig" version)"
 printf 'zls:  %s\n' "$("$HOME/.local/bin/zls" --version)"
-printf 'sokol: 9bbabc13207ca6259d171f4c22e7d88a1f7030e9\n'
-printf 'shdc: 9adef5465d8b9e7f412b0ffd48017e2741628c27\n'
+printf 'sokol: 6977361859207ad33f59b33d0ac20512da6394a0\n'
+printf 'shdc: 6801e61ab7ea64dd9369ae9ff2f46d20c61fc655\n'
+printf 'cimgui: 3a571541d522692c457482e1aaa39e9f0996f926\n'
+printf 'box3d: 3fc20f5b453ba9e14cdf54ecafa87a2a4bcdf53c\n'
 printf 'cgltf: 85cd62382dfea638278962690cf515023f33ed00\n'
 printf 'stb: 2c980bb59875b0d32144a71867fbdebb2f77cd20\n'
+printf 'known-folders (ZLS pin): 207c34a16e4365edc20d92c7892f962b3bed46e8\n'
+printf 'diffz (ZLS pin): d080c1eb782fff15068cabb3b82da85ce6054b74\n'
+printf 'lsp-kit (ZLS pin): b886a2b0d5cee85ecbcc3089b863f7517cc9ff7f\n'

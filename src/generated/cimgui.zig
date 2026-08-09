@@ -154,6 +154,7 @@ pub const struct_ImTextureData_t = extern struct {
     UniqueID: c_int = 0,
     Status: ImTextureStatus = @import("std").mem.zeroes(ImTextureStatus),
     BackendUserData: ?*anyopaque = null,
+    QueueUserData: ?*anyopaque = null,
     TexID: ImTextureID = 0,
     Format: ImTextureFormat = @import("std").mem.zeroes(ImTextureFormat),
     Width: c_int = 0,
@@ -595,7 +596,7 @@ pub const struct_ImVector_ImU16_t = extern struct {
     Capacity: c_int = 0,
     Data: [*c]ImU16 = null,
 };
-pub const ImVector_ImU16 = struct_ImVector_ImU16_t; // cimgui/src/cimgui.h:3589:18: warning: struct demoted to opaque type - has bitfield
+pub const ImVector_ImU16 = struct_ImVector_ImU16_t; // cimgui/src/cimgui.h:3635:18: warning: struct demoted to opaque type - has bitfield
 pub const struct_ImFontGlyph_t = opaque {};
 pub const ImFontGlyph = struct_ImFontGlyph_t;
 pub const struct_ImVector_ImFontGlyph_t = extern struct {
@@ -603,7 +604,7 @@ pub const struct_ImVector_ImFontGlyph_t = extern struct {
     Capacity: c_int = 0,
     Data: ?*ImFontGlyph = null,
 };
-pub const ImVector_ImFontGlyph = struct_ImVector_ImFontGlyph_t; // cimgui/src/cimgui.h:3821:26: warning: struct demoted to opaque type - has bitfield
+pub const ImVector_ImFontGlyph = struct_ImVector_ImFontGlyph_t; // cimgui/src/cimgui.h:3870:26: warning: struct demoted to opaque type - has bitfield
 pub const struct_ImFontBaked_t = opaque {
     pub const ImFontBaked_ClearOutputData = __root.ImFontBaked_ClearOutputData;
     pub const ImFontBaked_FindGlyph = __root.ImFontBaked_FindGlyph;
@@ -731,10 +732,10 @@ pub const struct_ImFontAtlas_t = extern struct {
     pub const ImFontAtlas_AddFontFromMemoryCompressedTTF = __root.ImFontAtlas_AddFontFromMemoryCompressedTTF;
     pub const ImFontAtlas_AddFontFromMemoryCompressedBase85TTF = __root.ImFontAtlas_AddFontFromMemoryCompressedBase85TTF;
     pub const ImFontAtlas_RemoveFont = __root.ImFontAtlas_RemoveFont;
-    pub const ImFontAtlas_Clear = __root.ImFontAtlas_Clear;
-    pub const ImFontAtlas_ClearFonts = __root.ImFontAtlas_ClearFonts;
     pub const ImFontAtlas_CompactCache = __root.ImFontAtlas_CompactCache;
     pub const ImFontAtlas_SetFontLoader = __root.ImFontAtlas_SetFontLoader;
+    pub const ImFontAtlas_Clear = __root.ImFontAtlas_Clear;
+    pub const ImFontAtlas_ClearFonts = __root.ImFontAtlas_ClearFonts;
     pub const ImFontAtlas_ClearInputData = __root.ImFontAtlas_ClearInputData;
     pub const ImFontAtlas_ClearTexData = __root.ImFontAtlas_ClearTexData;
     pub const ImFontAtlas_Build = __root.ImFontAtlas_Build;
@@ -769,10 +770,10 @@ pub const struct_ImFontAtlas_t = extern struct {
     pub const AddFontFromMemoryCompressedTTF = __root.ImFontAtlas_AddFontFromMemoryCompressedTTF;
     pub const AddFontFromMemoryCompressedBase85TTF = __root.ImFontAtlas_AddFontFromMemoryCompressedBase85TTF;
     pub const RemoveFont = __root.ImFontAtlas_RemoveFont;
-    pub const Clear = __root.ImFontAtlas_Clear;
-    pub const ClearFonts = __root.ImFontAtlas_ClearFonts;
     pub const CompactCache = __root.ImFontAtlas_CompactCache;
     pub const SetFontLoader = __root.ImFontAtlas_SetFontLoader;
+    pub const Clear = __root.ImFontAtlas_Clear;
+    pub const ClearFonts = __root.ImFontAtlas_ClearFonts;
     pub const ClearInputData = __root.ImFontAtlas_ClearInputData;
     pub const ClearTexData = __root.ImFontAtlas_ClearTexData;
     pub const Build = __root.ImFontAtlas_Build;
@@ -915,7 +916,7 @@ pub const struct_ImGuiViewport_t = extern struct {
 pub const ImGuiViewport = struct_ImGuiViewport_t;
 pub const struct_ImDrawData_t = extern struct {
     Valid: bool = false,
-    CmdListsCount: c_int = 0,
+    FrameCount: c_int = 0,
     TotalIdxCount: c_int = 0,
     TotalVtxCount: c_int = 0,
     CmdLists: ImVector_ImDrawListPtr = @import("std").mem.zeroes(ImVector_ImDrawListPtr),
@@ -924,6 +925,7 @@ pub const struct_ImDrawData_t = extern struct {
     FramebufferScale: ImVec2 = @import("std").mem.zeroes(ImVec2),
     OwnerViewport: [*c]ImGuiViewport = null,
     Textures: [*c]ImVector_ImTextureDataPtr = null,
+    CmdListsCount: c_int = 0,
     pub const ImDrawData_Clear = __root.ImDrawData_Clear;
     pub const ImDrawData_AddDrawList = __root.ImDrawData_AddDrawList;
     pub const ImDrawData_DeIndexAllBuffers = __root.ImDrawData_DeIndexAllBuffers;
@@ -960,6 +962,7 @@ pub const struct_ImColor_t = extern struct {
 pub const ImColor = struct_ImColor_t;
 pub const ImGuiConfigFlags = c_int;
 pub const ImGuiBackendFlags = c_int;
+pub const ImGuiColorEditFlags = c_int;
 pub const ImGuiMouseSource = c_int;
 pub const ImGuiKeyChord = c_int;
 pub const struct_ImGuiKeyData_t = extern struct {
@@ -989,19 +992,24 @@ pub const struct_ImGuiIO_t = extern struct {
     ConfigNavEscapeClearFocusWindow: bool = false,
     ConfigNavCursorVisibleAuto: bool = false,
     ConfigNavCursorVisibleAlways: bool = false,
-    MouseDrawCursor: bool = false,
     ConfigMacOSXBehaviors: bool = false,
     ConfigInputTrickleEventQueue: bool = false,
     ConfigInputTextCursorBlink: bool = false,
     ConfigInputTextEnterKeepActive: bool = false,
+    ConfigColorEditFlags: ImGuiColorEditFlags = 0,
     ConfigDragClickToInputText: bool = false,
     ConfigWindowsResizeFromEdges: bool = false,
     ConfigWindowsMoveFromTitleBarOnly: bool = false,
     ConfigWindowsCopyContentsWithCtrlC: bool = false,
     ConfigScrollbarScrollByPage: bool = false,
+    ConfigIniSettingsSaveLastUsedDate: bool = false,
+    ConfigIniSettingsAutoDiscardMonths: c_int = 0,
+    ConfigDebugIniSettings: bool = false,
+    MouseDrawCursor: bool = false,
     ConfigMemoryCompactTimer: f32 = 0,
     MouseDoubleClickTime: f32 = 0,
     MouseDoubleClickMaxDist: f32 = 0,
+    MouseSingleClickDelay: f32 = 0,
     MouseDragThreshold: f32 = 0,
     KeyRepeatDelay: f32 = 0,
     KeyRepeatRate: f32 = 0,
@@ -1015,7 +1023,6 @@ pub const struct_ImGuiIO_t = extern struct {
     ConfigDebugBeginReturnValueOnce: bool = false,
     ConfigDebugBeginReturnValueLoop: bool = false,
     ConfigDebugIgnoreFocusLoss: bool = false,
-    ConfigDebugIniSettings: bool = false,
     BackendPlatformName: [*c]const u8 = null,
     BackendRendererName: [*c]const u8 = null,
     BackendPlatformUserData: ?*anyopaque = null,
@@ -1209,6 +1216,7 @@ pub const struct_ImGuiPlatformIO_t = extern struct {
     Platform_SetImeDataFn: ?*const fn (ctx: ?*ImGuiContext, viewport: [*c]ImGuiViewport, data: [*c]ImGuiPlatformImeData) callconv(.c) void = null,
     Platform_ImeUserData: ?*anyopaque = null,
     Platform_LocaleDecimalPoint: ImWchar = 0,
+    Platform_SessionDate: c_int = 0,
     Renderer_TextureMaxWidth: c_int = 0,
     Renderer_TextureMaxHeight: c_int = 0,
     Renderer_RenderState: ?*anyopaque = null,
@@ -1309,6 +1317,8 @@ pub const struct_ImGuiStyle_t = extern struct {
     TreeLinesFlags: ImGuiTreeNodeFlags = 0,
     TreeLinesSize: f32 = 0,
     TreeLinesRounding: f32 = 0,
+    MenuItemRounding: f32 = 0,
+    SelectableRounding: f32 = 0,
     DragDropTargetRounding: f32 = 0,
     DragDropTargetBorderSize: f32 = 0,
     DragDropTargetPadding: f32 = 0,
@@ -1316,6 +1326,7 @@ pub const struct_ImGuiStyle_t = extern struct {
     ColorButtonPosition: ImGuiDir = 0,
     ButtonTextAlign: ImVec2 = @import("std").mem.zeroes(ImVec2),
     SelectableTextAlign: ImVec2 = @import("std").mem.zeroes(ImVec2),
+    InputTextCursorSize: f32 = 0,
     SeparatorSize: f32 = 0,
     SeparatorTextBorderSize: f32 = 0,
     SeparatorTextAlign: ImVec2 = @import("std").mem.zeroes(ImVec2),
@@ -1411,7 +1422,6 @@ pub const ImDrawFlags = c_int;
 pub const ImDrawTextFlags = c_int;
 pub const ImGuiButtonFlags = c_int;
 pub const ImGuiChildFlags = c_int;
-pub const ImGuiColorEditFlags = c_int;
 pub const ImGuiComboFlags = c_int;
 pub const ImGuiDragDropFlags = c_int;
 pub const ImGuiFocusedFlags = c_int;
@@ -1692,7 +1702,6 @@ pub extern fn igColorPicker3(label: [*c]const u8, col: [*c]f32, flags: ImGuiColo
 pub extern fn igColorPicker4(label: [*c]const u8, col: [*c]f32, flags: ImGuiColorEditFlags, ref_col: [*c]const f32) bool;
 pub extern fn igColorButton(desc_id: [*c]const u8, col: ImVec4, flags: ImGuiColorEditFlags) bool;
 pub extern fn igColorButtonEx(desc_id: [*c]const u8, col: ImVec4, flags: ImGuiColorEditFlags, size: ImVec2) bool;
-pub extern fn igSetColorEditOptions(flags: ImGuiColorEditFlags) void;
 pub extern fn igTreeNode(label: [*c]const u8) bool;
 pub extern fn igTreeNodeStr(str_id: [*c]const u8, fmt: [*c]const u8, ...) bool;
 pub extern fn igTreeNodePtr(ptr_id: ?*const anyopaque, fmt: [*c]const u8, ...) bool;
@@ -1754,9 +1763,9 @@ pub extern fn igSetItemTooltipV(fmt: [*c]const u8, args: [*c]struct___va_list_ta
 pub extern fn igBeginPopup(str_id: [*c]const u8, flags: ImGuiWindowFlags) bool;
 pub extern fn igBeginPopupModal(name: [*c]const u8, p_open: [*c]bool, flags: ImGuiWindowFlags) bool;
 pub extern fn igEndPopup() void;
-pub extern fn igOpenPopup(str_id: [*c]const u8, popup_flags: ImGuiPopupFlags) void;
-pub extern fn igOpenPopupID(id: ImGuiID, popup_flags: ImGuiPopupFlags) void;
-pub extern fn igOpenPopupOnItemClick(str_id: [*c]const u8, popup_flags: ImGuiPopupFlags) void;
+pub extern fn igOpenPopup(str_id: [*c]const u8, popup_flags: ImGuiPopupFlags) bool;
+pub extern fn igOpenPopupID(id: ImGuiID, popup_flags: ImGuiPopupFlags) bool;
+pub extern fn igOpenPopupOnItemClick(str_id: [*c]const u8, popup_flags: ImGuiPopupFlags) bool;
 pub extern fn igCloseCurrentPopup() void;
 pub extern fn igBeginPopupContextItem() bool;
 pub extern fn igBeginPopupContextItemEx(str_id: [*c]const u8, popup_flags: ImGuiPopupFlags) bool;
@@ -1773,7 +1782,7 @@ pub extern fn igTableNextRowEx(row_flags: ImGuiTableRowFlags, min_row_height: f3
 pub extern fn igTableNextColumn() bool;
 pub extern fn igTableSetColumnIndex(column_n: c_int) bool;
 pub extern fn igTableSetupColumn(label: [*c]const u8, flags: ImGuiTableColumnFlags) void;
-pub extern fn igTableSetupColumnEx(label: [*c]const u8, flags: ImGuiTableColumnFlags, init_width_or_weight: f32, user_id: ImGuiID) void;
+pub extern fn igTableSetupColumnEx(label: [*c]const u8, flags: ImGuiTableColumnFlags, init_width_or_weight: f32, user_data: ImGuiID) void;
 pub extern fn igTableSetupScrollFreeze(cols: c_int, rows: c_int) void;
 pub extern fn igTableHeader(label: [*c]const u8) void;
 pub extern fn igTableHeadersRow() void;
@@ -1844,6 +1853,8 @@ pub extern fn igGetItemRectMin() ImVec2;
 pub extern fn igGetItemRectMax() ImVec2;
 pub extern fn igGetItemRectSize() ImVec2;
 pub extern fn igGetItemFlags() ImGuiItemFlags;
+pub extern fn igGetItemClickedCountWithSingleClickDelay() c_int;
+pub extern fn igGetItemClickedCountWithSingleClickDelayEx(mouse_button: ImGuiMouseButton, delay: f32) c_int;
 pub extern fn igGetMainViewport() [*c]ImGuiViewport;
 pub extern fn igGetBackgroundDrawList() [*c]ImDrawList;
 pub extern fn igGetForegroundDrawList() [*c]ImDrawList;
@@ -1877,7 +1888,8 @@ pub extern fn igIsMouseClicked(button: ImGuiMouseButton) bool;
 pub extern fn igIsMouseClickedEx(button: ImGuiMouseButton, repeat: bool) bool;
 pub extern fn igIsMouseReleased(button: ImGuiMouseButton) bool;
 pub extern fn igIsMouseDoubleClicked(button: ImGuiMouseButton) bool;
-pub extern fn igIsMouseReleasedWithDelay(button: ImGuiMouseButton, delay: f32) bool;
+pub extern fn igIsMouseReleasedWithDelay(button: ImGuiMouseButton) bool;
+pub extern fn igIsMouseReleasedWithDelayEx(button: ImGuiMouseButton, delay: f32) bool;
 pub extern fn igGetMouseClickedCount(button: ImGuiMouseButton) c_int;
 pub extern fn igIsMouseHoveringRect(r_min: ImVec2, r_max: ImVec2) bool;
 pub extern fn igIsMouseHoveringRectEx(r_min: ImVec2, r_max: ImVec2, clip: bool) bool;
@@ -1956,6 +1968,9 @@ pub const ImGuiItemFlags_ButtonRepeat: c_int = 8;
 pub const ImGuiItemFlags_AutoClosePopups: c_int = 16;
 pub const ImGuiItemFlags_AllowDuplicateId: c_int = 32;
 pub const ImGuiItemFlags_Disabled: c_int = 64;
+pub const ImGuiItemFlags_LiveEditOnInputText: c_int = 128;
+pub const ImGuiItemFlags_LiveEditOnInputScalar: c_int = 256;
+pub const ImGuiItemFlags_LiveEditOnInput: c_int = 384;
 pub const ImGuiItemFlags_ = c_uint;
 pub const ImGuiInputTextFlags_None: c_int = 0;
 pub const ImGuiInputTextFlags_CharsDecimal: c_int = 1;
@@ -2007,7 +2022,6 @@ pub const ImGuiTreeNodeFlags_DrawLinesNone: c_int = 262144;
 pub const ImGuiTreeNodeFlags_DrawLinesFull: c_int = 524288;
 pub const ImGuiTreeNodeFlags_DrawLinesToNodes: c_int = 1048576;
 pub const ImGuiTreeNodeFlags_NavLeftJumpsBackHere: c_int = 131072;
-pub const ImGuiTreeNodeFlags_SpanTextWidth: c_int = 8192;
 pub const ImGuiTreeNodeFlags_ = c_uint;
 pub const ImGuiPopupFlags_None: c_int = 0;
 pub const ImGuiPopupFlags_MouseButtonLeft: c_int = 4;
@@ -2112,7 +2126,6 @@ pub const ImGuiDragDropFlags_AcceptNoDrawDefaultRect: c_int = 2048;
 pub const ImGuiDragDropFlags_AcceptNoPreviewTooltip: c_int = 4096;
 pub const ImGuiDragDropFlags_AcceptDrawAsHovered: c_int = 8192;
 pub const ImGuiDragDropFlags_AcceptPeekOnly: c_int = 3072;
-pub const ImGuiDragDropFlags_SourceAutoExpirePayload: c_int = 32;
 pub const ImGuiDragDropFlags_ = c_uint;
 pub const ImGuiDataType_S8: c_int = 0;
 pub const ImGuiDataType_U8: c_int = 1;
@@ -2439,14 +2452,16 @@ pub const ImGuiStyleVar_TableAngledHeadersAngle: c_int = 31;
 pub const ImGuiStyleVar_TableAngledHeadersTextAlign: c_int = 32;
 pub const ImGuiStyleVar_TreeLinesSize: c_int = 33;
 pub const ImGuiStyleVar_TreeLinesRounding: c_int = 34;
-pub const ImGuiStyleVar_DragDropTargetRounding: c_int = 35;
-pub const ImGuiStyleVar_ButtonTextAlign: c_int = 36;
-pub const ImGuiStyleVar_SelectableTextAlign: c_int = 37;
-pub const ImGuiStyleVar_SeparatorSize: c_int = 38;
-pub const ImGuiStyleVar_SeparatorTextBorderSize: c_int = 39;
-pub const ImGuiStyleVar_SeparatorTextAlign: c_int = 40;
-pub const ImGuiStyleVar_SeparatorTextPadding: c_int = 41;
-pub const ImGuiStyleVar_COUNT: c_int = 42;
+pub const ImGuiStyleVar_MenuItemRounding: c_int = 35;
+pub const ImGuiStyleVar_SelectableRounding: c_int = 36;
+pub const ImGuiStyleVar_DragDropTargetRounding: c_int = 37;
+pub const ImGuiStyleVar_ButtonTextAlign: c_int = 38;
+pub const ImGuiStyleVar_SelectableTextAlign: c_int = 39;
+pub const ImGuiStyleVar_SeparatorSize: c_int = 40;
+pub const ImGuiStyleVar_SeparatorTextBorderSize: c_int = 41;
+pub const ImGuiStyleVar_SeparatorTextAlign: c_int = 42;
+pub const ImGuiStyleVar_SeparatorTextPadding: c_int = 43;
+pub const ImGuiStyleVar_COUNT: c_int = 44;
 pub const ImGuiStyleVar_ = c_uint;
 pub const ImGuiButtonFlags_None: c_int = 0;
 pub const ImGuiButtonFlags_MouseButtonLeft: c_int = 1;
@@ -2480,14 +2495,15 @@ pub const ImGuiColorEditFlags_Uint8: c_int = 8388608;
 pub const ImGuiColorEditFlags_Float: c_int = 16777216;
 pub const ImGuiColorEditFlags_PickerHueBar: c_int = 33554432;
 pub const ImGuiColorEditFlags_PickerHueWheel: c_int = 67108864;
-pub const ImGuiColorEditFlags_InputRGB: c_int = 134217728;
-pub const ImGuiColorEditFlags_InputHSV: c_int = 268435456;
-pub const ImGuiColorEditFlags_DefaultOptions_: c_int = 177209344;
+pub const ImGuiColorEditFlags_PickerNoRotate: c_int = 134217728;
+pub const ImGuiColorEditFlags_InputRGB: c_int = 268435456;
+pub const ImGuiColorEditFlags_InputHSV: c_int = 536870912;
+pub const ImGuiColorEditFlags_DefaultOptions_: c_int = 311427072;
 pub const ImGuiColorEditFlags_AlphaMask_: c_int = 28674;
 pub const ImGuiColorEditFlags_DisplayMask_: c_int = 7340032;
 pub const ImGuiColorEditFlags_DataTypeMask_: c_int = 25165824;
 pub const ImGuiColorEditFlags_PickerMask_: c_int = 100663296;
-pub const ImGuiColorEditFlags_InputMask_: c_int = 402653184;
+pub const ImGuiColorEditFlags_InputMask_: c_int = 805306368;
 pub const ImGuiColorEditFlags_AlphaPreview: c_int = 0;
 pub const ImGuiColorEditFlags_ = c_uint;
 pub const ImGuiSliderFlags_None: c_int = 0;
@@ -2700,6 +2716,7 @@ pub const ImGuiMultiSelectFlags_SelectOnClickRelease: c_int = 32768;
 pub const ImGuiMultiSelectFlags_NavWrapX: c_int = 65536;
 pub const ImGuiMultiSelectFlags_NoSelectOnRightClick: c_int = 131072;
 pub const ImGuiMultiSelectFlags_SelectOnMask_: c_int = 57344;
+pub const ImGuiMultiSelectFlags_CheckboxMode_: c_int = 1048576;
 pub const ImGuiMultiSelectFlags_SelectOnClick: c_int = 8192;
 pub const ImGuiMultiSelectFlags_ = c_uint;
 pub const ImGuiSelectionRequestType_None: c_int = 0;
@@ -2726,21 +2743,22 @@ pub const ImDrawFlags_RoundCornersTopRight: c_int = 32;
 pub const ImDrawFlags_RoundCornersBottomLeft: c_int = 64;
 pub const ImDrawFlags_RoundCornersBottomRight: c_int = 128;
 pub const ImDrawFlags_RoundCornersNone: c_int = 256;
-pub const ImDrawFlags_Closed: c_int = 512;
+pub const ImDrawFlags_RoundCornersAll: c_int = 240;
+pub const ImDrawFlags_RoundCornersDefault_: c_int = 240;
 pub const ImDrawFlags_RoundCornersTop: c_int = 48;
 pub const ImDrawFlags_RoundCornersBottom: c_int = 192;
 pub const ImDrawFlags_RoundCornersLeft: c_int = 80;
 pub const ImDrawFlags_RoundCornersRight: c_int = 160;
-pub const ImDrawFlags_RoundCornersAll: c_int = 240;
-pub const ImDrawFlags_RoundCornersDefault_: c_int = 240;
 pub const ImDrawFlags_RoundCornersMask_: c_int = 496;
-pub const ImDrawFlags_InvalidMask_: ImDrawFlags = -2147483633;
+pub const ImDrawFlags_Closed: c_int = 512;
+pub const ImDrawFlags_InvalidMask_: c_int = -2147483633;
 pub const ImDrawFlags_ = c_int;
 pub const ImDrawListFlags_None: c_int = 0;
 pub const ImDrawListFlags_AntiAliasedLines: c_int = 1;
 pub const ImDrawListFlags_AntiAliasedLinesUseTex: c_int = 2;
 pub const ImDrawListFlags_AntiAliasedFill: c_int = 4;
 pub const ImDrawListFlags_AllowVtxOffset: c_int = 8;
+pub const ImDrawListFlags_TextNoPixelSnap: c_int = 16;
 pub const ImDrawListFlags_ = c_uint;
 pub extern fn ImDrawList_PushClipRect(self: [*c]ImDrawList, clip_rect_min: ImVec2, clip_rect_max: ImVec2, intersect_with_current_clip_rect: bool) void;
 pub extern fn ImDrawList_PushClipRectFullScreen(self: [*c]ImDrawList) void;
@@ -2880,10 +2898,10 @@ pub extern fn ImFontAtlas_AddFontFromMemoryTTF(self: [*c]ImFontAtlas, font_data:
 pub extern fn ImFontAtlas_AddFontFromMemoryCompressedTTF(self: [*c]ImFontAtlas, compressed_font_data: ?*const anyopaque, compressed_font_data_size: c_int, size_pixels: f32, font_cfg: [*c]const ImFontConfig, glyph_ranges: [*c]const ImWchar) [*c]ImFont;
 pub extern fn ImFontAtlas_AddFontFromMemoryCompressedBase85TTF(self: [*c]ImFontAtlas, compressed_font_data_base85: [*c]const u8, size_pixels: f32, font_cfg: [*c]const ImFontConfig, glyph_ranges: [*c]const ImWchar) [*c]ImFont;
 pub extern fn ImFontAtlas_RemoveFont(self: [*c]ImFontAtlas, font: [*c]ImFont) void;
-pub extern fn ImFontAtlas_Clear(self: [*c]ImFontAtlas) void;
-pub extern fn ImFontAtlas_ClearFonts(self: [*c]ImFontAtlas) void;
 pub extern fn ImFontAtlas_CompactCache(self: [*c]ImFontAtlas) void;
 pub extern fn ImFontAtlas_SetFontLoader(self: [*c]ImFontAtlas, font_loader: ?*const ImFontLoader) void;
+pub extern fn ImFontAtlas_Clear(self: [*c]ImFontAtlas) void;
+pub extern fn ImFontAtlas_ClearFonts(self: [*c]ImFontAtlas) void;
 pub extern fn ImFontAtlas_ClearInputData(self: [*c]ImFontAtlas) void;
 pub extern fn ImFontAtlas_ClearTexData(self: [*c]ImFontAtlas) void;
 pub extern fn ImFontAtlas_Build(self: [*c]ImFontAtlas) bool;
@@ -2944,6 +2962,7 @@ pub extern fn ImGuiViewport_GetCenter(self: [*c]const ImGuiViewport) ImVec2;
 pub extern fn ImGuiViewport_GetWorkCenter(self: [*c]const ImGuiViewport) ImVec2;
 pub extern fn ImGuiPlatformIO_ClearPlatformHandlers(self: [*c]ImGuiPlatformIO) void;
 pub extern fn ImGuiPlatformIO_ClearRendererHandlers(self: [*c]ImGuiPlatformIO) void;
+pub extern fn igSetColorEditOptions(flags: ImGuiColorEditFlags) void;
 pub extern fn igPushFont(font: [*c]ImFont) void;
 pub extern fn igSetWindowFontScale(scale: f32) void;
 pub extern fn igImageImVec4(tex_ref: ImTextureRef, image_size: ImVec2, uv0: ImVec2, uv1: ImVec2, tint_col: ImVec4, border_col: ImVec4) void;
@@ -3304,8 +3323,8 @@ pub const __DECIMAL_DIG__ = __LDBL_DECIMAL_DIG__;
 pub const __pic__ = @as(c_int, 2);
 pub const __PIC__ = @as(c_int, 2);
 pub const __GLIBC_MINOR__ = @as(c_int, 31);
-pub const IMGUI_VERSION = "1.92.8";
-pub const IMGUI_VERSION_NUM = @as(c_int, 19280);
+pub const IMGUI_VERSION = "1.92.9b";
+pub const IMGUI_VERSION_NUM = @as(c_int, 19291);
 pub const IMGUI_HAS_TABLE = "";
 pub const IMGUI_HAS_TEXTURES = "";
 pub const __CLANG_STDINT_H = "";
@@ -3322,7 +3341,7 @@ pub inline fn __glibc_clang_prereq(maj: anytype, min: anytype) @TypeOf(@as(c_int
     _ = &min;
     return @as(c_int, 0);
 }
-pub const __GLIBC_USE = @compileError("unable to translate macro: undefined identifier `__GLIBC_USE_`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/features.h:197:9
+pub const __GLIBC_USE = @compileError("unable to translate macro: undefined identifier `__GLIBC_USE_`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/features.h:197:9
 pub const _DEFAULT_SOURCE = @as(c_int, 1);
 pub const __GLIBC_USE_ISOC2Y = @as(c_int, 0);
 pub const __GLIBC_USE_ISOC23 = @as(c_int, 0);
@@ -3365,19 +3384,19 @@ pub inline fn __GLIBC_PREREQ(maj: anytype, min: anytype) @TypeOf(((__GLIBC__ << 
     return ((__GLIBC__ << @as(c_int, 16)) + __GLIBC_MINOR__) >= ((maj << @as(c_int, 16)) + min);
 }
 pub const _SYS_CDEFS_H = @as(c_int, 1);
-pub const __glibc_has_attribute = @compileError("unable to translate macro: undefined identifier `__has_attribute`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:45:10
+pub const __glibc_has_attribute = @compileError("unable to translate macro: undefined identifier `__has_attribute`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:45:10
 pub inline fn __glibc_has_builtin(name: anytype) @TypeOf(__builtin.has_builtin(name)) {
     _ = &name;
     return __builtin.has_builtin(name);
 }
-pub const __glibc_has_extension = @compileError("unable to translate macro: undefined identifier `__has_extension`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:55:10
-pub const __LEAF = @compileError("unable to translate macro: undefined identifier `__leaf__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:65:11
-pub const __LEAF_ATTR = @compileError("unable to translate macro: undefined identifier `__leaf__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:66:11
-pub const __THROW = @compileError("unable to translate macro: undefined identifier `__nothrow__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:79:11
-pub const __THROWNL = @compileError("unable to translate macro: undefined identifier `__nothrow__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:80:11
-pub const __NTH = @compileError("unable to translate macro: undefined identifier `__nothrow__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:81:11
-pub const __NTHNL = @compileError("unable to translate macro: undefined identifier `__nothrow__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:82:11
-pub const __COLD = @compileError("unable to translate macro: undefined identifier `__cold__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:102:11
+pub const __glibc_has_extension = @compileError("unable to translate macro: undefined identifier `__has_extension`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:55:10
+pub const __LEAF = @compileError("unable to translate macro: undefined identifier `__leaf__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:65:11
+pub const __LEAF_ATTR = @compileError("unable to translate macro: undefined identifier `__leaf__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:66:11
+pub const __THROW = @compileError("unable to translate macro: undefined identifier `__nothrow__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:79:11
+pub const __THROWNL = @compileError("unable to translate macro: undefined identifier `__nothrow__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:80:11
+pub const __NTH = @compileError("unable to translate macro: undefined identifier `__nothrow__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:81:11
+pub const __NTHNL = @compileError("unable to translate macro: undefined identifier `__nothrow__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:82:11
+pub const __COLD = @compileError("unable to translate macro: undefined identifier `__cold__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:102:11
 pub inline fn __P(args: anytype) @TypeOf(args) {
     _ = &args;
     return args;
@@ -3386,8 +3405,8 @@ pub inline fn __PMT(args: anytype) @TypeOf(args) {
     _ = &args;
     return args;
 }
-pub const __CONCAT = @compileError("unable to translate C expr: unexpected token '##'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:131:9
-pub const __STRING = @compileError("unable to translate C expr: unexpected token ''"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:132:9
+pub const __CONCAT = @compileError("unable to translate C expr: unexpected token '##'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:131:9
+pub const __STRING = @compileError("unable to translate C expr: unexpected token ''"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:132:9
 pub const __ptr_t = ?*anyopaque;
 pub const __BEGIN_DECLS = "";
 pub const __END_DECLS = "";
@@ -3408,14 +3427,14 @@ pub inline fn __glibc_objsize(__o: anytype) @TypeOf(__bos(__o)) {
     _ = &__o;
     return __bos(__o);
 }
-pub const __warnattr = @compileError("unable to translate macro: undefined identifier `__warning__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:366:10
-pub const __errordecl = @compileError("unable to translate macro: undefined identifier `__error__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:367:10
-pub const __flexarr = @compileError("unable to translate C expr: unexpected token '['"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:379:10
+pub const __warnattr = @compileError("unable to translate macro: undefined identifier `__warning__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:366:10
+pub const __errordecl = @compileError("unable to translate macro: undefined identifier `__error__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:367:10
+pub const __flexarr = @compileError("unable to translate C expr: unexpected token '['"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:379:10
 pub const __glibc_c99_flexarr_available = @as(c_int, 1);
-pub const __REDIRECT = @compileError("unable to translate C expr: unexpected token '__asm__'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:410:10
-pub const __REDIRECT_NTH = @compileError("unable to translate C expr: unexpected token '__asm__'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:417:11
-pub const __REDIRECT_NTHNL = @compileError("unable to translate C expr: unexpected token '__asm__'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:419:11
-pub const __ASMNAME = @compileError("unable to translate macro: undefined identifier `__USER_LABEL_PREFIX__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:422:10
+pub const __REDIRECT = @compileError("unable to translate C expr: unexpected token '__asm__'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:410:10
+pub const __REDIRECT_NTH = @compileError("unable to translate C expr: unexpected token '__asm__'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:417:11
+pub const __REDIRECT_NTHNL = @compileError("unable to translate C expr: unexpected token '__asm__'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:419:11
+pub const __ASMNAME = @compileError("unable to translate macro: undefined identifier `__USER_LABEL_PREFIX__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:422:10
 pub inline fn __ASMNAME2(prefix: anytype, cname: anytype) @TypeOf(__STRING(prefix) ++ cname) {
     _ = &prefix;
     _ = &cname;
@@ -3423,34 +3442,34 @@ pub inline fn __ASMNAME2(prefix: anytype, cname: anytype) @TypeOf(__STRING(prefi
 }
 pub const __REDIRECT_FORTIFY = __REDIRECT;
 pub const __REDIRECT_FORTIFY_NTH = __REDIRECT_NTH;
-pub const __attribute_malloc__ = @compileError("unable to translate macro: undefined identifier `__malloc__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:452:10
-pub const __attribute_alloc_size__ = @compileError("unable to translate macro: undefined identifier `__alloc_size__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:460:10
-pub const __attribute_alloc_align__ = @compileError("unable to translate macro: undefined identifier `__alloc_align__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:469:10
-pub const __attribute_pure__ = @compileError("unable to translate macro: undefined identifier `__pure__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:479:10
-pub const __attribute_const__ = @compileError("unable to translate C expr: unexpected token '__attribute__'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:486:10
-pub const __attribute_maybe_unused__ = @compileError("unable to translate macro: undefined identifier `__unused__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:492:10
-pub const __attribute_used__ = @compileError("unable to translate macro: undefined identifier `__used__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:501:10
-pub const __attribute_noinline__ = @compileError("unable to translate macro: undefined identifier `__noinline__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:502:10
-pub const __attribute_deprecated__ = @compileError("unable to translate macro: undefined identifier `__deprecated__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:510:10
-pub const __attribute_deprecated_msg__ = @compileError("unable to translate macro: undefined identifier `__deprecated__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:520:10
-pub const __attribute_format_arg__ = @compileError("unable to translate macro: undefined identifier `__format_arg__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:533:10
-pub const __attribute_format_strfmon__ = @compileError("unable to translate macro: undefined identifier `__format__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:543:10
-pub const __attribute_nonnull__ = @compileError("unable to translate macro: undefined identifier `__nonnull__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:555:11
+pub const __attribute_malloc__ = @compileError("unable to translate macro: undefined identifier `__malloc__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:452:10
+pub const __attribute_alloc_size__ = @compileError("unable to translate macro: undefined identifier `__alloc_size__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:460:10
+pub const __attribute_alloc_align__ = @compileError("unable to translate macro: undefined identifier `__alloc_align__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:469:10
+pub const __attribute_pure__ = @compileError("unable to translate macro: undefined identifier `__pure__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:479:10
+pub const __attribute_const__ = @compileError("unable to translate C expr: unexpected token '__attribute__'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:486:10
+pub const __attribute_maybe_unused__ = @compileError("unable to translate macro: undefined identifier `__unused__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:492:10
+pub const __attribute_used__ = @compileError("unable to translate macro: undefined identifier `__used__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:501:10
+pub const __attribute_noinline__ = @compileError("unable to translate macro: undefined identifier `__noinline__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:502:10
+pub const __attribute_deprecated__ = @compileError("unable to translate macro: undefined identifier `__deprecated__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:510:10
+pub const __attribute_deprecated_msg__ = @compileError("unable to translate macro: undefined identifier `__deprecated__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:520:10
+pub const __attribute_format_arg__ = @compileError("unable to translate macro: undefined identifier `__format_arg__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:533:10
+pub const __attribute_format_strfmon__ = @compileError("unable to translate macro: undefined identifier `__format__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:543:10
+pub const __attribute_nonnull__ = @compileError("unable to translate macro: undefined identifier `__nonnull__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:555:11
 pub inline fn __nonnull(params: anytype) @TypeOf(__attribute_nonnull__(params)) {
     _ = &params;
     return __attribute_nonnull__(params);
 }
-pub const __returns_nonnull = @compileError("unable to translate macro: undefined identifier `__returns_nonnull__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:568:10
-pub const __attribute_warn_unused_result__ = @compileError("unable to translate macro: undefined identifier `__warn_unused_result__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:577:10
+pub const __returns_nonnull = @compileError("unable to translate macro: undefined identifier `__returns_nonnull__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:568:10
+pub const __attribute_warn_unused_result__ = @compileError("unable to translate macro: undefined identifier `__warn_unused_result__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:577:10
 pub const __wur = "";
-pub const __always_inline = @compileError("unable to translate macro: undefined identifier `__always_inline__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:595:10
-pub const __attribute_artificial__ = @compileError("unable to translate macro: undefined identifier `__artificial__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:604:10
-pub const __extern_inline = @compileError("unable to translate C expr: unexpected token 'extern'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:626:11
-pub const __extern_always_inline = @compileError("unable to translate C expr: unexpected token 'extern'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:627:11
+pub const __always_inline = @compileError("unable to translate macro: undefined identifier `__always_inline__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:595:10
+pub const __attribute_artificial__ = @compileError("unable to translate macro: undefined identifier `__artificial__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:604:10
+pub const __extern_inline = @compileError("unable to translate C expr: unexpected token 'extern'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:626:11
+pub const __extern_always_inline = @compileError("unable to translate C expr: unexpected token 'extern'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:627:11
 pub const __fortify_function = __extern_always_inline ++ __attribute_artificial__;
-pub const __va_arg_pack = @compileError("unable to translate macro: undefined identifier `__builtin_va_arg_pack`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:638:10
-pub const __va_arg_pack_len = @compileError("unable to translate macro: undefined identifier `__builtin_va_arg_pack_len`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:639:10
-pub const __restrict_arr = @compileError("unable to translate C expr: unexpected token '__restrict'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:666:10
+pub const __va_arg_pack = @compileError("unable to translate macro: undefined identifier `__builtin_va_arg_pack`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:638:10
+pub const __va_arg_pack_len = @compileError("unable to translate macro: undefined identifier `__builtin_va_arg_pack_len`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:639:10
+pub const __restrict_arr = @compileError("unable to translate C expr: unexpected token '__restrict'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:666:10
 pub inline fn __glibc_unlikely(cond: anytype) @TypeOf(__builtin.expect(cond, @as(c_int, 0))) {
     _ = &cond;
     return __builtin.expect(cond, @as(c_int, 0));
@@ -3507,10 +3526,10 @@ pub inline fn __REDIRECT_NTH_LDBL(name: anytype, proto: anytype, alias: anytype)
     _ = &alias;
     return __REDIRECT_NTH(name, proto, alias);
 }
-pub const __glibc_macro_warning1 = @compileError("unable to translate macro: undefined identifier `_Pragma`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:807:10
-pub const __glibc_macro_warning = @compileError("unable to translate macro: undefined identifier `GCC`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:808:10
+pub const __glibc_macro_warning1 = @compileError("unable to translate macro: undefined identifier `_Pragma`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:807:10
+pub const __glibc_macro_warning = @compileError("unable to translate macro: undefined identifier `GCC`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:808:10
 pub const __HAVE_GENERIC_SELECTION = @as(c_int, 1);
-pub const __glibc_const_generic = @compileError("unable to translate C expr: expected type instead got 'const'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:837:10
+pub const __glibc_const_generic = @compileError("unable to translate C expr: expected type instead got 'const'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:837:10
 pub inline fn __fortified_attr_access(a: anytype, o: anytype, s: anytype) void {
     _ = &a;
     _ = &o;
@@ -3531,8 +3550,8 @@ pub inline fn __attr_dealloc(dealloc: anytype, argno: anytype) void {
     return;
 }
 pub const __attr_dealloc_free = "";
-pub const __attribute_returns_twice__ = @compileError("unable to translate macro: undefined identifier `__returns_twice__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:884:10
-pub const __attribute_struct_may_alias__ = @compileError("unable to translate macro: undefined identifier `__may_alias__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/sys/cdefs.h:893:10
+pub const __attribute_returns_twice__ = @compileError("unable to translate macro: undefined identifier `__returns_twice__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:884:10
+pub const __attribute_struct_may_alias__ = @compileError("unable to translate macro: undefined identifier `__may_alias__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/sys/cdefs.h:893:10
 pub const __stub___compat_bdflush = "";
 pub const __stub_chflags = "";
 pub const __stub_fchflags = "";
@@ -3596,7 +3615,7 @@ pub const __KEY_T_TYPE = __S32_TYPE;
 pub const __CLOCKID_T_TYPE = __S32_TYPE;
 pub const __TIMER_T_TYPE = ?*anyopaque;
 pub const __BLKSIZE_T_TYPE = __SYSCALL_SLONG_TYPE;
-pub const __FSID_T_TYPE = @compileError("unable to translate macro: undefined identifier `__val`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/x86-linux-gnu/bits/typesizes.h:73:9
+pub const __FSID_T_TYPE = @compileError("unable to translate macro: undefined identifier `__val`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/x86-linux-gnu/bits/typesizes.h:73:9
 pub const __SSIZE_T_TYPE = __SWORD_TYPE;
 pub const __CPU_MASK_TYPE = __SYSCALL_ULONG_TYPE;
 pub const __OFF_T_MATCHES_OFF64_T = @as(c_int, 1);
@@ -3697,23 +3716,23 @@ pub const @"true" = @as(c_int, 1);
 pub const @"false" = @as(c_int, 0);
 pub const __bool_true_false_are_defined = @as(c_int, 1);
 pub const __STDC_VERSION_STDARG_H__ = @as(c_int, 0);
-pub const va_start = @compileError("unable to translate macro: undefined identifier `__builtin_va_start`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/compiler/aro/include/stdarg.h:12:9
-pub const va_end = @compileError("unable to translate macro: undefined identifier `__builtin_va_end`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/compiler/aro/include/stdarg.h:14:9
-pub const va_arg = @compileError("unable to translate macro: undefined identifier `__builtin_va_arg`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/compiler/aro/include/stdarg.h:15:9
-pub const __va_copy = @compileError("unable to translate macro: undefined identifier `__builtin_va_copy`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/compiler/aro/include/stdarg.h:18:9
-pub const va_copy = @compileError("unable to translate macro: undefined identifier `__builtin_va_copy`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/compiler/aro/include/stdarg.h:22:9
+pub const va_start = @compileError("unable to translate macro: undefined identifier `__builtin_va_start`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/compiler/aro/include/stdarg.h:12:9
+pub const va_end = @compileError("unable to translate macro: undefined identifier `__builtin_va_end`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/compiler/aro/include/stdarg.h:14:9
+pub const va_arg = @compileError("unable to translate macro: undefined identifier `__builtin_va_arg`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/compiler/aro/include/stdarg.h:15:9
+pub const __va_copy = @compileError("unable to translate macro: undefined identifier `__builtin_va_copy`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/compiler/aro/include/stdarg.h:18:9
+pub const va_copy = @compileError("unable to translate macro: undefined identifier `__builtin_va_copy`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/compiler/aro/include/stdarg.h:22:9
 pub const __GNUC_VA_LIST = @as(c_int, 1);
 pub const __STDC_VERSION_STDDEF_H__ = @as(c_long, 202311);
 pub const NULL = __helpers.cast(?*anyopaque, @as(c_int, 0));
-pub const offsetof = @compileError("unable to translate macro: undefined identifier `__builtin_offsetof`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/compiler/aro/include/stddef.h:18:9
+pub const offsetof = @compileError("unable to translate macro: undefined identifier `__builtin_offsetof`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/compiler/aro/include/stddef.h:18:9
 pub const CIMGUI_API = "";
 pub const CIMGUI_IMPL_API = "";
 pub const _ASSERT_H = @as(c_int, 1);
-pub const __ASSERT_VOID_CAST = @compileError("unable to translate C expr: unexpected token ''"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/assert.h:46:10
+pub const __ASSERT_VOID_CAST = @compileError("unable to translate C expr: unexpected token ''"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/assert.h:46:10
 pub const __ASSERT_VARIADIC = @as(c_int, 0);
-pub const assert = @compileError("unable to translate macro: undefined identifier `__FILE__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/assert.h:166:12
-pub const __ASSERT_FUNCTION = @compileError("unable to translate C expr: unexpected token '__extension__'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/assert.h:189:12
-pub const static_assert = @compileError("unable to translate C expr: unexpected token '_Static_assert'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1464+6aff551f1/lib/libc/include/generic-glibc/assert.h:207:10
+pub const assert = @compileError("unable to translate macro: undefined identifier `__FILE__`"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/assert.h:176:12
+pub const __ASSERT_FUNCTION = @compileError("unable to translate C expr: unexpected token '__extension__'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/assert.h:199:12
+pub const static_assert = @compileError("unable to translate C expr: unexpected token '_Static_assert'"); // /home/dylan/.local/opt/zig-x86_64-linux-0.17.0-dev.1622+2b242157b/lib/libc/include/generic-glibc/assert.h:217:10
 pub inline fn IM_ASSERT(_EXPR: anytype) @TypeOf(assert(_EXPR)) {
     _ = &_EXPR;
     return assert(_EXPR);
@@ -3736,9 +3755,9 @@ pub const IM_MSVC_RUNTIME_CHECKS_RESTORE = "";
 pub const ImTextureID_Invalid = __helpers.cast(ImTextureID, @as(c_int, 0));
 pub const IMGUI_PAYLOAD_TYPE_COLOR_3F = "_COL3F";
 pub const IMGUI_PAYLOAD_TYPE_COLOR_4F = "_COL4F";
-pub const IMGUI_DEBUG_LOG = @compileError("unable to translate macro: undefined identifier `ImGui_DebugLog`"); // cimgui/src/cimgui.h:2338:9
-pub const CIM_ALLOC = @compileError("unable to translate macro: undefined identifier `ImGui_MemAlloc`"); // cimgui/src/cimgui.h:2351:9
-pub const CIM_FREE = @compileError("unable to translate macro: undefined identifier `ImGui_MemFree`"); // cimgui/src/cimgui.h:2352:9
+pub const IMGUI_DEBUG_LOG = @compileError("unable to translate macro: undefined identifier `ImGui_DebugLog`"); // cimgui/src/cimgui.h:2361:9
+pub const CIM_ALLOC = @compileError("unable to translate macro: undefined identifier `ImGui_MemAlloc`"); // cimgui/src/cimgui.h:2374:9
+pub const CIM_FREE = @compileError("unable to translate macro: undefined identifier `ImGui_MemFree`"); // cimgui/src/cimgui.h:2375:9
 pub const IM_UNICODE_CODEPOINT_INVALID = __helpers.promoteIntLiteral(c_int, 0xFFFD, .hex);
 pub const IM_UNICODE_CODEPOINT_MAX = __helpers.promoteIntLiteral(c_int, 0xFFFF, .hex);
 pub const IM_COL32_R_SHIFT = @as(c_int, 0);
