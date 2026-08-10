@@ -64,6 +64,7 @@ const Options = struct {
     depth_testing_mod: *Build.Module,
     stencil_testing_mod: *Build.Module,
     blending_mod: *Build.Module,
+    face_culling_mod: *Build.Module,
     light_casters_directional_mod: *Build.Module,
     light_casters_point_mod: *Build.Module,
     light_casters_spotlight_mod: *Build.Module,
@@ -85,6 +86,7 @@ const Options = struct {
     depth_testing_shdc_step: *Build.Step,
     stencil_testing_shdc_step: *Build.Step,
     blending_shdc_step: *Build.Step,
+    face_culling_shdc_step: *Build.Step,
     light_casters_shdc_step: *Build.Step,
     lighting_maps_shdc_step: *Build.Step,
     materials_shdc_step: *Build.Step,
@@ -249,6 +251,19 @@ pub fn build(b: *Build) !void {
         .shdc_dep = dep_shdc,
         .input = "src/blending.glsl",
         .output = "src/generated/blending_shader.zig",
+        .slang = .{
+            .glsl410 = true,
+            .glsl300es = true,
+            .hlsl5 = true,
+            .metal_macos = true,
+            .wgsl = true,
+        },
+        .reflection = true,
+    });
+    const face_culling_shdc_step = try sokol.shdc.createSourceFile(b, .{
+        .shdc_dep = dep_shdc,
+        .input = "src/face_culling.glsl",
+        .output = "src/generated/face_culling_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -423,6 +438,15 @@ pub fn build(b: *Build) !void {
             .{ .name = "model_image", .module = model_image_bindings },
         },
     });
+    const face_culling_mod = b.createModule(.{
+        .root_source_file = b.path("src/face_culling.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "ink_ribbon_sokol", .module = mod_lib },
+            .{ .name = "sokol", .module = dep_sokol.module("sokol") },
+        },
+    });
     const materials_mod = b.createModule(.{
         .root_source_file = b.path("src/materials.zig"),
         .target = target,
@@ -515,6 +539,7 @@ pub fn build(b: *Build) !void {
         .depth_testing_mod = depth_testing_mod,
         .stencil_testing_mod = stencil_testing_mod,
         .blending_mod = blending_mod,
+        .face_culling_mod = face_culling_mod,
         .light_casters_directional_mod = light_casters_directional_mod,
         .light_casters_point_mod = light_casters_point_mod,
         .light_casters_spotlight_mod = light_casters_spotlight_mod,
@@ -536,6 +561,7 @@ pub fn build(b: *Build) !void {
         .depth_testing_shdc_step = depth_testing_shdc_step,
         .stencil_testing_shdc_step = stencil_testing_shdc_step,
         .blending_shdc_step = blending_shdc_step,
+        .face_culling_shdc_step = face_culling_shdc_step,
         .light_casters_shdc_step = light_casters_shdc_step,
         .lighting_maps_shdc_step = lighting_maps_shdc_step,
         .materials_shdc_step = materials_shdc_step,
@@ -658,6 +684,13 @@ fn buildNative(b: *Build, opts: Options) void {
     blending_exe.step.dependOn(opts.blending_shdc_step);
     b.installArtifact(blending_exe);
 
+    const face_culling_exe = b.addExecutable(.{
+        .name = "ink_ribbon_face_culling",
+        .root_module = opts.face_culling_mod,
+    });
+    face_culling_exe.step.dependOn(opts.face_culling_shdc_step);
+    b.installArtifact(face_culling_exe);
+
     const materials_exe = b.addExecutable(.{
         .name = "ink_ribbon_materials",
         .root_module = opts.materials_mod,
@@ -751,6 +784,10 @@ fn buildNative(b: *Build, opts: Options) void {
     run_blending_cmd.step.dependOn(&blending_exe.step);
     b.step("run-blending", "Run the LearnOpenGL Blending example").dependOn(&run_blending_cmd.step);
 
+    const run_face_culling_cmd = b.addRunArtifact(face_culling_exe);
+    run_face_culling_cmd.step.dependOn(&face_culling_exe.step);
+    b.step("run-face-culling", "Run the LearnOpenGL Face Culling example").dependOn(&run_face_culling_cmd.step);
+
     const run_materials_cmd = b.addRunArtifact(materials_exe);
     run_materials_cmd.step.dependOn(&materials_exe.step);
     b.step("run-materials", "Run the LearnOpenGL Materials example").dependOn(&run_materials_cmd.step);
@@ -831,6 +868,10 @@ fn buildNative(b: *Build, opts: Options) void {
     blending_tests.step.dependOn(opts.blending_shdc_step);
     const run_blending_tests = b.addRunArtifact(blending_tests);
 
+    const face_culling_tests = b.addTest(.{ .root_module = opts.face_culling_mod });
+    face_culling_tests.step.dependOn(opts.face_culling_shdc_step);
+    const run_face_culling_tests = b.addRunArtifact(face_culling_tests);
+
     const materials_tests = b.addTest(.{
         .root_module = opts.materials_mod,
     });
@@ -882,6 +923,7 @@ fn buildNative(b: *Build, opts: Options) void {
     test_step.dependOn(&run_depth_testing_tests.step);
     test_step.dependOn(&run_stencil_testing_tests.step);
     test_step.dependOn(&run_blending_tests.step);
+    test_step.dependOn(&run_face_culling_tests.step);
     test_step.dependOn(&run_lighting_maps_tests.step);
     test_step.dependOn(&run_light_casters_directional_tests.step);
     test_step.dependOn(&run_light_casters_point_tests.step);
@@ -924,6 +966,11 @@ fn buildWeb(b: *Build, opts: Options) !void {
         .root_module = opts.blending_mod,
     });
     blending_lib.step.dependOn(opts.blending_shdc_step);
+    const face_culling_lib = b.addLibrary(.{
+        .name = "ink_ribbon_face_culling",
+        .root_module = opts.face_culling_mod,
+    });
+    face_culling_lib.step.dependOn(opts.face_culling_shdc_step);
     const materials_lib = b.addLibrary(.{
         .name = "ink_ribbon_materials",
         .root_module = opts.materials_mod,
@@ -1061,6 +1108,18 @@ fn buildWeb(b: *Build, opts: Options) !void {
         .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
     });
     b.getInstallStep().dependOn(&blending_link_step.step);
+
+    const face_culling_link_step = try sokol.emLinkStep(b, .{
+        .lib_main = face_culling_lib,
+        .target = opts.face_culling_mod.resolved_target.?,
+        .optimize = opts.face_culling_mod.optimize.?,
+        .emsdk = emsdk,
+        .use_webgl2 = true,
+        .use_emmalloc = true,
+        .use_filesystem = true,
+        .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
+    });
+    b.getInstallStep().dependOn(&face_culling_link_step.step);
 
     const materials_link_step = try sokol.emLinkStep(b, .{
         .lib_main = materials_lib,
@@ -1215,6 +1274,10 @@ fn buildWeb(b: *Build, opts: Options) !void {
     const run_blending = sokol.emRunStep(b, .{ .name = "ink_ribbon_blending", .emsdk = emsdk });
     run_blending.step.dependOn(&blending_link_step.step);
     b.step("run-blending", "Run the LearnOpenGL Blending example").dependOn(&run_blending.step);
+
+    const run_face_culling = sokol.emRunStep(b, .{ .name = "ink_ribbon_face_culling", .emsdk = emsdk });
+    run_face_culling.step.dependOn(&face_culling_link_step.step);
+    b.step("run-face-culling", "Run the LearnOpenGL Face Culling example").dependOn(&run_face_culling.step);
 
     const run_materials = sokol.emRunStep(b, .{ .name = "ink_ribbon_materials", .emsdk = emsdk });
     run_materials.step.dependOn(&materials_link_step.step);
