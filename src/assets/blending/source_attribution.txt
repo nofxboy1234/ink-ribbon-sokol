@@ -1,0 +1,5 @@
+grass.png and window.png are from the LearnOpenGL texture resources:
+https://github.com/JoeyDeVries/LearnOpenGL/tree/master/resources/textures
+
+LearnOpenGL source repository license:
+https://github.com/JoeyDeVries/LearnOpenGL/blob/master/LICENSE.md

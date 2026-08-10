@@ -46,6 +46,13 @@
         "model_image": "@PROJECT_ROOT@/src/generated/model_image.zig"
       }
     },
+    "@PROJECT_ROOT@/src/blending.zig": {
+      "import_table": {
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig",
+        "model_image": "@PROJECT_ROOT@/src/generated/model_image.zig"
+      }
+    },
     "@PROJECT_ROOT@/src/materials.zig": {
       "import_table": {
         "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
@@ -147,6 +154,9 @@
       "root_module": "@PROJECT_ROOT@/src/stencil_testing.zig"
     },
     {
+      "root_module": "@PROJECT_ROOT@/src/blending.zig"
+    },
+    {
       "root_module": "@PROJECT_ROOT@/src/materials.zig"
     },
     {
@@ -186,6 +196,7 @@
     "run-cube",
     "run-depth-testing",
     "run-stencil-testing",
+    "run-blending",
     "run-materials",
     "run-multiple-lights",
     "run-model-loading",
