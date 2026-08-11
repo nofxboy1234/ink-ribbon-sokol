@@ -57,6 +57,7 @@ const box3d_sources = &.{
 };
 
 const Options = struct {
+    advanced_data_mod: *Build.Module,
     basic_lighting_mod: *Build.Module,
     box3d_mod: *Build.Module,
     colors_mod: *Build.Module,
@@ -91,6 +92,7 @@ const Options = struct {
     face_culling_shdc_step: *Build.Step,
     framebuffers_shdc_step: *Build.Step,
     cubemaps_shdc_step: *Build.Step,
+    advanced_data_shdc_step: *Build.Step,
     light_casters_shdc_step: *Build.Step,
     lighting_maps_shdc_step: *Build.Step,
     materials_shdc_step: *Build.Step,
@@ -173,6 +175,19 @@ pub fn build(b: *Build) !void {
     model_image_bindings.linkLibrary(cgltf_lib);
 
     const dep_shdc = dep_sokol.builder.dependency("shdc", .{});
+    const advanced_data_shdc_step = try sokol.shdc.createSourceFile(b, .{
+        .shdc_dep = dep_shdc,
+        .input = "src/advanced_data.glsl",
+        .output = "src/generated/advanced_data_shader.zig",
+        .slang = .{
+            .glsl410 = true,
+            .glsl300es = true,
+            .hlsl5 = true,
+            .metal_macos = true,
+            .wgsl = true,
+        },
+        .reflection = true,
+    });
     const box3d_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
         .input = "src/box3d.glsl",
@@ -400,6 +415,16 @@ pub fn build(b: *Build) !void {
         .target = target,
     });
 
+    const advanced_data_mod = b.createModule(.{
+        .root_source_file = b.path("src/advanced_data.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "ink_ribbon_sokol", .module = mod_lib },
+            .{ .name = "sokol", .module = dep_sokol.module("sokol") },
+        },
+    });
+
     const box3d_mod = b.createModule(.{
         .root_source_file = b.path("src/box3d.zig"),
         .target = target,
@@ -582,6 +607,7 @@ pub fn build(b: *Build) !void {
     });
 
     const opts = Options{
+        .advanced_data_mod = advanced_data_mod,
         .basic_lighting_mod = basic_lighting_mod,
         .box3d_mod = box3d_mod,
         .colors_mod = colors_mod,
@@ -616,6 +642,7 @@ pub fn build(b: *Build) !void {
         .face_culling_shdc_step = face_culling_shdc_step,
         .framebuffers_shdc_step = framebuffers_shdc_step,
         .cubemaps_shdc_step = cubemaps_shdc_step,
+        .advanced_data_shdc_step = advanced_data_shdc_step,
         .light_casters_shdc_step = light_casters_shdc_step,
         .lighting_maps_shdc_step = lighting_maps_shdc_step,
         .materials_shdc_step = materials_shdc_step,
@@ -696,6 +723,13 @@ fn buildBox3d(
 }
 
 fn buildNative(b: *Build, opts: Options) void {
+    const advanced_data_exe = b.addExecutable(.{
+        .name = "ink_ribbon_advanced_data",
+        .root_module = opts.advanced_data_mod,
+    });
+    advanced_data_exe.step.dependOn(opts.advanced_data_shdc_step);
+    b.installArtifact(advanced_data_exe);
+
     const basic_lighting_exe = b.addExecutable(.{
         .name = "ink_ribbon_basic_lighting",
         .root_module = opts.basic_lighting_mod,
@@ -832,6 +866,10 @@ fn buildNative(b: *Build, opts: Options) void {
     b.step("run-box3d", "Run the Box3D example").dependOn(&run_box3d_cmd.step);
     b.step("run", "Run the Box3D example").dependOn(&run_box3d_cmd.step);
 
+    const run_advanced_data_cmd = b.addRunArtifact(advanced_data_exe);
+    run_advanced_data_cmd.step.dependOn(&advanced_data_exe.step);
+    b.step("run-advanced-data", "Run the LearnOpenGL Advanced Data example").dependOn(&run_advanced_data_cmd.step);
+
     const run_basic_lighting_cmd = b.addRunArtifact(basic_lighting_exe);
     run_basic_lighting_cmd.step.dependOn(&basic_lighting_exe.step);
     b.step("run-basic-lighting", "Run the LearnOpenGL Basic Lighting example").dependOn(&run_basic_lighting_cmd.step);
@@ -913,6 +951,12 @@ fn buildNative(b: *Build, opts: Options) void {
     });
     box3d_tests.step.dependOn(opts.box3d_shdc_step);
     const run_box3d_tests = b.addRunArtifact(box3d_tests);
+
+    const advanced_data_tests = b.addTest(.{
+        .root_module = opts.advanced_data_mod,
+    });
+    advanced_data_tests.step.dependOn(opts.advanced_data_shdc_step);
+    const run_advanced_data_tests = b.addRunArtifact(advanced_data_tests);
 
     const basic_lighting_tests = b.addTest(.{
         .root_module = opts.basic_lighting_mod,
@@ -1000,6 +1044,7 @@ fn buildNative(b: *Build, opts: Options) void {
 
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
+    test_step.dependOn(&run_advanced_data_tests.step);
     test_step.dependOn(&run_basic_lighting_tests.step);
     test_step.dependOn(&run_box3d_tests.step);
     test_step.dependOn(&run_colors_tests.step);
@@ -1022,6 +1067,12 @@ fn buildNative(b: *Build, opts: Options) void {
 }
 
 fn buildWeb(b: *Build, opts: Options) !void {
+    const advanced_data_lib = b.addLibrary(.{
+        .name = "ink_ribbon_advanced_data",
+        .root_module = opts.advanced_data_mod,
+    });
+    advanced_data_lib.step.dependOn(opts.advanced_data_shdc_step);
+
     const basic_lighting_lib = b.addLibrary(.{
         .name = "ink_ribbon_basic_lighting",
         .root_module = opts.basic_lighting_mod,
@@ -1119,6 +1170,18 @@ fn buildWeb(b: *Build, opts: Options) !void {
     texcube_lib.step.dependOn(opts.texcube_shdc_step);
 
     const emsdk = opts.dep_sokol.builder.dependency("emsdk", .{});
+
+    const advanced_data_link_step = try sokol.emLinkStep(b, .{
+        .lib_main = advanced_data_lib,
+        .target = opts.advanced_data_mod.resolved_target.?,
+        .optimize = opts.advanced_data_mod.optimize.?,
+        .emsdk = emsdk,
+        .use_webgl2 = true,
+        .use_emmalloc = true,
+        .use_filesystem = true,
+        .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
+    });
+    b.getInstallStep().dependOn(&advanced_data_link_step.step);
     const emsdk_include = emsdk.path("upstream/emscripten/cache/sysroot/include");
 
     // C/C++ dependencies need Emscripten's libc headers, and must wait for the
@@ -1372,6 +1435,10 @@ fn buildWeb(b: *Build, opts: Options) !void {
         .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
     });
     b.getInstallStep().dependOn(&texcube_link_step.step);
+
+    const run_advanced_data = sokol.emRunStep(b, .{ .name = "ink_ribbon_advanced_data", .emsdk = emsdk });
+    run_advanced_data.step.dependOn(&advanced_data_link_step.step);
+    b.step("run-advanced-data", "Run the LearnOpenGL Advanced Data example").dependOn(&run_advanced_data.step);
 
     const run_box3d = sokol.emRunStep(b, .{ .name = "ink_ribbon_box3d", .emsdk = emsdk });
     run_box3d.step.dependOn(&box3d_link_step.step);
