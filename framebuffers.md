@@ -1,15 +1,16 @@
 # Framebuffers: LearnOpenGL mapped to Sokol + Zig
 
-This guide maps the [LearnOpenGL framebuffer chapter](https://learnopengl.com/Advanced-OpenGL/Framebuffers)
-to this project's current Sokol + Zig API.
+This is a compact, standalone mapping of the
+[LearnOpenGL Framebuffers chapter](https://learnopengl.com/Advanced-OpenGL/Framebuffers)
+to this project.
 
-Run it natively:
+Run the existing scene:
 
 ```bash
 zig build run-framebuffers
 ```
 
-Run it as WASM:
+WASM:
 
 ```bash
 zig build run-framebuffers -Dtarget=wasm32-emscripten
@@ -17,128 +18,127 @@ zig build run-framebuffers -Dtarget=wasm32-emscripten
 
 Controls:
 
-| Key | Result                                     |
-|-----|--------------------------------------------|
-| `1` | Show the unmodified framebuffer texture    |
-| `2` | Invert every colour                        |
-| `3` | Convert the image to grayscale             |
-| `4` | Apply a sharpen kernel                     |
-| `5` | Apply a blur kernel                        |
-| `6` | Apply an edge-detection kernel             |
+| Key | Result                                   |
+|-----|------------------------------------------|
+| `1` | Unmodified framebuffer texture           |
+| `2` | Inverted colours                         |
+| `3` | Weighted grayscale                       |
+| `4` | Sharpen                                  |
+| `5` | Blur                                     |
+| `6` | Edge detection                           |
 
-## 1. What is a framebuffer?
+## 1. The whole idea
 
-A framebuffer is the collection of images into which rendering stores its
-results.
-
-```text
-framebuffer
-    │
-    ├── colour buffer   final red, green, blue, alpha values
-    ├── depth buffer    distance used by depth testing
-    └── stencil buffer  small integers used by stencil testing
-```
-
-Until this lesson, the examples normally rendered into the window's
-framebuffer:
+Normal rendering goes directly to the window:
 
 ```text
-scene ──► window framebuffer ──► screen
+3D scene ──► window framebuffer ──► screen
 ```
 
-This lesson creates another target in GPU memory:
+This lesson first renders into a texture:
 
 ```text
-scene ──► offscreen framebuffer ──► texture
-                                         │
-                                         ▼
-                                  full-screen quad
-                                         │
-                                         ▼
-                                window framebuffer
+PASS 1                              PASS 2
+
+3D scene ──► offscreen image ──► full-screen quad ──► window
+                 store                 read
 ```
 
-**Offscreen** means that the first render target is not displayed directly by
-the window. It is still GPU rendering; its pixels simply go into an image that
-another pass can use.
+The first result is **offscreen**: the GPU produced it, but the window does not
+display it directly.
 
-## 2. Why render offscreen?
+Once the completed scene is one texture, a second fragment shader can alter
+the whole picture. This is **post-processing**.
 
-Once the whole scene is available as one texture, a later shader can process
-the completed picture:
+## 2. The Sokol primitives
+
+Use these mental models:
+
+| Sokol primitive | Simple mental model                                        |
+|-----------------|------------------------------------------------------------|
+| `sg.Image`      | Pixel storage: a blank or filled sheet of GPU memory       |
+| `sg.View`       | An adapter saying how this operation sees that storage     |
+| Attachment      | A view connected to one output socket of a render pass     |
+| `sg.Pass`       | One period of rendering into a chosen set of attachments   |
+| `sg.PassAction` | What to do with old contents when a pass starts            |
+| `sg.Pipeline`   | Fixed drawing rules, including target formats and depth    |
+| `sg.Bindings`   | Buffers, texture views, and samplers supplied as inputs    |
+| `sg.Sampler`    | Rules for reading between or outside texture pixels        |
+| Swapchain       | The window's displayable colour/depth images               |
+
+The important distinction is:
 
 ```text
-ordinary rendering              post-processing
-
-thousands of 3D triangles       one screen-sized quad
-          │                               │
-          ▼                               ▼
-      scene texture ─────────────► sample and alter pixels
+image = storage
+view  = a particular way to access that storage
 ```
 
-The same idea is used for effects such as:
+A view does not copy the image.
 
-- grayscale, blur, sharpening, and edge detection;
-- mirrors and security-camera displays;
-- shadow maps;
-- bloom and HDR pipelines;
-- deferred rendering.
+## 3. What is an attachment?
 
-## 3. OpenGL framebuffer objects and Sokol passes
-
-OpenGL creates and binds a framebuffer object, usually called an FBO:
-
-```cpp
-glGenFramebuffers(1, &fbo);
-glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-```
-
-Current Sokol does not expose an OpenGL-style mutable FBO object. Instead, an
-offscreen `sg.Pass` directly contains the attachment views it will use:
-
-```zig
-var offscreen_pass: sg.Pass = .{};
-offscreen_pass.attachments.colors[0] = color_attachment_view;
-offscreen_pass.attachments.depth_stencil = depth_attachment_view;
-
-sg.beginPass(offscreen_pass);
-```
-
-This describes the destination at the point where the pass begins.
-
-The main mapping is:
-
-| OpenGL                                      | Sokol + Zig                                       |
-|---------------------------------------------|---------------------------------------------------|
-| `glGenFramebuffers`                         | Prepare an `sg.Pass` and its attachment views     |
-| `glBindFramebuffer(..., fbo)`               | `sg.beginPass(offscreen_pass)`                    |
-| `glBindFramebuffer(..., 0)`                 | `sg.beginPass(.{ .swapchain = ... })`             |
-| `glFramebufferTexture2D`                    | `sg.makeView(.{ .color_attachment = ... })`       |
-| `glFramebufferRenderbuffer`                 | Use a depth/stencil attachment image and view     |
-| `glCheckFramebufferStatus`                  | Sokol's validation checks pass compatibility      |
-| `glDeleteFramebuffers`                      | Destroy owned views/images, or call `sg.shutdown` |
-
-The window framebuffer is represented by Sokol's **swapchain**:
-
-```zig
-sg.beginPass(.{
-    .action = state.display_action,
-    .swapchain = sglue.swapchain(),
-});
-```
-
-## 4. Images and views
-
-Sokol separates an image's memory from the way a pass or shader sees that
-memory:
+A render pass has output sockets:
 
 ```text
-                    ┌── colour-attachment view ──► write rendered pixels
-colour image memory ┤
-                    └── texture view ────────────► sample pixels in a shader
+sg.Pass
+│
+├── colors[0] socket ──► colour-attachment view ──► colour image
+├── colors[1] socket ──► optional second colour image
+└── depth socket     ──► depth-attachment view  ──► depth image
 ```
 
-The example first allocates the colour image:
+An **attachment** is the view plugged into one of those sockets.
+
+It answers:
+
+> Where should this pass store its colour or depth results?
+
+It is not another copy of the pixels, and the pass does not own the image.
+The pass merely refers to it through a suitably typed view.
+
+The same colour image can later be accessed differently:
+
+```text
+                         colour-attachment view
+PASS 1 writes ──────────────────────────────────► colour image
+                                                        │
+                         texture view                   │ same storage
+PASS 2 reads  ◄─────────────────────────────────────────┘
+```
+
+That write-then-read transition is the central idea of this example.
+
+## 4. OpenGL → Sokol mapping
+
+OpenGL keeps a mutable framebuffer object, or FBO. Sokol supplies the
+attachment views directly when a pass begins.
+
+| OpenGL                                    | Sokol + Zig                                            |
+|-------------------------------------------|--------------------------------------------------------|
+| `glGenFramebuffers`                       | Prepare an `sg.Pass` and attachment views              |
+| `glBindFramebuffer(..., fbo)`             | `sg.beginPass(offscreen_pass)`                         |
+| `glBindFramebuffer(..., 0)`               | Begin a pass with `sglue.swapchain()`                  |
+| `glFramebufferTexture2D`                  | Create a colour/depth attachment `sg.View`             |
+| `glGenTextures` + empty `glTexImage2D`    | `sg.makeImage` with attachment usage                   |
+| `glFramebufferRenderbuffer`               | Attachment image/view not sampled by this scene        |
+| `glCheckFramebufferStatus`                | Sokol validation checks compatibility                  |
+| `glClear`                                 | Clear actions in `sg.PassAction`                       |
+| `glViewport`                              | Full target by default; `sg.applyViewport` if needed   |
+| Bind rendered colour as a texture         | Bind its texture view through `sg.Bindings`            |
+| `glDeleteFramebuffers` and attachments    | Destroy views/images, or call `sg.shutdown`            |
+
+OpenGL's separate read/draw framebuffer bindings are not needed here:
+
+```text
+write destination = attachments passed to sg.beginPass()
+read input         = texture view passed through sg.applyBindings()
+```
+
+## 5. Creating the offscreen target
+
+### Colour storage
+
+Pass 1 needs an image that fragment shaders may write:
 
 ```zig
 state.color_image = sg.makeImage(.{
@@ -150,9 +150,9 @@ state.color_image = sg.makeImage(.{
 });
 ```
 
-There is no initial pixel data. Pass 1 will produce the data on the GPU.
+There is no initial pixel data. Rendering supplies it.
 
-It then creates two views of that same image:
+The image gets two views:
 
 ```zig
 state.color_attachment_view = sg.makeView(.{
@@ -164,17 +164,14 @@ state.color_texture_view = sg.makeView(.{
 });
 ```
 
-A simple mental model is:
-
 ```text
-image = the storage
-view  = how this operation is allowed to use the storage
+attachment view = pass 1 may write here
+texture view    = pass 2 may sample here
 ```
 
-## 5. The depth attachment
+### Depth storage
 
-The cubes and floor need depth testing during pass 1. The example creates a
-separate depth image:
+The cubes and floor also need depth testing:
 
 ```zig
 state.depth_image = sg.makeImage(.{
@@ -184,36 +181,48 @@ state.depth_image = sg.makeImage(.{
     .pixel_format = .DEPTH,
     .sample_count = 1,
 });
-```
 
-Then it creates the attachment view:
-
-```zig
 state.depth_attachment_view = sg.makeView(.{
     .depth_stencil_attachment = .{ .image = state.depth_image },
 });
 ```
 
-The second pass never samples the depth values, so it does not need a texture
-view for this image. This fills the same role as the chapter's depth/stencil
-renderbuffer: the values exist so the GPU can perform tests, not because the
-post-processing shader needs to read them.
+The chapter uses a depth/stencil renderbuffer because it does not sample that
+result. This scene only needs depth, so a Sokol `.DEPTH` image with an
+attachment view fills the same role.
 
-## 6. Attachment compatibility
-
-Attachments used by one pass must agree on important properties:
+Rule of thumb:
 
 ```text
-colour: 800 × 600, 1 sample
-depth:  800 × 600, 1 sample
-         │     │       │
-         └─────┴───────┴── must match
+need to sample it later?  use a texture view
+only needed during tests? an attachment view is enough for this use
 ```
 
-The pipeline must also describe the target formats and sample count:
+## 6. Connecting and validating attachments
+
+The views are connected to the pass:
 
 ```zig
-var scene_pipeline_desc: sg.PipelineDesc = .{
+state.offscreen_pass.attachments.colors[0] =
+    state.color_attachment_view;
+
+state.offscreen_pass.attachments.depth_stencil =
+    state.depth_attachment_view;
+```
+
+Attachments in one pass must be compatible:
+
+```text
+colour: width × height, RGBA8, 1 sample
+depth:  width × height, DEPTH, 1 sample
+         │       │                  │
+         └───────┴──────────────────┴── must agree where required
+```
+
+The pipeline must expect the same formats and sample count:
+
+```zig
+var desc: sg.PipelineDesc = .{
     .sample_count = 1,
     .depth = .{
         .pixel_format = .DEPTH,
@@ -221,172 +230,158 @@ var scene_pipeline_desc: sg.PipelineDesc = .{
         .write_enabled = true,
     },
 };
-scene_pipeline_desc.colors[0].pixel_format = .RGBA8;
+desc.colors[0].pixel_format = .RGBA8;
 ```
 
-If these disagree, Sokol's validation layer reports the mismatch. This is the
-Sokol equivalent of discovering that an OpenGL framebuffer is incomplete.
+Sokol's validation layer reports mismatched formats, dimensions, sample
+counts, or missing attachments. This fills the practical role of the chapter's
+`glCheckFramebufferStatus` check.
 
-The window uses four samples, but that is a different pass. Its display
-pipeline uses the swapchain defaults, while the offscreen pass consistently
-uses one sample.
+## 7. Pass actions: what happens on entry?
 
-## 7. Pass 1: render the 3D scene into the texture
-
-Pass 1 begins with the offscreen attachments:
-
-```zig
-sg.beginPass(state.offscreen_pass);
-sg.applyPipeline(state.scene_pipeline);
-```
-
-The scene is then drawn normally:
-
-```zig
-sg.applyBindings(state.cube_bindings);
-drawSceneObject(...);
-drawSceneObject(...);
-
-sg.applyBindings(state.floor_bindings);
-drawSceneObject(...);
-sg.endPass();
-```
-
-The vertex shader applies the ordinary MVP matrix, while the fragment shader
-samples the marble or metal texture. The difference is only the destination:
+Each framebuffer has separate contents, so each pass needs its own decision:
 
 ```text
-before this lesson: fragments ──► swapchain colour buffer
-this first pass:    fragments ──► state.color_image
+CLEAR     replace old contents with a chosen value
+LOAD      preserve and continue using old contents
+DONTCARE  old contents are irrelevant
 ```
 
-Both colour and depth are cleared at the start of this pass:
+This scene clears offscreen colour and depth:
 
 ```zig
 state.offscreen_action.colors[0].load_action = .CLEAR;
 state.offscreen_action.depth.load_action = .CLEAR;
 ```
 
-Each framebuffer owns separate contents, so clearing the offscreen pass does
-not clear the window's framebuffer.
+Mental model:
 
-## 8. Pass 2: draw the texture onto the window
+```text
+attachment = the sheet of paper
+pass action = erase it, keep it, or ignore what was there
+```
 
-After `sg.endPass()`, pass 1's colour image is ready to be sampled. Pass 2
-starts on the normal window swapchain:
+## 8. The two passes
+
+### Pass 1: create the scene texture
+
+```zig
+sg.beginPass(state.offscreen_pass);
+sg.applyPipeline(state.scene_pipeline);
+
+// Draw cubes and floor normally.
+// Their fragments now enter color_image, not the window.
+
+sg.endPass();
+```
+
+```text
+vertex/index buffers + object textures
+                 ↓
+          ordinary 3D shaders
+                 ↓
+    colour image + depth image
+```
+
+### Pass 2: display and process it
 
 ```zig
 sg.beginPass(.{
     .action = state.display_action,
     .swapchain = sglue.swapchain(),
 });
+
+sg.applyPipeline(state.screen_pipeline);
+sg.applyBindings(state.screen_bindings);
+sg.draw(0, 6, 1);
+sg.endPass();
 ```
 
-The offscreen image's texture view is bound for the screen shader:
+The screen bindings contain the first pass's texture view:
 
 ```zig
 state.screen_bindings.views[shd.VIEW_scene_tex] =
     state.color_texture_view;
 ```
 
-Finally, six vertices draw two triangles covering the screen:
+The whole frame is:
 
 ```text
-(-1,+1) ┌──────────────┐ (+1,+1)
-        │            / │
-        │          /   │
-        │        /     │
-        │      /       │
-        │    /         │
-(-1,-1) └──────────────┘ (+1,-1)
-
-        two triangles = one full-screen quad
+begin offscreen pass
+  clear colour + depth
+  draw 3D scene
+end pass
+        ↓ dependency through color_image
+begin swapchain pass
+  draw screen quad using color_texture_view
+end pass
+        ↓
+sg.commit()
 ```
 
-Those positions are already in clip space, so the screen vertex shader does
-not need model, view, or projection matrices:
+## 9. Why a full-screen quad?
+
+Two triangles cover clip space from `-1` to `+1`:
+
+```text
+(-1,+1) ┌────────────┐ (+1,+1)
+        │          / │
+        │        /   │
+        │      /     │
+        │    /       │
+(-1,-1) └────────────┘ (+1,-1)
+```
+
+The positions are already in clip space:
 
 ```glsl
 gl_Position = vec4(position, 0.0, 1.0);
 ```
 
-Depth testing is unnecessary for this pipeline because the quad is intended to
-cover the whole window.
+No model, view, or projection matrix is needed. Depth testing is unnecessary
+because this quad is intended to cover the window.
 
-## 9. The complete frame
-
-```text
-OFFSCREEN PASS
-begin pass with colour + depth attachment views
-    ↓
-clear its colour and depth
-    ↓
-draw cubes and floor
-    ↓
-end pass: completed scene is now in color_image
-
-DISPLAY PASS
-begin pass with the window swapchain
-    ↓
-bind color_image through its texture view
-    ↓
-draw one full-screen quad
-    ↓
-screen fragment shader applies the selected effect
-    ↓
-end pass
-    ↓
-sg.commit()
-```
-
-`sg.commit()` submits the completed frame after both passes have been recorded.
-
-## 10. Normal sampling
-
-Press `1`. The screen fragment shader simply copies the scene texture:
+Each fragment samples the completed scene:
 
 ```glsl
-vec3 center = texture(sampler2D(scene_tex, scene_smp), uv).rgb;
-frag_color = vec4(center, 1.0);
+vec3 center =
+    texture(sampler2D(scene_tex, scene_smp), uv).rgb;
 ```
 
-The result looks like direct rendering, but every displayed pixel has travelled
-through the offscreen texture and second pass.
+## 10. Post-processing effects
 
-## 11. Inversion
+Press `1`: copy the sampled colour unchanged.
 
-Press `2`. Each colour channel ranges from `0` to `1`. Subtracting it from `1`
-finds its opposite:
+Press `2`: invert each channel:
 
 ```glsl
-frag_color = vec4(vec3(1.0) - center, 1.0);
+vec3 inverted = vec3(1.0) - center;
 ```
 
 ```text
-black  (0, 0, 0) ──► (1, 1, 1) white
-red    (1, 0, 0) ──► (0, 1, 1) cyan
+black (0,0,0) ──► white (1,1,1)
+red   (1,0,0) ──► cyan  (0,1,1)
 ```
 
-One fragment-shader operation changes the entire finished scene.
-
-## 12. Grayscale
-
-Press `3`. Grayscale uses one brightness value for red, green, and blue:
+Press `3`: calculate one brightness and use it for all channels:
 
 ```glsl
-float brightness = dot(center, vec3(0.2126, 0.7152, 0.0722));
-frag_color = vec4(vec3(brightness), 1.0);
+float brightness =
+    dot(center, vec3(0.2126, 0.7152, 0.0722));
+vec3 gray = vec3(brightness);
 ```
 
-The larger green weight models human vision being more sensitive to green.
+Green has the largest weight because human vision is most sensitive to it.
+
+Zig sends the selected effect to the fragment shader as a uniform:
 
 ```text
-input RGB ──► weighted brightness ──► (brightness, brightness, brightness)
+keyboard ──► Zig enum ──► uniform ──► screen fragment shader
 ```
 
-## 13. What is a kernel?
+## 11. Kernel effects
 
-A 3×3 kernel examines the current pixel and its eight neighbours:
+A 3×3 kernel reads the current pixel and its eight neighbours:
 
 ```text
 top-left      top      top-right
@@ -394,22 +389,18 @@ left          YOU      right
 bottom-left   bottom   bottom-right
 ```
 
-Each sampled colour is multiplied by a weight. The weighted colours are then
-added to produce the output pixel.
+Each colour is multiplied by a weight; all nine results are added.
 
-The shader needs to know how far apart texture pixels are:
+Moving one texture pixel requires a UV-sized step:
 
 ```zig
-const texel_x = 1.0 / @as(f32, @floatFromInt(width));
-const texel_y = 1.0 / @as(f32, @floatFromInt(height));
+texel_x = 1.0 / width;
+texel_y = 1.0 / height;
 ```
 
-For an 800-pixel-wide image, moving one pixel horizontally means moving
-`1 / 800` through UV space.
+For an 800-pixel-wide image, one horizontal pixel is `1 / 800` in UV space.
 
-## 14. Sharpen
-
-Press `4`:
+### Sharpen — key `4`
 
 ```text
 ┌             ┐
@@ -419,14 +410,10 @@ Press `4`:
 └             ┘
 ```
 
-The current pixel is emphasized while its neighbours are subtracted. Changes
-between nearby pixels therefore become stronger, making detail look sharper.
+Emphasize the centre and subtract neighbours. Nearby differences become
+stronger.
 
-The weights add to `1`, helping broadly uniform areas keep similar brightness.
-
-## 15. Blur
-
-Press `5`:
+### Blur — key `5`
 
 ```text
 ┌          ┐
@@ -436,16 +423,10 @@ Press `5`:
 └          ┘
 ```
 
-This calculates a weighted average of nearby pixels. The center matters most,
-and diagonal pixels matter least. Averaging neighbouring differences creates a
-blur.
+Average nearby pixels. Dividing by the weight total, `16`, preserves general
+brightness.
 
-The weights total `16`, so dividing by `16` prevents the result from becoming
-sixteen times brighter.
-
-## 16. Edge detection
-
-Press `6`:
+### Edge detection — key `6`
 
 ```text
 ┌             ┐
@@ -455,78 +436,54 @@ Press `6`:
 └             ┘
 ```
 
-If the centre and neighbours are similar, the positive and negative values
-mostly cancel to black. Where neighbouring pixels differ sharply, some value
-remains and forms a visible edge.
+Similar neighbours cancel toward black. Strong differences remain as edges.
 
-## 17. Choosing an effect from Zig
+## 12. Resizing and common failures
 
-The keyboard changes a Zig enum:
-
-```zig
-const Effect = enum(u8) {
-    normal,
-    invert,
-    grayscale,
-    sharpen,
-    blur,
-    edges,
-};
-```
-
-Its numeric value is sent to the screen fragment shader as a uniform:
-
-```zig
-const screen_params = shd.ScreenFsParams{
-    .post_options = .{
-        @floatFromInt(@intFromEnum(state.effect)),
-        texel_x,
-        texel_y,
-        0,
-    },
-};
-sg.applyUniforms(shd.UB_screen_fs_params, sg.asRange(&screen_params));
-```
-
-Zig chooses the effect; thousands of fragment-shader invocations apply it to
-the screen pixels in parallel on the GPU.
-
-## 18. Resizing
-
-Framebuffer images have fixed dimensions. If the window changes size, the old
-images do not grow automatically.
-
-The example checks the current framebuffer size each frame and recreates its
-offscreen images and views when necessary:
+Images have fixed dimensions. When the window changes size, the example:
 
 ```text
-window size unchanged ──► reuse attachments
-
-window size changed
-        ↓
-destroy old views and images
-        ↓
-create matching colour and depth images
-        ↓
-create new attachment and texture views
+destroys old views and images
+              ↓
+creates matching colour and depth images
+              ↓
+creates new attachment and texture views
+              ↓
+updates the one-pixel kernel offsets
 ```
 
-This also keeps the kernel's one-pixel UV offsets accurate.
+If nothing appears, check:
 
-## 19. Texture attachment or attachment-only storage?
+- the pass has compatible colour and depth attachment views;
+- the offscreen pipeline formats/sample count match those images;
+- pass 1 ends before pass 2 samples its image;
+- pass 2 binds the **texture view**, not the attachment view;
+- each pass clears or loads the contents intentionally;
+- the screen quad covers clip space and its texture is not flipped.
 
-Use a texture view when a later shader must sample the result:
+## Quick source map
+
+| Concept                            | Project location                       |
+|------------------------------------|----------------------------------------|
+| Create images and views            | `recreateOffscreenTargets()`           |
+| Configure both pipelines           | `init()`                               |
+| Attach colour and depth            | `recreateOffscreenTargets()`           |
+| Record the two passes              | `frame()`                              |
+| Select an effect                   | `input()` and `screen_fs_params`       |
+| Post-processing and kernels        | `screen_fs` in `src/framebuffers.glsl` |
+
+Implementation:
+
+- [`src/framebuffers.zig`](src/framebuffers.zig)
+- [`src/framebuffers.glsl`](src/framebuffers.glsl)
+
+Keep this final mental model:
 
 ```text
-colour output ──► sampled by pass 2 ──► texture view needed
+image      = storage
+view       = how storage is accessed
+attachment = a view plugged into a pass output
+pass       = a bounded period of writing those outputs
+bindings   = inputs read while drawing
+swapchain  = the window's display target
 ```
-
-An attachment-only role is enough when the GPU merely needs temporary values
-for rendering tests:
-
-```text
-depth output ──► used by depth testing only ──► no texture view needed here
-```
-
-If a later lesson needs to sample depth—for example, some shadow or depth-based
-effects—it can create an appropriate texture view for a compatible depth image.
