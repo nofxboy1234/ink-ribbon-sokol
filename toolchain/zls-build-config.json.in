@@ -12,6 +12,12 @@
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
+    "@PROJECT_ROOT@/src/advanced_glsl.zig": {
+      "import_table": {
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
+      }
+    },
     "@PROJECT_ROOT@/src/basic_lighting.zig": {
       "import_table": {
         "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
@@ -163,6 +169,9 @@
   "compilations": [
     {
       "root_module": "@PROJECT_ROOT@/src/advanced_data.zig"
+    },
+    {
+      "root_module": "@PROJECT_ROOT@/src/advanced_glsl.zig"
     },
     {
       "root_module": "@PROJECT_ROOT@/src/basic_lighting.zig"
