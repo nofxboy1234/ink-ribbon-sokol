@@ -66,6 +66,7 @@ const Options = struct {
     blending_mod: *Build.Module,
     face_culling_mod: *Build.Module,
     framebuffers_mod: *Build.Module,
+    cubemaps_mod: *Build.Module,
     light_casters_directional_mod: *Build.Module,
     light_casters_point_mod: *Build.Module,
     light_casters_spotlight_mod: *Build.Module,
@@ -89,6 +90,7 @@ const Options = struct {
     blending_shdc_step: *Build.Step,
     face_culling_shdc_step: *Build.Step,
     framebuffers_shdc_step: *Build.Step,
+    cubemaps_shdc_step: *Build.Step,
     light_casters_shdc_step: *Build.Step,
     lighting_maps_shdc_step: *Build.Step,
     materials_shdc_step: *Build.Step,
@@ -288,6 +290,19 @@ pub fn build(b: *Build) !void {
         },
         .reflection = true,
     });
+    const cubemaps_shdc_step = try sokol.shdc.createSourceFile(b, .{
+        .shdc_dep = dep_shdc,
+        .input = "src/cubemaps.glsl",
+        .output = "src/generated/cubemaps_shader.zig",
+        .slang = .{
+            .glsl410 = true,
+            .glsl300es = true,
+            .hlsl5 = true,
+            .metal_macos = true,
+            .wgsl = true,
+        },
+        .reflection = true,
+    });
     const lighting_maps_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
         .input = "src/lighting_maps.glsl",
@@ -472,6 +487,16 @@ pub fn build(b: *Build) !void {
             .{ .name = "model_image", .module = model_image_bindings },
         },
     });
+    const cubemaps_mod = b.createModule(.{
+        .root_source_file = b.path("src/cubemaps.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "ink_ribbon_sokol", .module = mod_lib },
+            .{ .name = "sokol", .module = dep_sokol.module("sokol") },
+            .{ .name = "model_image", .module = model_image_bindings },
+        },
+    });
     const materials_mod = b.createModule(.{
         .root_source_file = b.path("src/materials.zig"),
         .target = target,
@@ -566,6 +591,7 @@ pub fn build(b: *Build) !void {
         .blending_mod = blending_mod,
         .face_culling_mod = face_culling_mod,
         .framebuffers_mod = framebuffers_mod,
+        .cubemaps_mod = cubemaps_mod,
         .light_casters_directional_mod = light_casters_directional_mod,
         .light_casters_point_mod = light_casters_point_mod,
         .light_casters_spotlight_mod = light_casters_spotlight_mod,
@@ -589,6 +615,7 @@ pub fn build(b: *Build) !void {
         .blending_shdc_step = blending_shdc_step,
         .face_culling_shdc_step = face_culling_shdc_step,
         .framebuffers_shdc_step = framebuffers_shdc_step,
+        .cubemaps_shdc_step = cubemaps_shdc_step,
         .light_casters_shdc_step = light_casters_shdc_step,
         .lighting_maps_shdc_step = lighting_maps_shdc_step,
         .materials_shdc_step = materials_shdc_step,
@@ -725,6 +752,13 @@ fn buildNative(b: *Build, opts: Options) void {
     framebuffers_exe.step.dependOn(opts.framebuffers_shdc_step);
     b.installArtifact(framebuffers_exe);
 
+    const cubemaps_exe = b.addExecutable(.{
+        .name = "ink_ribbon_cubemaps",
+        .root_module = opts.cubemaps_mod,
+    });
+    cubemaps_exe.step.dependOn(opts.cubemaps_shdc_step);
+    b.installArtifact(cubemaps_exe);
+
     const materials_exe = b.addExecutable(.{
         .name = "ink_ribbon_materials",
         .root_module = opts.materials_mod,
@@ -826,6 +860,10 @@ fn buildNative(b: *Build, opts: Options) void {
     run_framebuffers_cmd.step.dependOn(&framebuffers_exe.step);
     b.step("run-framebuffers", "Run the LearnOpenGL Framebuffers example").dependOn(&run_framebuffers_cmd.step);
 
+    const run_cubemaps_cmd = b.addRunArtifact(cubemaps_exe);
+    run_cubemaps_cmd.step.dependOn(&cubemaps_exe.step);
+    b.step("run-cubemaps", "Run the LearnOpenGL Cubemaps example").dependOn(&run_cubemaps_cmd.step);
+
     const run_materials_cmd = b.addRunArtifact(materials_exe);
     run_materials_cmd.step.dependOn(&materials_exe.step);
     b.step("run-materials", "Run the LearnOpenGL Materials example").dependOn(&run_materials_cmd.step);
@@ -914,6 +952,10 @@ fn buildNative(b: *Build, opts: Options) void {
     framebuffers_tests.step.dependOn(opts.framebuffers_shdc_step);
     const run_framebuffers_tests = b.addRunArtifact(framebuffers_tests);
 
+    const cubemaps_tests = b.addTest(.{ .root_module = opts.cubemaps_mod });
+    cubemaps_tests.step.dependOn(opts.cubemaps_shdc_step);
+    const run_cubemaps_tests = b.addRunArtifact(cubemaps_tests);
+
     const materials_tests = b.addTest(.{
         .root_module = opts.materials_mod,
     });
@@ -967,6 +1009,7 @@ fn buildNative(b: *Build, opts: Options) void {
     test_step.dependOn(&run_blending_tests.step);
     test_step.dependOn(&run_face_culling_tests.step);
     test_step.dependOn(&run_framebuffers_tests.step);
+    test_step.dependOn(&run_cubemaps_tests.step);
     test_step.dependOn(&run_lighting_maps_tests.step);
     test_step.dependOn(&run_light_casters_directional_tests.step);
     test_step.dependOn(&run_light_casters_point_tests.step);
@@ -1019,6 +1062,11 @@ fn buildWeb(b: *Build, opts: Options) !void {
         .root_module = opts.framebuffers_mod,
     });
     framebuffers_lib.step.dependOn(opts.framebuffers_shdc_step);
+    const cubemaps_lib = b.addLibrary(.{
+        .name = "ink_ribbon_cubemaps",
+        .root_module = opts.cubemaps_mod,
+    });
+    cubemaps_lib.step.dependOn(opts.cubemaps_shdc_step);
     const materials_lib = b.addLibrary(.{
         .name = "ink_ribbon_materials",
         .root_module = opts.materials_mod,
@@ -1181,6 +1229,21 @@ fn buildWeb(b: *Build, opts: Options) !void {
     });
     b.getInstallStep().dependOn(&framebuffers_link_step.step);
 
+    const cubemaps_link_step = try sokol.emLinkStep(b, .{
+        .lib_main = cubemaps_lib,
+        .target = opts.cubemaps_mod.resolved_target.?,
+        .optimize = opts.cubemaps_mod.optimize.?,
+        .emsdk = emsdk,
+        .use_webgl2 = true,
+        .use_emmalloc = true,
+        .use_filesystem = true,
+        // Six 2048x2048 RGBA faces occupy 96 MiB after JPEG decoding. Leave
+        // room for the packed upload buffer, one decoded face, and WebGL.
+        .extra_args = &.{ "-sINITIAL_MEMORY=201326592", "-sALLOW_MEMORY_GROWTH=1" },
+        .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
+    });
+    b.getInstallStep().dependOn(&cubemaps_link_step.step);
+
     const materials_link_step = try sokol.emLinkStep(b, .{
         .lib_main = materials_lib,
         .target = opts.materials_mod.resolved_target.?,
@@ -1342,6 +1405,10 @@ fn buildWeb(b: *Build, opts: Options) !void {
     const run_framebuffers = sokol.emRunStep(b, .{ .name = "ink_ribbon_framebuffers", .emsdk = emsdk });
     run_framebuffers.step.dependOn(&framebuffers_link_step.step);
     b.step("run-framebuffers", "Run the LearnOpenGL Framebuffers example").dependOn(&run_framebuffers.step);
+
+    const run_cubemaps = sokol.emRunStep(b, .{ .name = "ink_ribbon_cubemaps", .emsdk = emsdk });
+    run_cubemaps.step.dependOn(&cubemaps_link_step.step);
+    b.step("run-cubemaps", "Run the LearnOpenGL Cubemaps example").dependOn(&run_cubemaps.step);
 
     const run_materials = sokol.emRunStep(b, .{ .name = "ink_ribbon_materials", .emsdk = emsdk });
     run_materials.step.dependOn(&materials_link_step.step);

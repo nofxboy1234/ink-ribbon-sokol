@@ -66,6 +66,13 @@
         "model_image": "@PROJECT_ROOT@/src/generated/model_image.zig"
       }
     },
+    "@PROJECT_ROOT@/src/cubemaps.zig": {
+      "import_table": {
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig",
+        "model_image": "@PROJECT_ROOT@/src/generated/model_image.zig"
+      }
+    },
     "@PROJECT_ROOT@/src/materials.zig": {
       "import_table": {
         "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
@@ -176,6 +183,9 @@
       "root_module": "@PROJECT_ROOT@/src/framebuffers.zig"
     },
     {
+      "root_module": "@PROJECT_ROOT@/src/cubemaps.zig"
+    },
+    {
       "root_module": "@PROJECT_ROOT@/src/materials.zig"
     },
     {
@@ -218,6 +228,7 @@
     "run-blending",
     "run-face-culling",
     "run-framebuffers",
+    "run-cubemaps",
     "run-materials",
     "run-multiple-lights",
     "run-model-loading",

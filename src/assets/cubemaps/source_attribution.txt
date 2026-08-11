@@ -1,0 +1,8 @@
+The six skybox JPEG files in this directory were downloaded from the assets
+linked by the LearnOpenGL Cubemaps chapter:
+
+https://learnopengl.com/Advanced-OpenGL/Cubemaps
+https://learnopengl.com/img/textures/skybox.zip
+
+The files are kept in the loader order used by the chapter:
+right, left, top, bottom, front, back.
