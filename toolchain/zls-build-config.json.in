@@ -24,6 +24,12 @@
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
+    "@PROJECT_ROOT@/src/instancing.zig": {
+      "import_table": {
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
+      }
+    },
     "@PROJECT_ROOT@/src/basic_lighting.zig": {
       "import_table": {
         "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
@@ -181,6 +187,9 @@
     },
     {
       "root_module": "@PROJECT_ROOT@/src/geometry_shader.zig"
+    },
+    {
+      "root_module": "@PROJECT_ROOT@/src/instancing.zig"
     },
     {
       "root_module": "@PROJECT_ROOT@/src/basic_lighting.zig"
