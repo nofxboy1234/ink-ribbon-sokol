@@ -59,6 +59,7 @@ const box3d_sources = &.{
 const Options = struct {
     advanced_data_mod: *Build.Module,
     advanced_glsl_mod: *Build.Module,
+    geometry_shader_mod: *Build.Module,
     basic_lighting_mod: *Build.Module,
     box3d_mod: *Build.Module,
     colors_mod: *Build.Module,
@@ -95,6 +96,7 @@ const Options = struct {
     cubemaps_shdc_step: *Build.Step,
     advanced_data_shdc_step: *Build.Step,
     advanced_glsl_shdc_step: *Build.Step,
+    geometry_shader_shdc_step: *Build.Step,
     light_casters_shdc_step: *Build.Step,
     lighting_maps_shdc_step: *Build.Step,
     materials_shdc_step: *Build.Step,
@@ -194,6 +196,19 @@ pub fn build(b: *Build) !void {
         .shdc_dep = dep_shdc,
         .input = "src/advanced_glsl.glsl",
         .output = "src/generated/advanced_glsl_shader.zig",
+        .slang = .{
+            .glsl410 = true,
+            .glsl300es = true,
+            .hlsl5 = true,
+            .metal_macos = true,
+            .wgsl = true,
+        },
+        .reflection = true,
+    });
+    const geometry_shader_shdc_step = try sokol.shdc.createSourceFile(b, .{
+        .shdc_dep = dep_shdc,
+        .input = "src/geometry_shader.glsl",
+        .output = "src/generated/geometry_shader_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -448,6 +463,15 @@ pub fn build(b: *Build) !void {
             .{ .name = "sokol", .module = dep_sokol.module("sokol") },
         },
     });
+    const geometry_shader_mod = b.createModule(.{
+        .root_source_file = b.path("src/geometry_shader.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "ink_ribbon_sokol", .module = mod_lib },
+            .{ .name = "sokol", .module = dep_sokol.module("sokol") },
+        },
+    });
 
     const box3d_mod = b.createModule(.{
         .root_source_file = b.path("src/box3d.zig"),
@@ -633,6 +657,7 @@ pub fn build(b: *Build) !void {
     const opts = Options{
         .advanced_data_mod = advanced_data_mod,
         .advanced_glsl_mod = advanced_glsl_mod,
+        .geometry_shader_mod = geometry_shader_mod,
         .basic_lighting_mod = basic_lighting_mod,
         .box3d_mod = box3d_mod,
         .colors_mod = colors_mod,
@@ -669,6 +694,7 @@ pub fn build(b: *Build) !void {
         .cubemaps_shdc_step = cubemaps_shdc_step,
         .advanced_data_shdc_step = advanced_data_shdc_step,
         .advanced_glsl_shdc_step = advanced_glsl_shdc_step,
+        .geometry_shader_shdc_step = geometry_shader_shdc_step,
         .light_casters_shdc_step = light_casters_shdc_step,
         .lighting_maps_shdc_step = lighting_maps_shdc_step,
         .materials_shdc_step = materials_shdc_step,
@@ -762,6 +788,13 @@ fn buildNative(b: *Build, opts: Options) void {
     });
     advanced_glsl_exe.step.dependOn(opts.advanced_glsl_shdc_step);
     b.installArtifact(advanced_glsl_exe);
+
+    const geometry_shader_exe = b.addExecutable(.{
+        .name = "ink_ribbon_geometry_shader",
+        .root_module = opts.geometry_shader_mod,
+    });
+    geometry_shader_exe.step.dependOn(opts.geometry_shader_shdc_step);
+    b.installArtifact(geometry_shader_exe);
 
     const basic_lighting_exe = b.addExecutable(.{
         .name = "ink_ribbon_basic_lighting",
@@ -907,6 +940,10 @@ fn buildNative(b: *Build, opts: Options) void {
     run_advanced_glsl_cmd.step.dependOn(&advanced_glsl_exe.step);
     b.step("run-advanced-glsl", "Run the LearnOpenGL Advanced GLSL example").dependOn(&run_advanced_glsl_cmd.step);
 
+    const run_geometry_shader_cmd = b.addRunArtifact(geometry_shader_exe);
+    run_geometry_shader_cmd.step.dependOn(&geometry_shader_exe.step);
+    b.step("run-geometry-shader", "Run the LearnOpenGL Geometry Shader ideas example").dependOn(&run_geometry_shader_cmd.step);
+
     const run_basic_lighting_cmd = b.addRunArtifact(basic_lighting_exe);
     run_basic_lighting_cmd.step.dependOn(&basic_lighting_exe.step);
     b.step("run-basic-lighting", "Run the LearnOpenGL Basic Lighting example").dependOn(&run_basic_lighting_cmd.step);
@@ -1001,6 +1038,12 @@ fn buildNative(b: *Build, opts: Options) void {
     advanced_glsl_tests.step.dependOn(opts.advanced_glsl_shdc_step);
     const run_advanced_glsl_tests = b.addRunArtifact(advanced_glsl_tests);
 
+    const geometry_shader_tests = b.addTest(.{
+        .root_module = opts.geometry_shader_mod,
+    });
+    geometry_shader_tests.step.dependOn(opts.geometry_shader_shdc_step);
+    const run_geometry_shader_tests = b.addRunArtifact(geometry_shader_tests);
+
     const basic_lighting_tests = b.addTest(.{
         .root_module = opts.basic_lighting_mod,
     });
@@ -1089,6 +1132,7 @@ fn buildNative(b: *Build, opts: Options) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_advanced_data_tests.step);
     test_step.dependOn(&run_advanced_glsl_tests.step);
+    test_step.dependOn(&run_geometry_shader_tests.step);
     test_step.dependOn(&run_basic_lighting_tests.step);
     test_step.dependOn(&run_box3d_tests.step);
     test_step.dependOn(&run_colors_tests.step);
@@ -1122,6 +1166,12 @@ fn buildWeb(b: *Build, opts: Options) !void {
         .root_module = opts.advanced_glsl_mod,
     });
     advanced_glsl_lib.step.dependOn(opts.advanced_glsl_shdc_step);
+
+    const geometry_shader_lib = b.addLibrary(.{
+        .name = "ink_ribbon_geometry_shader",
+        .root_module = opts.geometry_shader_mod,
+    });
+    geometry_shader_lib.step.dependOn(opts.geometry_shader_shdc_step);
 
     const basic_lighting_lib = b.addLibrary(.{
         .name = "ink_ribbon_basic_lighting",
@@ -1244,6 +1294,18 @@ fn buildWeb(b: *Build, opts: Options) !void {
         .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
     });
     b.getInstallStep().dependOn(&advanced_glsl_link_step.step);
+
+    const geometry_shader_link_step = try sokol.emLinkStep(b, .{
+        .lib_main = geometry_shader_lib,
+        .target = opts.geometry_shader_mod.resolved_target.?,
+        .optimize = opts.geometry_shader_mod.optimize.?,
+        .emsdk = emsdk,
+        .use_webgl2 = true,
+        .use_emmalloc = true,
+        .use_filesystem = true,
+        .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
+    });
+    b.getInstallStep().dependOn(&geometry_shader_link_step.step);
     const emsdk_include = emsdk.path("upstream/emscripten/cache/sysroot/include");
 
     // C/C++ dependencies need Emscripten's libc headers, and must wait for the
@@ -1505,6 +1567,10 @@ fn buildWeb(b: *Build, opts: Options) !void {
     const run_advanced_glsl = sokol.emRunStep(b, .{ .name = "ink_ribbon_advanced_glsl", .emsdk = emsdk });
     run_advanced_glsl.step.dependOn(&advanced_glsl_link_step.step);
     b.step("run-advanced-glsl", "Run the LearnOpenGL Advanced GLSL example").dependOn(&run_advanced_glsl.step);
+
+    const run_geometry_shader = sokol.emRunStep(b, .{ .name = "ink_ribbon_geometry_shader", .emsdk = emsdk });
+    run_geometry_shader.step.dependOn(&geometry_shader_link_step.step);
+    b.step("run-geometry-shader", "Run the LearnOpenGL Geometry Shader ideas example").dependOn(&run_geometry_shader.step);
 
     const run_box3d = sokol.emRunStep(b, .{ .name = "ink_ribbon_box3d", .emsdk = emsdk });
     run_box3d.step.dependOn(&box3d_link_step.step);
