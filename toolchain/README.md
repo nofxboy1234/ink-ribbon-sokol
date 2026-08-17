@@ -9,7 +9,9 @@ Run:
 This installs the pinned Zig and patched ZLS into versioned directories under
 `~/.local/opt`, updates the existing `~/.local/bin/zig` and `zls` symlinks,
 materializes the patched project dependencies under `.toolchain/deps`, and
-regenerates the translate-c bindings in `src/generated`.
+regenerates the translate-c bindings in `src/generated`. Box3D's Doxygen
+comments are copied from its pinned C headers into the generated Zig binding as
+a post-processing step, so editor hovers stay in sync when Box3D is updated.
 
 Upstream revisions, archive checksums, and all temporary Zig-nightly
 compatibility changes are recorded in `bootstrap.sh` and `patches/`. Previous

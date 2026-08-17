@@ -117,6 +117,9 @@ generate_bindings() {
             -I "$deps_root/box3d/include" \
             -target x86_64-linux-gnu \
             "$deps_root/box3d/include/box3d/box3d.h" > "$generated/box3d.zig"
+        python3 "$project_root/toolchain/copy_box3d_docs.py" \
+            --headers "$deps_root/box3d/include/box3d" \
+            --bindings "$generated/box3d.zig"
         "$zig" translate-c -lc \
             -I "$deps_root/cimgui/src" \
             -target x86_64-linux-gnu \
