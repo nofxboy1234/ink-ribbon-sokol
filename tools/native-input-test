@@ -1,0 +1,303 @@
+#!/usr/bin/env python3
+"""Small, scoped X11 driver for this repository's native character scene."""
+
+from __future__ import annotations
+
+import ctypes
+import json
+import os
+from pathlib import Path
+import signal
+import shutil
+import subprocess
+import sys
+import time
+
+
+ROOT = Path(__file__).resolve().parent.parent
+BINARY = ROOT / "zig-out/bin/ink_ribbon_character"
+STATE_FILE = Path("/tmp/ink-ribbon-native-input.json")
+LOG_FILE = Path("/tmp/ink-ribbon-native-input.log")
+WINDOW_TITLE = "Character Mover"
+ALLOWED_KEYS = {
+    "w", "a", "s", "d", "shift", "f1", "escape",
+    "left", "right", "up", "down",
+}
+MAX_HOLD_SECONDS = 30.0
+
+
+def fail(message: str) -> None:
+    raise SystemExit(message)
+
+
+def window_geometry() -> tuple[str, int, int, int, int]:
+    result = subprocess.run(
+        ["wmctrl", "-lG"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    matches = [line.split(maxsplit=7) for line in result.stdout.splitlines() if WINDOW_TITLE in line]
+    if not matches:
+        fail(f"No {WINDOW_TITLE!r} window is open")
+    fields = matches[-1]
+    return fields[0], int(fields[2]), int(fields[3]), int(fields[4]), int(fields[5])
+
+
+def window_id() -> str:
+    return window_geometry()[0]
+
+
+def load_state() -> dict[str, object]:
+    try:
+        return json.loads(STATE_FILE.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_state(pid: int) -> None:
+    STATE_FILE.write_text(json.dumps({"pid": pid}) + "\n")
+
+
+def owned_pid() -> int:
+    value = load_state().get("pid")
+    if not isinstance(value, int):
+        fail("No game process was launched by this helper")
+    proc_exe = Path(f"/proc/{value}/exe")
+    try:
+        actual_exe = proc_exe.resolve(strict=True)
+    except FileNotFoundError:
+        fail("The recorded game process is no longer running")
+    if actual_exe != BINARY.resolve(strict=True):
+        fail("Refusing to control a PID that is not this repository's game binary")
+    return value
+
+
+class XTest:
+    def __init__(self) -> None:
+        self.x11 = ctypes.CDLL("libX11.so.6")
+        self.xtst = ctypes.CDLL("libXtst.so.6")
+        self.x11.XOpenDisplay.restype = ctypes.c_void_p
+        self.x11.XStringToKeysym.restype = ctypes.c_ulong
+        self.x11.XDisplayWidth.restype = ctypes.c_int
+        self.x11.XDisplayHeight.restype = ctypes.c_int
+        self.display = ctypes.c_void_p(self.x11.XOpenDisplay(None))
+        if not self.display:
+            fail("Could not open the X11 display")
+
+    def close(self) -> None:
+        self.x11.XCloseDisplay(self.display)
+
+    def flush(self) -> None:
+        self.x11.XFlush(self.display)
+
+    def focus_game(self) -> None:
+        wid, x, y, width, height = window_geometry()
+        subprocess.run(["wmctrl", "-ia", wid], check=True)
+        # Pointer warps become camera deltas while Sokol has mouse lock. Unlock
+        # first so moving to the window center cannot rotate the camera.
+        escape = self.key_code("escape")
+        self.xtst.XTestFakeKeyEvent(self.display, escape, 1, 0)
+        self.xtst.XTestFakeKeyEvent(self.display, escape, 0, 0)
+        self.flush()
+        time.sleep(0.1)
+        self.xtst.XTestFakeMotionEvent(self.display, -1, x + width // 2, y + height // 2, 0)
+        self.xtst.XTestFakeButtonEvent(self.display, 1, 1, 0)
+        self.xtst.XTestFakeButtonEvent(self.display, 1, 0, 0)
+        self.flush()
+        time.sleep(0.2)
+
+    def key_code(self, name: str) -> int:
+        x_name = {
+            "shift": "Shift_L",
+            "f1": "F1",
+            "escape": "Escape",
+            "left": "Left",
+            "right": "Right",
+            "up": "Up",
+            "down": "Down",
+        }.get(name, name)
+        symbol = self.x11.XStringToKeysym(x_name.encode())
+        code = self.x11.XKeysymToKeycode(self.display, symbol)
+        if code == 0:
+            fail(f"X11 could not resolve key {name!r}")
+        return code
+
+    def set_key(self, name: str, down: bool) -> None:
+        self.xtst.XTestFakeKeyEvent(self.display, self.key_code(name), int(down), 0)
+        self.flush()
+
+
+def parse_duration(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        fail(f"Invalid duration: {text!r}")
+    if not 0 < value <= MAX_HOLD_SECONDS:
+        fail(f"Duration must be greater than 0 and at most {MAX_HOLD_SECONDS:g} seconds")
+    return value
+
+
+def parse_key(text: str) -> str:
+    value = text.lower()
+    if value not in ALLOWED_KEYS:
+        fail(f"Unsupported key {text!r}; allowed: {', '.join(sorted(ALLOWED_KEYS))}")
+    return value
+
+
+def launch() -> None:
+    try:
+        pid = owned_pid()
+    except SystemExit:
+        pid = 0
+    if pid:
+        fail(f"The helper already owns running game PID {pid}")
+    print("building native game...", flush=True)
+    subprocess.run(["zig", "build", "-Doptimize=safe"], cwd=ROOT, check=True)
+    if not BINARY.is_file():
+        fail(f"Native build succeeded without producing {BINARY}")
+    log = LOG_FILE.open("ab")
+    process = subprocess.Popen(
+        [str(BINARY)],
+        cwd=ROOT,
+        stdin=subprocess.DEVNULL,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    save_state(process.pid)
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            fail(f"Game exited during launch; inspect {LOG_FILE}")
+        try:
+            wid = window_id()
+            print(f"launched pid={process.pid} window={wid}")
+            return
+        except SystemExit:
+            time.sleep(0.1)
+    fail("Timed out waiting for the Character Mover window")
+
+
+def hold(key: str, duration: float, focus: bool = True) -> None:
+    owned_pid()
+    driver = XTest()
+    try:
+        if focus:
+            driver.focus_game()
+        driver.set_key(key, True)
+        try:
+            time.sleep(duration)
+        finally:
+            driver.set_key(key, False)
+        time.sleep(0.15)
+    finally:
+        driver.close()
+
+
+def sequence(items: list[str]) -> None:
+    if not items:
+        fail("sequence requires one or more KEY:SECONDS items")
+    parsed: list[tuple[str, float]] = []
+    for item in items:
+        try:
+            key_text, duration_text = item.split(":", 1)
+        except ValueError:
+            fail(f"Invalid sequence item {item!r}; expected KEY:SECONDS")
+        parsed.append((parse_key(key_text), parse_duration(duration_text)))
+    owned_pid()
+    driver = XTest()
+    try:
+        driver.focus_game()
+        for key, duration in parsed:
+            driver.set_key(key, True)
+            try:
+                time.sleep(duration)
+            finally:
+                driver.set_key(key, False)
+            time.sleep(0.1)
+        time.sleep(0.25)
+    finally:
+        driver.close()
+
+
+def screenshot(path_text: str) -> None:
+    owned_pid()
+    path = Path(path_text).expanduser().resolve()
+    allowed = path.is_relative_to(ROOT) or path.is_relative_to(Path("/tmp"))
+    if not allowed:
+        fail("Screenshots must be written inside the repository or /tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["import", "-window", window_id(), str(path)], check=True)
+    print(path)
+
+
+def status() -> None:
+    pid = owned_pid()
+    print(f"running pid={pid} window={window_id()}")
+
+
+def check() -> None:
+    missing = [name for name in ("zig", "wmctrl", "import") if not shutil.which(name)]
+    if missing:
+        fail(f"Missing required commands: {', '.join(missing)}")
+    ctypes.CDLL("libX11.so.6")
+    ctypes.CDLL("libXtst.so.6")
+    print("native input dependencies are available")
+
+
+def close_game() -> None:
+    pid = owned_pid()
+    os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        fail(f"Game PID {pid} did not exit after SIGTERM")
+    STATE_FILE.unlink(missing_ok=True)
+    print(f"closed pid={pid}")
+
+
+def usage() -> None:
+    print(
+        "usage:\n"
+        "  tools/native-input-test launch\n"
+        "  tools/native-input-test hold KEY SECONDS\n"
+        "  tools/native-input-test sequence KEY:SECONDS [...]\n"
+        "  tools/native-input-test screenshot PATH\n"
+        "  tools/native-input-test check\n"
+        "  tools/native-input-test status\n"
+        "  tools/native-input-test close",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        usage()
+    command, *args = sys.argv[1:]
+    if command == "launch" and not args:
+        launch()
+    elif command == "hold" and len(args) == 2:
+        hold(parse_key(args[0]), parse_duration(args[1]))
+    elif command == "sequence":
+        sequence(args)
+    elif command == "screenshot" and len(args) == 1:
+        screenshot(args[0])
+    elif command == "check" and not args:
+        check()
+    elif command == "status" and not args:
+        status()
+    elif command == "close" and not args:
+        close_game()
+    else:
+        usage()
+
+
+if __name__ == "__main__":
+    main()

@@ -15,6 +15,27 @@ browser because the native build runs at a stable frame rate.
 Commands that access the desktop may need permission to run outside a
 filesystem sandbox.
 
+## Repository helper
+
+Use `tools/native-input-test` for routine native testing. It validates inputs,
+only controls the game process it launched, re-focuses and clicks the Sokol
+window before input, and always releases a held key. The `launch` command
+always runs `zig build -Doptimize=safe` before starting the game, so every test
+uses the current native source.
+
+```sh
+tools/native-input-test launch
+tools/native-input-test hold a 2.05
+tools/native-input-test screenshot /tmp/leg-1.png
+tools/native-input-test sequence w:4.0 w:2.5 w:1.0 w:1.5
+tools/native-input-test status
+tools/native-input-test close
+```
+
+Granting persistent permission for the narrow `tools/native-input-test`
+command prefix allows screenshot-driven input loops without a new desktop
+approval prompt for every leg.
+
 ## Focus ownership during a test
 
 Prefer keeping the game focused for a complete input and capture sequence. If
