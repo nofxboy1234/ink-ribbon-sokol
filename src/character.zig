@@ -8,6 +8,7 @@ const std = @import("std");
 const b3 = @import("box3d");
 const sokol = @import("sokol");
 const math = @import("math.zig");
+const level = @import("rpd_level.zig");
 const controller = @import("character_controller.zig");
 const camera = @import("third_person_camera.zig");
 const shd = @import("generated/character_shader.zig");
@@ -36,42 +37,64 @@ const SceneBox = struct {
 
 // One description feeds both Box3D and the immutable render-instance buffer.
 const scene_boxes = [_]SceneBox{
-    // Floor and exterior shell: 40 by 32 metres with 3.5 metre walls.
-    .{ .center = .{ .y = -0.25 }, .half_extents = .{ .x = 20, .y = 0.25, .z = 16 }, .color = rgb(0.22, 0.25, 0.27) },
-    .{ .center = .{ .x = -20, .y = 1.75 }, .half_extents = .{ .x = 0.2, .y = 1.75, .z = 16 }, .color = rgb(0.42, 0.43, 0.45) },
-    .{ .center = .{ .x = 20, .y = 1.75 }, .half_extents = .{ .x = 0.2, .y = 1.75, .z = 16 }, .color = rgb(0.42, 0.43, 0.45) },
-    .{ .center = .{ .z = -16, .y = 1.75 }, .half_extents = .{ .x = 20, .y = 1.75, .z = 0.2 }, .color = rgb(0.42, 0.43, 0.45) },
-    .{ .center = .{ .z = 16, .y = 1.75 }, .half_extents = .{ .x = 20, .y = 1.75, .z = 0.2 }, .color = rgb(0.42, 0.43, 0.45) },
+    // Entrance shell and the broad central Main Hall.
+    .{ .center = .{ .y = -0.25 }, .half_extents = .{ .x = 22, .y = 0.25, .z = 20 }, .color = rgb(0.20, 0.23, 0.25) },
+    .{ .center = .{ .x = -22, .y = 1.75 }, .half_extents = .{ .x = 0.2, .y = 1.75, .z = 20 }, .color = rgb(0.42, 0.43, 0.45) },
+    .{ .center = .{ .x = 22, .y = 1.75 }, .half_extents = .{ .x = 0.2, .y = 1.75, .z = 20 }, .color = rgb(0.42, 0.43, 0.45) },
+    .{ .center = .{ .z = -20, .y = 1.75 }, .half_extents = .{ .x = 22, .y = 1.75, .z = 0.2 }, .color = rgb(0.42, 0.43, 0.45) },
+    .{ .center = .{ .x = -12, .y = 1.75, .z = 20 }, .half_extents = .{ .x = 10, .y = 1.75, .z = 0.2 }, .color = rgb(0.42, 0.43, 0.45) },
+    .{ .center = .{ .x = 12, .y = 1.75, .z = 20 }, .half_extents = .{ .x = 10, .y = 1.75, .z = 0.2 }, .color = rgb(0.42, 0.43, 0.45) },
 
-    // Walls bordering the north-south corridor. The missing two-metre sections
-    // at z=-9 and z=9 are doorways; the central gap is the cross-corridor.
-    .{ .center = .{ .x = -2, .y = 1.5, .z = -13 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3 }, .color = rgb(0.50, 0.51, 0.53) },
-    .{ .center = .{ .x = -2, .y = 1.5, .z = -4.75 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3.25 }, .color = rgb(0.50, 0.51, 0.53) },
-    .{ .center = .{ .x = -2, .y = 1.5, .z = 4.75 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3.25 }, .color = rgb(0.50, 0.51, 0.53) },
-    .{ .center = .{ .x = -2, .y = 1.5, .z = 13 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3 }, .color = rgb(0.50, 0.51, 0.53) },
-    .{ .center = .{ .x = 2, .y = 1.5, .z = -13 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3 }, .color = rgb(0.50, 0.51, 0.53) },
-    .{ .center = .{ .x = 2, .y = 1.5, .z = -4.75 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3.25 }, .color = rgb(0.50, 0.51, 0.53) },
-    .{ .center = .{ .x = 2, .y = 1.5, .z = 4.75 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3.25 }, .color = rgb(0.50, 0.51, 0.53) },
-    .{ .center = .{ .x = 2, .y = 1.5, .z = 13 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3 }, .color = rgb(0.50, 0.51, 0.53) },
+    // Main Hall edges. Matching gaps lead into narrow west and east corridors.
+    .{ .center = .{ .x = -7, .y = 1.5, .z = -18 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 2 }, .color = rgb(0.52, 0.52, 0.54) },
+    .{ .center = .{ .x = -7, .y = 1.5, .z = -11 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3 }, .color = rgb(0.52, 0.52, 0.54) },
+    .{ .center = .{ .x = -7, .y = 1.5, .z = -2 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 4 }, .color = rgb(0.52, 0.52, 0.54) },
+    .{ .center = .{ .x = -7, .y = 1.5, .z = 7.5 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3.5 }, .color = rgb(0.52, 0.52, 0.54) },
+    .{ .center = .{ .x = -7, .y = 1.5, .z = 15.5 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 2.5 }, .color = rgb(0.52, 0.52, 0.54) },
+    .{ .center = .{ .x = 7, .y = 1.5, .z = -18 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 2 }, .color = rgb(0.52, 0.52, 0.54) },
+    .{ .center = .{ .x = 7, .y = 1.5, .z = -11 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3 }, .color = rgb(0.52, 0.52, 0.54) },
+    .{ .center = .{ .x = 7, .y = 1.5, .z = -2 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 4 }, .color = rgb(0.52, 0.52, 0.54) },
+    .{ .center = .{ .x = 7, .y = 1.5, .z = 7.5 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3.5 }, .color = rgb(0.52, 0.52, 0.54) },
+    .{ .center = .{ .x = 7, .y = 1.5, .z = 15.5 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 2.5 }, .color = rgb(0.52, 0.52, 0.54) },
 
-    // Walls bordering the east-west corridor. Door gaps at x=-11 and x=11
-    // connect four large rooms to the crossing corridors.
-    .{ .center = .{ .x = -16, .y = 1.5, .z = -1.5 }, .half_extents = .{ .x = 4, .y = 1.5, .z = 0.15 }, .color = rgb(0.47, 0.48, 0.50) },
-    .{ .center = .{ .x = -6, .y = 1.5, .z = -1.5 }, .half_extents = .{ .x = 4, .y = 1.5, .z = 0.15 }, .color = rgb(0.47, 0.48, 0.50) },
-    .{ .center = .{ .x = 6, .y = 1.5, .z = -1.5 }, .half_extents = .{ .x = 4, .y = 1.5, .z = 0.15 }, .color = rgb(0.47, 0.48, 0.50) },
-    .{ .center = .{ .x = 16, .y = 1.5, .z = -1.5 }, .half_extents = .{ .x = 4, .y = 1.5, .z = 0.15 }, .color = rgb(0.47, 0.48, 0.50) },
-    .{ .center = .{ .x = -16, .y = 1.5, .z = 1.5 }, .half_extents = .{ .x = 4, .y = 1.5, .z = 0.15 }, .color = rgb(0.47, 0.48, 0.50) },
-    .{ .center = .{ .x = -6, .y = 1.5, .z = 1.5 }, .half_extents = .{ .x = 4, .y = 1.5, .z = 0.15 }, .color = rgb(0.47, 0.48, 0.50) },
-    .{ .center = .{ .x = 6, .y = 1.5, .z = 1.5 }, .half_extents = .{ .x = 4, .y = 1.5, .z = 0.15 }, .color = rgb(0.47, 0.48, 0.50) },
-    .{ .center = .{ .x = 16, .y = 1.5, .z = 1.5 }, .half_extents = .{ .x = 4, .y = 1.5, .z = 0.15 }, .color = rgb(0.47, 0.48, 0.50) },
+    // Room-facing sides of the west/east corridors, with aligned doorways.
+    .{ .center = .{ .x = -9, .y = 1.5, .z = -18 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 2 }, .color = rgb(0.46, 0.47, 0.49) },
+    .{ .center = .{ .x = -9, .y = 1.5, .z = -11 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3 }, .color = rgb(0.46, 0.47, 0.49) },
+    .{ .center = .{ .x = -9, .y = 1.5, .z = -2 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 4 }, .color = rgb(0.46, 0.47, 0.49) },
+    .{ .center = .{ .x = -9, .y = 1.5, .z = 7.5 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3.5 }, .color = rgb(0.46, 0.47, 0.49) },
+    .{ .center = .{ .x = -9, .y = 1.5, .z = 15.5 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 2.5 }, .color = rgb(0.46, 0.47, 0.49) },
+    .{ .center = .{ .x = 9, .y = 1.5, .z = -18 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 2 }, .color = rgb(0.46, 0.47, 0.49) },
+    .{ .center = .{ .x = 9, .y = 1.5, .z = -11 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3 }, .color = rgb(0.46, 0.47, 0.49) },
+    .{ .center = .{ .x = 9, .y = 1.5, .z = -2 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 4 }, .color = rgb(0.46, 0.47, 0.49) },
+    .{ .center = .{ .x = 9, .y = 1.5, .z = 7.5 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3.5 }, .color = rgb(0.46, 0.47, 0.49) },
+    .{ .center = .{ .x = 9, .y = 1.5, .z = 15.5 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 2.5 }, .color = rgb(0.46, 0.47, 0.49) },
 
-    // Simple room contents make each doorway and room volume easy to read.
-    .{ .center = .{ .x = -13, .y = 0.55, .z = -9 }, .half_extents = .{ .x = 2.2, .y = 0.55, .z = 0.7 }, .color = rgb(0.45, 0.29, 0.18) },
-    .{ .center = .{ .x = -8, .y = 0.8, .z = 9 }, .half_extents = .{ .x = 0.8, .y = 0.8, .z = 2.4 }, .color = rgb(0.23, 0.39, 0.48) },
-    .{ .center = .{ .x = 9, .y = 0.5, .z = -10 }, .half_extents = .{ .x = 2.8, .y = 0.5, .z = 0.65 }, .color = rgb(0.38, 0.32, 0.20) },
-    .{ .center = .{ .x = 14, .y = 1.0, .z = 8 }, .half_extents = .{ .x = 0.7, .y = 1.0, .z = 2.2 }, .color = rgb(0.29, 0.43, 0.28) },
-    .{ .center = .{ .x = -15, .y = 0.75, .z = 6 }, .half_extents = .{ .x = 1.0, .y = 0.75, .z = 1.0 }, .color = rgb(0.50, 0.24, 0.18) },
-    .{ .center = .{ .x = 7, .y = 0.65, .z = 11 }, .half_extents = .{ .x = 1.5, .y = 0.65, .z = 1.5 }, .color = rgb(0.28, 0.34, 0.46) },
+    // West: Reception, West Office, Safety Deposit, Operations/Dark Room zone.
+    .{ .center = .{ .x = -15.5, .y = 1.5, .z = 8 }, .half_extents = .{ .x = 6.5, .y = 1.5, .z = 0.15 }, .color = rgb(0.48, 0.49, 0.51) },
+    .{ .center = .{ .x = -15.5, .y = 1.5, .z = -2 }, .half_extents = .{ .x = 6.5, .y = 1.5, .z = 0.15 }, .color = rgb(0.48, 0.49, 0.51) },
+    .{ .center = .{ .x = -15.5, .y = 1.5, .z = -11 }, .half_extents = .{ .x = 6.5, .y = 1.5, .z = 0.15 }, .color = rgb(0.48, 0.49, 0.51) },
+    // East: East Office, Press Room, Waiting, Watchman's side.
+    .{ .center = .{ .x = 15.5, .y = 1.5, .z = 8 }, .half_extents = .{ .x = 6.5, .y = 1.5, .z = 0.15 }, .color = rgb(0.48, 0.49, 0.51) },
+    .{ .center = .{ .x = 15.5, .y = 1.5, .z = -2 }, .half_extents = .{ .x = 6.5, .y = 1.5, .z = 0.15 }, .color = rgb(0.48, 0.49, 0.51) },
+    .{ .center = .{ .x = 15.5, .y = 1.5, .z = -11 }, .half_extents = .{ .x = 6.5, .y = 1.5, .z = 0.15 }, .color = rgb(0.48, 0.49, 0.51) },
+
+    // Blockout furniture establishes the office/press-room scale.
+    .{ .center = .{ .x = -15, .y = 0.55, .z = 3 }, .half_extents = .{ .x = 3.0, .y = 0.55, .z = 0.7 }, .color = rgb(0.43, 0.28, 0.17) },
+    .{ .center = .{ .x = -16, .y = 0.9, .z = -7 }, .half_extents = .{ .x = 0.7, .y = 0.9, .z = 3.0 }, .color = rgb(0.25, 0.38, 0.47) },
+    .{ .center = .{ .x = 15, .y = 0.55, .z = 12 }, .half_extents = .{ .x = 2.6, .y = 0.55, .z = 0.8 }, .color = rgb(0.40, 0.31, 0.19) },
+    .{ .center = .{ .x = 15, .y = 0.7, .z = 3 }, .half_extents = .{ .x = 2.0, .y = 0.7, .z = 1.2 }, .color = rgb(0.31, 0.40, 0.29) },
+};
+
+const stair_placeholder = SceneBox{
+    .center = .{ .x = 0, .y = 1.0, .z = -14 },
+    .half_extents = .{ .x = 4.0, .y = 1.0, .z = 2.0 },
+    .color = .{ .x = 0.35, .y = 0.78, .z = 1.0, .w = 0.32 },
+};
+
+const static_instance_count = visible: {
+    var count: usize = level.tread_count;
+    for (level.boxes) |box| count += @intFromBool(box.visible);
+    break :visible count;
 };
 
 const Instance = extern struct {
@@ -157,7 +180,7 @@ const GameState = struct {
 var game: GameState = .{};
 
 fn initialCharacter() controller.State {
-    var character = controller.State.init(.{ .x = 0, .y = 0.9, .z = 0 });
+    var character = controller.State.init(.{ .x = 0, .y = 0.9, .z = 23 });
     // The initial camera looks toward -Z, so the character must face -Z too for
     // the shoulder camera to begin behind it rather than in front of it.
     character.yaw = std.math.pi;
@@ -255,16 +278,23 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
 fn initPhysics() void {
     var world_def = b3.b3DefaultWorldDef();
     game.world = b3.b3CreateWorld(&world_def);
-    for (scene_boxes) |box| {
-        var body_def = b3.b3DefaultBodyDef();
-        body_def.position = .{ .x = box.center.x, .y = box.center.y, .z = box.center.z };
-        const body = b3.b3CreateBody(game.world, &body_def);
-        var shape_def = b3.b3DefaultShapeDef();
-        shape_def.filter.categoryBits = controller.level_category;
-        shape_def.filter.maskBits = controller.player_query_category | camera.camera_query_category;
-        var hull = b3.b3MakeBoxHull(box.half_extents.x, box.half_extents.y, box.half_extents.z);
-        _ = b3.b3CreateHullShape(body, &shape_def, &hull.base);
-    }
+    for (level.boxes) |box| if (box.collidable) addStaticBox(box);
+    for (level.staircases) |staircase| addStaticBox(level.collisionRamp(staircase));
+}
+
+fn addStaticBox(box: level.Box) void {
+    var body_def = b3.b3DefaultBodyDef();
+    body_def.position = .{ .x = box.center.x, .y = box.center.y, .z = box.center.z };
+    // Build the X-axis quaternion locally. The generated Zig wrapper for
+    // b3MakeQuatFromAxisAngle references Box3D's non-exported assert helper.
+    const half_pitch = box.pitch * 0.5;
+    body_def.rotation = .{ .v = .{ .x = @sin(half_pitch) }, .s = @cos(half_pitch) };
+    const body = b3.b3CreateBody(game.world, &body_def);
+    var shape_def = b3.b3DefaultShapeDef();
+    shape_def.filter.categoryBits = controller.level_category;
+    shape_def.filter.maskBits = controller.player_query_category | camera.camera_query_category;
+    var hull = b3.b3MakeBoxHull(box.half_extents.x, box.half_extents.y, box.half_extents.z);
+    _ = b3.b3CreateHullShape(body, &shape_def, &hull.base);
 }
 
 fn initRenderer() void {
@@ -284,8 +314,21 @@ fn initRenderer() void {
     game.render.vertex_buffer = sg.makeBuffer(sshape.vertexBufferDesc(builder));
     game.render.index_buffer = sg.makeBuffer(sshape.indexBufferDesc(builder));
 
-    var instances: [scene_boxes.len]Instance = undefined;
-    for (scene_boxes, 0..) |box, i| instances[i] = makeInstance(box.center, box.half_extents, 0, box.color);
+    var instances: [static_instance_count]Instance = undefined;
+    var instance_count: usize = 0;
+    for (level.boxes) |box| {
+        if (!box.visible) continue;
+        instances[instance_count] = makePitchedInstance(box.center, box.half_extents, box.pitch, box.color);
+        instance_count += 1;
+    }
+    for (level.staircases) |staircase| {
+        for (0..staircase.steps) |step| {
+            const box = level.tread(staircase, step);
+            instances[instance_count] = makePitchedInstance(box.center, box.half_extents, box.pitch, box.color);
+            instance_count += 1;
+        }
+    }
+    std.debug.assert(instance_count == static_instance_count);
     game.render.level_instances = sg.makeBuffer(.{ .data = sg.asRange(&instances), .label = "character-level-instances" });
     game.render.character_instance = sg.makeBuffer(.{
         .size = @sizeOf(Instance),
@@ -367,7 +410,7 @@ fn initRenderer() void {
 
     const light_position = Vec3{ .x = 20, .y = 32, .z = -24 };
     const light_view = Mat4.lookAtRh(light_position, .{}, .{ .y = 1 });
-    const light_projection = Mat4.orthoOffCenterRh(-30, 30, -30, 30, 1, 80);
+    const light_projection = Mat4.orthoOffCenterRh(-38, 38, -38, 38, 1, 100);
     game.render.light_view_projection = Mat4.mul(light_view, light_projection);
     game.render.pass_action.colors[0] = .{ .load_action = .CLEAR, .clear_value = .{ .r = 0.035, .g = 0.045, .b = 0.055, .a = 1 } };
 }
@@ -386,7 +429,7 @@ fn draw(position: b3.b3Pos) void {
     sg.beginPass(game.render.shadow_pass);
     sg.applyPipeline(game.render.shadow_pipeline);
     sg.applyUniforms(shd.UB_shadow_vs_params, sg.asRange(&shadow_params));
-    drawInstances(game.render.level_instances, game.render.box_range, 0, scene_boxes.len, false);
+    drawInstances(game.render.level_instances, game.render.box_range, 0, static_instance_count, false);
     drawInstances(game.render.character_instance, game.render.box_range, 0, 1, false);
     sg.endPass();
 
@@ -397,18 +440,27 @@ fn draw(position: b3.b3Pos) void {
     const fs_params: shd.DisplayFsParams = .{
         .light_direction = Vec3.normalized(.{ .x = 20, .y = 32, .z = -24 }),
         .eye_position = game.camera.eye,
+        // xyz is fixture position; w is its attenuation radius.
+        .indoor_light_0 = .{ .x = 0, .y = 4.5, .z = 12, .w = 18 },
+        .indoor_light_1 = .{ .x = -19, .y = 4.2, .z = 0, .w = 17 },
+        .indoor_light_2 = .{ .x = 19, .y = 4.2, .z = 0, .w = 17 },
+        .indoor_light_3 = .{ .x = 0, .y = 10, .z = 10, .w = 18 },
+        .indoor_light_4 = .{ .x = -19, .y = 9.7, .z = -3, .w = 17 },
+        .indoor_light_5 = .{ .x = 19, .y = 9.7, .z = -3, .w = 17 },
+        .indoor_light_6 = .{ .x = -17, .y = 15, .z = -11, .w = 16 },
+        .indoor_light_7 = .{ .x = 17, .y = 15, .z = -11, .w = 16 },
     };
 
     sg.beginPass(.{ .action = game.render.pass_action, .swapchain = sglue.swapchain() });
     sg.applyPipeline(game.render.display_pipeline);
     sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));
     sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
-    drawInstances(game.render.level_instances, game.render.box_range, 0, scene_boxes.len, true);
+    drawInstances(game.render.level_instances, game.render.box_range, 0, static_instance_count, true);
     drawInstances(game.render.character_instance, game.render.box_range, 0, 1, true);
+    sg.applyPipeline(game.render.debug_pipeline);
+    sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));
+    sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
     if (game.debug.draw_physics) {
-        sg.applyPipeline(game.render.debug_pipeline);
-        sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));
-        sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
         drawInstances(game.render.capsule_instances, game.render.capsule_cylinder_range, 0, 1, true);
         drawInstances(game.render.capsule_instances, game.render.capsule_sphere_range, @sizeOf(Instance), 2, true);
     }
@@ -499,6 +551,18 @@ fn blendingTargets() [8]sg.ColorTargetState {
 
 fn makeInstance(center: Vec3, half: Vec3, yaw: f32, color: Vec4) Instance {
     return makeScaledInstance(center, Vec3.scale(half, 2), yaw, color);
+}
+
+fn makePitchedInstance(center: Vec3, half: Vec3, pitch: f32, color: Vec4) Instance {
+    const scale = Vec3.scale(half, 2);
+    const c = @cos(pitch);
+    const s = @sin(pitch);
+    return .{
+        .x = .{ .x = scale.x, .w = center.x },
+        .y = .{ .y = scale.y * c, .z = -scale.z * s, .w = center.y },
+        .z = .{ .y = scale.y * s, .z = scale.z * c, .w = center.z },
+        .color = color,
+    };
 }
 
 fn makeScaledInstance(center: Vec3, scale: Vec3, yaw: f32, color: Vec4) Instance {

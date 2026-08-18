@@ -1,6 +1,7 @@
 @header const math = @import("../math.zig")
 @ctype mat4 math.Mat4
 @ctype vec3 math.Vec3
+@ctype vec4 math.Vec4
 
 @block shadow_util
 float sample_shadow_pcf(texture2D tex, sampler smp, vec3 position) {
@@ -77,6 +78,14 @@ void main() {
 layout(binding = 1) uniform display_fs_params {
     vec3 light_direction;
     vec3 eye_position;
+    vec4 indoor_light_0;
+    vec4 indoor_light_1;
+    vec4 indoor_light_2;
+    vec4 indoor_light_3;
+    vec4 indoor_light_4;
+    vec4 indoor_light_5;
+    vec4 indoor_light_6;
+    vec4 indoor_light_7;
 };
 
 layout(binding = 0) uniform texture2D shadow_map;
@@ -89,11 +98,20 @@ in vec3 world_position;
 in vec3 world_normal;
 out vec4 frag_color;
 
+float indoor_light(vec4 fixture, vec3 normal) {
+    vec3 to_light = fixture.xyz - world_position;
+    float distance_squared = dot(to_light, to_light);
+    float radius_squared = fixture.w * fixture.w;
+    float attenuation = max(1.0 - distance_squared / radius_squared, 0.0);
+    attenuation *= attenuation;
+    return max(dot(normal, normalize(to_light)), 0.0) * attenuation;
+}
+
 void main() {
     vec3 n = normalize(world_normal);
     vec3 l = normalize(light_direction);
     float n_dot_l = dot(n, l);
-    float intensity = 0.25;
+    float intensity = 0.12;
     float specular = 0.0;
 
     if (n_dot_l > 0.0) {
@@ -108,7 +126,15 @@ void main() {
         specular = pow(max(dot(reflected, view_direction), 0.0), 16.0) * n_dot_l * shadow;
     }
 
-    vec3 linear_color = vec3(specular) + intensity * color;
+    // A small fixed fixture set is cheaper and easier to reason about than a
+    // general light manager at this blockout stage. The w component is radius.
+    float warm = indoor_light(indoor_light_0, n) + indoor_light(indoor_light_1, n)
+        + indoor_light(indoor_light_2, n) + indoor_light(indoor_light_3, n)
+        + indoor_light(indoor_light_4, n) + indoor_light(indoor_light_5, n)
+        + indoor_light(indoor_light_6, n) + indoor_light(indoor_light_7, n);
+    vec3 indoor_tint = vec3(1.0, 0.78, 0.52);
+
+    vec3 linear_color = vec3(specular) + intensity * color + warm * indoor_tint * color;
     frag_color = vec4(pow(linear_color, vec3(1.0 / 2.2)), alpha);
 }
 @end
