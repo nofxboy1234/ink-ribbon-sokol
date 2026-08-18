@@ -17,6 +17,7 @@ const sg = sokol.gfx;
 const sglue = sokol.glue;
 const slog = sokol.log;
 const sshape = sokol.shape;
+const sdtx = sokol.debugtext;
 const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
 const Mat4 = math.Mat4;
@@ -123,6 +124,14 @@ fn initialCharacter() controller.State {
 
 fn init() callconv(.c) void {
     sg.setup(.{ .environment = sglue.environment(), .logger = .{ .func = slog.func } });
+    sdtx.setup(.{
+        .fonts = init: {
+            var fonts: [8]sdtx.FontDesc = @splat(.{});
+            fonts[0] = sdtx.fontKc853();
+            break :init fonts;
+        },
+        .logger = .{ .func = slog.func },
+    });
     initPhysics();
     initRenderer();
     sapp.lockMouse(true);
@@ -166,6 +175,7 @@ fn frame() callconv(.c) void {
 fn cleanup() callconv(.c) void {
     b3.b3DestroyWorld(game.world);
     game.world = b3.b3_nullWorldId;
+    sdtx.shutdown();
     sg.shutdown();
 }
 
@@ -271,8 +281,20 @@ fn draw(position: b3.b3Pos) void {
     sg.applyUniforms(shd.UB_fs_params, sg.asRange(&fs_params));
     drawInstances(game.render.level_instances, scene_boxes.len);
     drawInstances(game.render.character_instance, 1);
+    drawFps();
     sg.endPass();
     sg.commit();
+}
+
+fn drawFps() void {
+    const frame_duration = sapp.frameDuration();
+    const fps = if (frame_duration > 0) 1.0 / frame_duration else 0;
+    const text_width = 11.0; // "FPS: " plus a six-character numeric field.
+    sdtx.canvas(sapp.widthf(), sapp.heightf());
+    sdtx.pos(@max(1.0, sapp.widthf() / 8.0 - text_width - 1.0), 1.0);
+    sdtx.color3b(255, 255, 255);
+    sdtx.print("FPS: {d:>6.1}", .{fps});
+    sdtx.draw();
 }
 
 fn drawInstances(instance_buffer: sg.Buffer, count: usize) void {
