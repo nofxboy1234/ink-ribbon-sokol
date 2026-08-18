@@ -6,3 +6,34 @@ optimize
 efficient
 best practices - read docs and code comments
 idiomatic zig, sokol, box3d
+
+ink-ribbon:
+dracula & oxocarbon colours
+route planning
+rectangle character
+hunter character
+A* search
+save rooms
+randomly generated maps
+sign up to save routes and maps
+index page shows player on map (top-down)
+web app has charcoal colour background with past routes drawn in dracula/oxocarbon colours (purple etc)
+user can list best times on maps
+start zooms down to player 3rd person view (re2)
+objective is to safely get to a save room
+hunter character (mrX) searches for player
+player can zoom out to map view
+map shows shortest & safest route to the save room
+hunter can change that routing as it is moving all the time towards the player, and is an obstacle to avoid
+if hunter touches player, game over
+
+items
+item dependencies - door -> key etc
+player selects items to pick up, and target save room
+when player reaches save room successfully with all items, regenerate a new joining map section with a target save room
+map pieces
+muliplayer
+see other users routes in the background in web app
+see other users best times on maps
+
+
