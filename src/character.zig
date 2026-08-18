@@ -91,6 +91,10 @@ const InputState = struct {
     }
 };
 
+const DebugState = struct {
+    draw_physics: bool = true,
+};
+
 const RenderState = struct {
     vertex_buffer: sg.Buffer = .{},
     index_buffer: sg.Buffer = .{},
@@ -114,6 +118,7 @@ const GameState = struct {
     world: b3.b3WorldId = b3.b3_nullWorldId,
     clock: Clock = .{},
     input: InputState = .{},
+    debug: DebugState = .{},
     character_config: controller.Config = .{},
     character: controller.State = initialCharacter(),
     mover_scratch: controller.MoverScratch = .{},
@@ -200,6 +205,9 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 .A => game.input.left = down,
                 .D => game.input.right = down,
                 .LEFT_SHIFT, .RIGHT_SHIFT => game.input.run = down,
+                .F1 => if (down and !value.key_repeat) {
+                    game.debug.draw_physics = !game.debug.draw_physics;
+                },
                 .ESCAPE => if (down) sapp.lockMouse(false),
                 else => {},
             }
@@ -345,30 +353,7 @@ fn draw(position: b3.b3Pos) void {
         rgb(0.20, 0.694, 1.0), // Oxocarbon blue: #33B1FF
     );
     sg.updateBuffer(game.render.character_instance, sg.asRange(&instance));
-    const capsule_radius = game.character_config.capsule_radius;
-    const half_segment = game.character_config.capsule_half_segment;
-    const capsule_color = Vec4{ .x = 0.25, .y = 1.0, .z = 0.55, .w = 0.32 };
-    const capsule_instances = [_]Instance{
-        makeScaledInstance(
-            .{ .x = position.x, .y = position.y, .z = position.z },
-            .{ .x = capsule_radius, .y = 2 * half_segment, .z = capsule_radius },
-            0,
-            capsule_color,
-        ),
-        makeScaledInstance(
-            .{ .x = position.x, .y = position.y - half_segment, .z = position.z },
-            .{ .x = capsule_radius, .y = capsule_radius, .z = capsule_radius },
-            0,
-            capsule_color,
-        ),
-        makeScaledInstance(
-            .{ .x = position.x, .y = position.y + half_segment, .z = position.z },
-            .{ .x = capsule_radius, .y = capsule_radius, .z = capsule_radius },
-            0,
-            capsule_color,
-        ),
-    };
-    sg.updateBuffer(game.render.capsule_instances, sg.asRange(&capsule_instances));
+    if (game.debug.draw_physics) updateCapsuleInstances(position);
 
     const shadow_params: shd.ShadowVsParams = .{ .light_view_projection = game.render.light_view_projection };
     sg.beginPass(game.render.shadow_pass);
@@ -393,14 +378,43 @@ fn draw(position: b3.b3Pos) void {
     sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
     drawInstances(game.render.level_instances, game.render.box_range, 0, scene_boxes.len, true);
     drawInstances(game.render.character_instance, game.render.box_range, 0, 1, true);
-    sg.applyPipeline(game.render.debug_pipeline);
-    sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));
-    sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
-    drawInstances(game.render.capsule_instances, game.render.capsule_cylinder_range, 0, 1, true);
-    drawInstances(game.render.capsule_instances, game.render.capsule_sphere_range, @sizeOf(Instance), 2, true);
+    if (game.debug.draw_physics) {
+        sg.applyPipeline(game.render.debug_pipeline);
+        sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));
+        sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
+        drawInstances(game.render.capsule_instances, game.render.capsule_cylinder_range, 0, 1, true);
+        drawInstances(game.render.capsule_instances, game.render.capsule_sphere_range, @sizeOf(Instance), 2, true);
+    }
     drawFps();
     sg.endPass();
     sg.commit();
+}
+
+fn updateCapsuleInstances(position: b3.b3Pos) void {
+    const radius = game.character_config.capsule_radius;
+    const half_segment = game.character_config.capsule_half_segment;
+    const color = Vec4{ .x = 0.25, .y = 1.0, .z = 0.55, .w = 0.32 };
+    const instances = [_]Instance{
+        makeScaledInstance(
+            .{ .x = position.x, .y = position.y, .z = position.z },
+            .{ .x = radius, .y = 2 * half_segment, .z = radius },
+            0,
+            color,
+        ),
+        makeScaledInstance(
+            .{ .x = position.x, .y = position.y - half_segment, .z = position.z },
+            .{ .x = radius, .y = radius, .z = radius },
+            0,
+            color,
+        ),
+        makeScaledInstance(
+            .{ .x = position.x, .y = position.y + half_segment, .z = position.z },
+            .{ .x = radius, .y = radius, .z = radius },
+            0,
+            color,
+        ),
+    };
+    sg.updateBuffer(game.render.capsule_instances, sg.asRange(&instances));
 }
 
 fn drawFps() void {
