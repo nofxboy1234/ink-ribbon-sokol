@@ -11,6 +11,7 @@ idiomatic zig, sokol, box3d
 ink-ribbon:
 A* search
 route planning
+record route
 dracula & oxocarbon colours
 "star constellation" view of maps
 rectangle character (re2 tofu)
@@ -22,7 +23,7 @@ user can play without signing up
 sign up to save routes and maps
 web app has charcoal colour background with past routes drawn in dracula/oxocarbon colours (purple etc)
 user can list best times on maps
-start zooms down to player 3rd person view (re2)
+start zooms down to player 3rd person view (re2 tofu)
 objective is to safely get to a save room
 hunter character searches for player
 player can zoom out to map view
@@ -35,6 +36,8 @@ player has walk and sprint speed
 hunter has walk and sprint speed
 player speeds are faster than the hunter speeds but turning corners, opening doors, slow player down.
 
+"re2 tofu-like" squishy animations for turning head, moving etc
+sounds
 items
 item dependencies - door -> key etc
 player selects items to pick up, and target save room
