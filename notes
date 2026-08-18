@@ -43,7 +43,4 @@ item dependencies - door -> key etc
 player selects items to pick up, and target save room
 when player reaches save room successfully with all items, regenerate a new joining map section with a target save room
 map pieces
-muliplayer
-see other users routes in the background in web app
-see other users best times on maps
 
