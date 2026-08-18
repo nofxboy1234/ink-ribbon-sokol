@@ -24,6 +24,7 @@ ALLOWED_KEYS = {
     "left", "right", "up", "down",
 }
 MAX_HOLD_SECONDS = 30.0
+MAX_LOOK_DELTA = 2000
 
 
 def fail(message: str) -> None:
@@ -127,6 +128,10 @@ class XTest:
         self.xtst.XTestFakeKeyEvent(self.display, self.key_code(name), int(down), 0)
         self.flush()
 
+    def move_mouse(self, dx: int, dy: int) -> None:
+        self.xtst.XTestFakeRelativeMotionEvent(self.display, dx, dy, 0)
+        self.flush()
+
 
 def parse_duration(text: str) -> float:
     try:
@@ -142,6 +147,16 @@ def parse_key(text: str) -> str:
     value = text.lower()
     if value not in ALLOWED_KEYS:
         fail(f"Unsupported key {text!r}; allowed: {', '.join(sorted(ALLOWED_KEYS))}")
+    return value
+
+
+def parse_look_delta(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        fail(f"Invalid mouse delta: {text!r}")
+    if abs(value) > MAX_LOOK_DELTA:
+        fail(f"Mouse delta magnitude must be at most {MAX_LOOK_DELTA}")
     return value
 
 
@@ -221,6 +236,17 @@ def sequence(items: list[str]) -> None:
         driver.close()
 
 
+def look(dx: int, dy: int) -> None:
+    owned_pid()
+    driver = XTest()
+    try:
+        driver.focus_game()
+        driver.move_mouse(dx, dy)
+        time.sleep(0.25)
+    finally:
+        driver.close()
+
+
 def screenshot(path_text: str) -> None:
     owned_pid()
     path = Path(path_text).expanduser().resolve()
@@ -267,6 +293,7 @@ def usage() -> None:
         "usage:\n"
         "  tools/native-input-test launch\n"
         "  tools/native-input-test hold KEY SECONDS\n"
+        "  tools/native-input-test look DX DY\n"
         "  tools/native-input-test sequence KEY:SECONDS [...]\n"
         "  tools/native-input-test screenshot PATH\n"
         "  tools/native-input-test check\n"
@@ -285,6 +312,8 @@ def main() -> None:
         launch()
     elif command == "hold" and len(args) == 2:
         hold(parse_key(args[0]), parse_duration(args[1]))
+    elif command == "look" and len(args) == 2:
+        look(parse_look_delta(args[0]), parse_look_delta(args[1]))
     elif command == "sequence":
         sequence(args)
     elif command == "screenshot" and len(args) == 1:

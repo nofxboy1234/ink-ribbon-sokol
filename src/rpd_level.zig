@@ -37,6 +37,7 @@ const wall_color = rgba(0.43, 0.44, 0.46, 1);
 const hall_color = rgba(0.51, 0.50, 0.48, 1);
 const roof_color = rgba(0.13, 0.14, 0.15, 1);
 const stair_color = rgba(0.42, 0.37, 0.31, 1);
+const oxocarbon_pink = rgba(1.0, 0.49, 0.71, 1);
 
 pub const boxes = [_]Box{
     // ---------------------------------------------------------------------
@@ -94,7 +95,8 @@ pub const boxes = [_]Box{
     wallZ(-20, 0, -13, 5, wall_color),
     wallX(-23.5, 0, 6, 3.5, wall_color),
     wallX(-23.5, 0, -3, 3.5, wall_color),
-    solid(-17.5, 0.65, 5, 3.8, 0.65, 0.7, rgba(0.39, 0.27, 0.18, 1)),
+    // A distinct landmark desk inside the 1F West Office.
+    solid(-17.5, 0.65, 5, 3.8, 0.65, 0.7, oxocarbon_pink),
     solid(-23, 1.0, -12, 0.7, 1.0, 3.3, rgba(0.24, 0.35, 0.42, 1)),
 
     // East: East Office, Press Room, bathroom/interrogation side, Watchman's

@@ -26,11 +26,16 @@ uses the current native source.
 ```sh
 tools/native-input-test launch
 tools/native-input-test hold a 2.05
+tools/native-input-test look -628 0
 tools/native-input-test screenshot /tmp/leg-1.png
 tools/native-input-test sequence w:4.0 w:2.5 w:1.0 w:1.5
 tools/native-input-test status
 tools/native-input-test close
 ```
+
+`look DX DY` injects a bounded relative mouse movement after safely acquiring
+mouse lock. This lets navigation turn the third-person camera before moving so
+the character walks forward with the camera behind them.
 
 Granting persistent permission for the narrow `tools/native-input-test`
 command prefix allows screenshot-driven input loops without a new desktop

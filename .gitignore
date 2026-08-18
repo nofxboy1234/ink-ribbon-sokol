@@ -4,3 +4,5 @@ zig-*/
 .zig-*/
 NUL
 .toolchain/
+__pycache__/
+*.py[cod]
