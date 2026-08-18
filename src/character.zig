@@ -503,6 +503,8 @@ pub fn main() void {
         .event_cb = event,
         .width = 1280,
         .height = 720,
+        // Sokol implements desktop fullscreen as a borderless fullscreen window.
+        .fullscreen = true,
         .sample_count = 4,
         .icon = .{ .sokol_default = true },
         .window_title = "Character Mover",
