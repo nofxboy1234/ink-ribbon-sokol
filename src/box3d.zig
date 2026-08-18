@@ -65,10 +65,12 @@ const box_size: f32 = 1.5;
 // more GPU memory and rendering work.
 const shadow_map_size = 2048;
 
-// Physics timing values. The accumulator below aims for a 4 ms simulation tick
-// (250 Hz), even though rendering normally runs around 60 Hz.
-const usec_per_sec: f64 = 1_000_000.0;
-const physics_tick_usec: i64 = 4_000;
+// Box3D recommends a fixed 60 Hz world tick with four internal solver sub-steps.
+// Limiting accumulated time prevents an extended pause from causing an
+// unbounded number of catch-up steps (the usual fixed-timestep "spiral of death").
+const physics_tick_sec: f64 = 1.0 / 60.0;
+const physics_sub_step_count: i32 = 4;
+const max_frame_delta_sec: f64 = 0.25;
 
 // Add a new box or ball four times per second.
 const spawn_interval_sec: f64 = 0.25;
@@ -213,7 +215,7 @@ const State = struct {
     profiling: struct {
         physics_world_step_time: u64 = 0,
         copy_transforms_time: u64 = 0,
-        sub_steps_per_frame: i32 = 0,
+        world_steps_per_frame: i32 = 0,
         num_awake_bodies: i32 = 0,
     } = .{},
     ui: struct {
@@ -224,8 +226,8 @@ const State = struct {
     physics: struct {
         world: b3.b3WorldId = b3.b3_nullWorldId,
         ground: b3.b3BodyId = b3.b3_nullBodyId,
-        // Carries fractional fixed-timestep time into the next rendered frame.
-        tick_error_us: i64 = 0,
+        // Carries time shorter than one fixed physics tick into the next frame.
+        tick_accumulator_sec: f64 = 0.0,
         num_bodies: usize = 0,
         bodies: [max_shapes]b3.b3BodyId = @splat(b3.b3_nullBodyId),
     } = .{},
@@ -277,16 +279,21 @@ fn frame() callconv(.c) void {
     // Turn camera controls into a current eye position.
     state.camera.update();
 
+    // Discard excess wall time after a breakpoint, suspended tab, or long stall.
+    // Catching all of it up at once could make simulation work grow without bound.
+    const frame_delta_sec = @min(sapp.frameDuration(), max_frame_delta_sec);
+
     // Spawn bodies according to elapsed real time, not according to frame count.
-    // This keeps the spawn rate stable at different refresh rates.
-    state.spawn_timer -= sapp.frameDuration();
-    if (state.spawn_timer <= 0.0) {
+    // The loop catches up the spawn schedule when one frame spans several spawn
+    // intervals, subject to the same bounded frame delta used by physics.
+    state.spawn_timer -= frame_delta_sec;
+    while (state.spawn_timer <= 0.0 and state.physics.num_bodies < max_shapes) {
         state.spawn_timer += spawn_interval_sec;
         physicsAddBody();
     }
 
     // Advance Box3D, copy moved body transforms, upload them, and build matrices.
-    physicsUpdate();
+    physicsUpdate(frame_delta_sec);
     updateInstanceBuffers();
     updateMatrices();
     drawUi();
@@ -332,6 +339,8 @@ fn frame() callconv(.c) void {
 fn cleanup() callconv(.c) void {
     // Release the physics world and helper systems before the graphics device.
     b3.b3DestroyWorld(state.physics.world);
+    state.physics.world = b3.b3_nullWorldId;
+    state.physics.ground = b3.b3_nullBodyId;
     sgimgui.shutdown();
     sappimgui.shutdown();
     simgui.shutdown();
@@ -568,38 +577,38 @@ fn rowAsVec4(row: [4]f32) Vec4 {
 }
 
 // Advance physics and synchronize the bodies that moved back to render data.
-fn physicsUpdate() void {
-    // Convert the rendered frame duration to integer microseconds and accumulate
-    // it. Integer accumulation prevents tiny floating-point timing losses.
-    const dt_sec = sapp.frameDuration();
-    const dt_usec: i64 = @intFromFloat(dt_sec * usec_per_sec);
-    state.physics.tick_error_us += dt_usec;
+fn physicsUpdate(frame_delta_sec: f64) void {
+    // Rendering only contributes elapsed time. Box3D always receives the same
+    // timestep, so changing refresh rate does not change the simulation step.
+    state.physics.tick_accumulator_sec += frame_delta_sec;
 
-    // Work out how many complete 4 ms physics sub-steps fit in the accumulated
-    // time, keeping the remainder for the next frame. Smaller physics steps make
-    // collision solving more stable than one large, variable step.
-    const num_sub_steps = @divTrunc(state.physics.tick_error_us, physics_tick_usec);
-    state.physics.tick_error_us -= num_sub_steps * physics_tick_usec;
+    // Execute every complete fixed tick and retain the fractional remainder for
+    // the next rendered frame. A fast frame may execute none; a slow frame may
+    // execute several to catch the simulation up to elapsed real time.
+    var world_step_time: u64 = 0;
+    var copy_transforms_time: u64 = 0;
+    var num_steps: i32 = 0;
+    while (state.physics.tick_accumulator_sec >= physics_tick_sec) {
+        var start = stm.now();
+        b3.b3World_Step(
+            state.physics.world,
+            @floatCast(physics_tick_sec),
+            physics_sub_step_count,
+        );
+        world_step_time += stm.since(start);
 
-    // Measure and execute the Box3D world step.
-    var start = stm.now();
-    b3.b3World_Step(state.physics.world, @floatCast(dt_sec), @intCast(num_sub_steps));
-    state.profiling.physics_world_step_time = stm.since(start);
-    state.profiling.sub_steps_per_frame = @intCast(num_sub_steps);
+        // Body events belong to the most recent world step and are transient.
+        // Consume them before another step replaces the event buffer.
+        start = stm.now();
+        copyBodyMoveEvents();
+        copy_transforms_time += stm.since(start);
 
-    // Box3D emits move events only for bodies whose transforms changed. Updating
-    // those records is cheaper than scanning and copying every body every frame.
-    start = stm.now();
-    const events = b3.b3World_GetBodyEvents(state.physics.world);
-    for (0..@intCast(events.moveCount)) |index| {
-        const event = &events.moveEvents[index];
-
-        // userData points directly at this body's stable InstanceData record.
-        // Recover that typed pointer and update the GPU-bound transform.
-        const instance: *InstanceData = @ptrCast(@alignCast(event.userData.?));
-        copyInstanceTransform(instance, event.transform);
+        state.physics.tick_accumulator_sec -= physics_tick_sec;
+        num_steps += 1;
     }
-    state.profiling.copy_transforms_time = stm.since(start);
+    state.profiling.physics_world_step_time = world_step_time;
+    state.profiling.copy_transforms_time = copy_transforms_time;
+    state.profiling.world_steps_per_frame = num_steps;
     state.profiling.num_awake_bodies = b3.b3World_GetAwakeBodyCount(state.physics.world);
 
     // A sleeping body is at rest, so Box3D can skip solving it until something
@@ -609,6 +618,20 @@ fn physicsUpdate() void {
             const instance: *InstanceData = @ptrCast(@alignCast(b3.b3Body_GetUserData(body).?));
             instance.color.w = if (b3.b3Body_IsAwake(body)) 0.0 else 1.0;
         }
+    }
+}
+
+// Box3D emits a cache-friendly move-event array after each world step. Consume
+// it immediately because the data is transient and replaced by the next step.
+fn copyBodyMoveEvents() void {
+    const events = b3.b3World_GetBodyEvents(state.physics.world);
+    for (0..@intCast(events.moveCount)) |index| {
+        const event = &events.moveEvents[index];
+
+        // userData points directly at this body's stable InstanceData record.
+        // Recover that typed pointer and update the GPU-bound transform.
+        const instance: *InstanceData = @ptrCast(@alignCast(event.userData.?));
+        copyInstanceTransform(instance, event.transform);
     }
 }
 
@@ -969,7 +992,8 @@ fn drawUi() void {
         _ = ig.igCheckbox("Show sleeping", &state.ui.show_sleeping);
         uiText("Total bodies: {d}", .{state.physics.num_bodies});
         uiText("Awake bodies: {d}", .{state.profiling.num_awake_bodies});
-        uiText("Sub-steps per frame: {d}", .{state.profiling.sub_steps_per_frame});
+        uiText("World steps per frame: {d}", .{state.profiling.world_steps_per_frame});
+        uiText("Solver sub-steps per world step: {d}", .{physics_sub_step_count});
         uiText("World Step Time: {d:.3}ms", .{stm.ms(state.profiling.physics_world_step_time)});
         uiText("Copy Transforms Time: {d:.3}ms", .{stm.ms(state.profiling.copy_transforms_time)});
     }
