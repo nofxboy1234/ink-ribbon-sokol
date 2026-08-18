@@ -64,6 +64,7 @@ const Options = struct {
     anti_aliasing_mod: *Build.Module,
     basic_lighting_mod: *Build.Module,
     box3d_mod: *Build.Module,
+    character_mod: *Build.Module,
     colors_mod: *Build.Module,
     cube_mod: *Build.Module,
     depth_testing_mod: *Build.Module,
@@ -87,6 +88,7 @@ const Options = struct {
     cimgui_lib: *Build.Step.Compile,
     cgltf_lib: *Build.Step.Compile,
     box3d_shdc_step: *Build.Step,
+    character_shdc_step: *Build.Step,
     basic_lighting_shdc_step: *Build.Step,
     colors_shdc_step: *Build.Step,
     cube_shdc_step: *Build.Step,
@@ -240,6 +242,19 @@ pub fn build(b: *Build) !void {
         .shdc_dep = dep_shdc,
         .input = "src/box3d.glsl",
         .output = "src/generated/box3d_shader.zig",
+        .slang = .{
+            .glsl410 = true,
+            .glsl300es = true,
+            .hlsl5 = true,
+            .metal_macos = true,
+            .wgsl = true,
+        },
+        .reflection = true,
+    });
+    const character_shdc_step = try sokol.shdc.createSourceFile(b, .{
+        .shdc_dep = dep_shdc,
+        .input = "src/character.glsl",
+        .output = "src/generated/character_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -520,6 +535,16 @@ pub fn build(b: *Build) !void {
             .{ .name = "box3d", .module = box3d_bindings },
         },
     });
+    const character_mod = b.createModule(.{
+        .root_source_file = b.path("src/character.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "ink_ribbon_sokol", .module = mod_lib },
+            .{ .name = "sokol", .module = dep_sokol.module("sokol") },
+            .{ .name = "box3d", .module = box3d_bindings },
+        },
+    });
     const basic_lighting_mod = b.createModule(.{
         .root_source_file = b.path("src/basic_lighting.zig"),
         .target = target,
@@ -698,6 +723,7 @@ pub fn build(b: *Build) !void {
         .anti_aliasing_mod = anti_aliasing_mod,
         .basic_lighting_mod = basic_lighting_mod,
         .box3d_mod = box3d_mod,
+        .character_mod = character_mod,
         .colors_mod = colors_mod,
         .cube_mod = cube_mod,
         .depth_testing_mod = depth_testing_mod,
@@ -721,6 +747,7 @@ pub fn build(b: *Build) !void {
         .cimgui_lib = cimgui_lib,
         .cgltf_lib = cgltf_lib,
         .box3d_shdc_step = box3d_shdc_step,
+        .character_shdc_step = character_shdc_step,
         .basic_lighting_shdc_step = basic_lighting_shdc_step,
         .colors_shdc_step = colors_shdc_step,
         .cube_shdc_step = cube_shdc_step,
@@ -864,6 +891,13 @@ fn buildNative(b: *Build, opts: Options) void {
     box3d_exe.step.dependOn(opts.box3d_shdc_step);
     b.installArtifact(box3d_exe);
 
+    const character_exe = b.addExecutable(.{
+        .name = "ink_ribbon_character",
+        .root_module = opts.character_mod,
+    });
+    character_exe.step.dependOn(opts.character_shdc_step);
+    b.installArtifact(character_exe);
+
     const colors_exe = b.addExecutable(.{
         .name = "ink_ribbon_colors",
         .root_module = opts.colors_mod,
@@ -986,6 +1020,10 @@ fn buildNative(b: *Build, opts: Options) void {
     b.step("run-box3d", "Run the Box3D example").dependOn(&run_box3d_cmd.step);
     b.step("run", "Run the Box3D example").dependOn(&run_box3d_cmd.step);
 
+    const run_character_cmd = b.addRunArtifact(character_exe);
+    run_character_cmd.step.dependOn(&character_exe.step);
+    b.step("run-character", "Run the character mover scene").dependOn(&run_character_cmd.step);
+
     const run_advanced_data_cmd = b.addRunArtifact(advanced_data_exe);
     run_advanced_data_cmd.step.dependOn(&advanced_data_exe.step);
     b.step("run-advanced-data", "Run the LearnOpenGL Advanced Data example").dependOn(&run_advanced_data_cmd.step);
@@ -1087,6 +1125,12 @@ fn buildNative(b: *Build, opts: Options) void {
     });
     box3d_tests.step.dependOn(opts.box3d_shdc_step);
     const run_box3d_tests = b.addRunArtifact(box3d_tests);
+
+    const character_tests = b.addTest(.{
+        .root_module = opts.character_mod,
+    });
+    character_tests.step.dependOn(opts.character_shdc_step);
+    const run_character_tests = b.addRunArtifact(character_tests);
 
     const advanced_data_tests = b.addTest(.{
         .root_module = opts.advanced_data_mod,
@@ -1207,6 +1251,7 @@ fn buildNative(b: *Build, opts: Options) void {
     test_step.dependOn(&run_anti_aliasing_tests.step);
     test_step.dependOn(&run_basic_lighting_tests.step);
     test_step.dependOn(&run_box3d_tests.step);
+    test_step.dependOn(&run_character_tests.step);
     test_step.dependOn(&run_colors_tests.step);
     test_step.dependOn(&run_cube_tests.step);
     test_step.dependOn(&run_depth_testing_tests.step);
@@ -1267,6 +1312,11 @@ fn buildWeb(b: *Build, opts: Options) !void {
         .root_module = opts.box3d_mod,
     });
     box3d_lib.step.dependOn(opts.box3d_shdc_step);
+    const character_lib = b.addLibrary(.{
+        .name = "ink_ribbon_character",
+        .root_module = opts.character_mod,
+    });
+    character_lib.step.dependOn(opts.character_shdc_step);
     const colors_lib = b.addLibrary(.{
         .name = "ink_ribbon_colors",
         .root_module = opts.colors_mod,
@@ -1439,6 +1489,18 @@ fn buildWeb(b: *Build, opts: Options) !void {
         .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
     });
     b.getInstallStep().dependOn(&box3d_link_step.step);
+
+    const character_link_step = try sokol.emLinkStep(b, .{
+        .lib_main = character_lib,
+        .target = opts.character_mod.resolved_target.?,
+        .optimize = opts.character_mod.optimize.?,
+        .emsdk = emsdk,
+        .use_webgl2 = true,
+        .use_emmalloc = true,
+        .use_filesystem = true,
+        .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
+    });
+    b.getInstallStep().dependOn(&character_link_step.step);
 
     const basic_lighting_link_step = try sokol.emLinkStep(b, .{
         .lib_main = basic_lighting_lib,
@@ -1692,6 +1754,10 @@ fn buildWeb(b: *Build, opts: Options) !void {
     run_box3d.step.dependOn(&box3d_link_step.step);
     b.step("run-box3d", "Run the Box3D example").dependOn(&run_box3d.step);
     b.step("run", "Run the Box3D example").dependOn(&run_box3d.step);
+
+    const run_character = sokol.emRunStep(b, .{ .name = "ink_ribbon_character", .emsdk = emsdk });
+    run_character.step.dependOn(&character_link_step.step);
+    b.step("run-character", "Run the character mover scene").dependOn(&run_character.step);
 
     const run_basic_lighting = sokol.emRunStep(b, .{ .name = "ink_ribbon_basic_lighting", .emsdk = emsdk });
     run_basic_lighting.step.dependOn(&basic_lighting_link_step.step);
