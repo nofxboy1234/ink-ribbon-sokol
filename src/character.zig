@@ -180,7 +180,7 @@ const GameState = struct {
 var game: GameState = .{};
 
 fn initialCharacter() controller.State {
-    var character = controller.State.init(.{ .x = 0, .y = 0.9, .z = 23 });
+    var character = controller.State.init(.{ .x = 0, .y = 0.9, .z = 17 });
     // The initial camera looks toward -Z, so the character must face -Z too for
     // the shoulder camera to begin behind it rather than in front of it.
     character.yaw = std.math.pi;
@@ -447,8 +447,8 @@ fn draw(position: b3.b3Pos) void {
         .indoor_light_3 = .{ .x = 0, .y = 10, .z = 10, .w = 18 },
         .indoor_light_4 = .{ .x = -19, .y = 9.7, .z = -3, .w = 17 },
         .indoor_light_5 = .{ .x = 19, .y = 9.7, .z = -3, .w = 17 },
-        .indoor_light_6 = .{ .x = -17, .y = 15, .z = -11, .w = 16 },
-        .indoor_light_7 = .{ .x = 17, .y = 15, .z = -11, .w = 16 },
+        .indoor_light_6 = .{ .x = -17, .y = 15, .z = -3, .w = 17 },
+        .indoor_light_7 = .{ .x = -17, .y = 20.5, .z = 0, .w = 10 },
     };
 
     sg.beginPass(.{ .action = game.render.pass_action, .swapchain = sglue.swapchain() });
