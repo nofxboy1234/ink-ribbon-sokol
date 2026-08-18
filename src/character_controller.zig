@@ -68,8 +68,13 @@ pub fn update(
 
     state.velocity.x = approach(state.velocity.x, target.x, horizontalRate(config, move, dt));
     state.velocity.z = approach(state.velocity.z, target.z, horizontalRate(config, move, dt));
-    if (state.grounded and state.velocity.y < 0) state.velocity.y = 0;
-    state.velocity.y -= config.gravity * dt;
+    // Contact planes support the capsule while grounded. Applying gravity here
+    // would be clipped along a ramp and continuously create downhill motion.
+    if (state.grounded) {
+        state.velocity.y = 0;
+    } else {
+        state.velocity.y -= config.gravity * dt;
+    }
 
     if (lengthSquared(wish) > 0.0001) {
         const target_yaw = std.math.atan2(wish.x, wish.z);
