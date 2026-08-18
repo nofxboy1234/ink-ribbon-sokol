@@ -50,6 +50,23 @@
         "box3d": "@PROJECT_ROOT@/src/generated/box3d.zig"
       }
     },
+    "@PROJECT_ROOT@/src/character.zig": {
+      "import_table": {
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig",
+        "box3d": "@PROJECT_ROOT@/src/generated/box3d.zig"
+      }
+    },
+    "@PROJECT_ROOT@/src/character_controller.zig": {
+      "import_table": {
+        "box3d": "@PROJECT_ROOT@/src/generated/box3d.zig"
+      }
+    },
+    "@PROJECT_ROOT@/src/third_person_camera.zig": {
+      "import_table": {
+        "box3d": "@PROJECT_ROOT@/src/generated/box3d.zig"
+      }
+    },
     "@PROJECT_ROOT@/src/colors.zig": {
       "import_table": {
         "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
@@ -207,6 +224,9 @@
       "root_module": "@PROJECT_ROOT@/src/box3d.zig"
     },
     {
+      "root_module": "@PROJECT_ROOT@/src/character.zig"
+    },
+    {
       "root_module": "@PROJECT_ROOT@/src/colors.zig"
     },
     {
@@ -266,6 +286,7 @@
     "run",
     "run-basic-lighting",
     "run-box3d",
+    "run-character",
     "run-colors",
     "run-cube",
     "run-depth-testing",
