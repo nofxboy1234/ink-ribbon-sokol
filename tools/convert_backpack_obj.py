@@ -10,8 +10,8 @@ import struct
 import zlib
 
 root = pathlib.Path(__file__).resolve().parent.parent
-source = root / "src/assets/backpack/backpack.obj"
-destination = root / "src/assets/backpack/vertices.bin"
+source = root / "src/examples/assets/backpack/backpack.obj"
+destination = root / "src/examples/assets/backpack/vertices.bin"
 
 
 def write_rgba_png(source_path, destination_path, width=512, height=512):

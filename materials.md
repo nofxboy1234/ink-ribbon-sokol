@@ -14,9 +14,9 @@ zig build run-materials -Dtarget=wasm32-emscripten
 
 Added:
 
-- [`materials.zig`](/home/dylan/repos/ink-ribbon-sokol/src/materials.zig)
-- [`materials.glsl`](/home/dylan/repos/ink-ribbon-sokol/src/materials.glsl)
-- [`materials_shader.zig`](/home/dylan/repos/ink-ribbon-sokol/src/generated/materials_shader.zig)
+- [`materials.zig`](/home/dylan/repos/ink-ribbon-sokol/src/examples/materials.zig)
+- [`materials.glsl`](/home/dylan/repos/ink-ribbon-sokol/src/examples/materials.glsl)
+- [`materials_shader.zig`](/home/dylan/repos/ink-ribbon-sokol/src/examples/generated/materials_shader.zig)
 
 It is also integrated with native builds, WASM builds, tests, and ZLS.
 

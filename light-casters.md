@@ -16,9 +16,9 @@ The scene recreates the chapter’s final smooth-edged flashlight example: ten t
 
 Key files:
 
-- [light_casters.zig](/home/dylan/repos/ink-ribbon-sokol/src/light_casters.zig)
-- [light_casters.glsl](/home/dylan/repos/ink-ribbon-sokol/src/light_casters.glsl)
-- [generated shader](/home/dylan/repos/ink-ribbon-sokol/src/generated/light_casters_shader.zig)
+- [light_casters.zig](/home/dylan/repos/ink-ribbon-sokol/src/examples/light_casters.zig)
+- [light_casters.glsl](/home/dylan/repos/ink-ribbon-sokol/src/examples/light_casters.glsl)
+- [generated shader](/home/dylan/repos/ink-ribbon-sokol/src/examples/generated/light_casters_shader.zig)
 - [build.zig](/home/dylan/repos/ink-ribbon-sokol/build.zig)
 - [ZLS build configuration](/home/dylan/repos/ink-ribbon-sokol/toolchain/zls-build-config.json.in)
 

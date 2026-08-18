@@ -163,21 +163,21 @@ pub fn build(b: *Build) !void {
     });
     box3d_bindings.linkLibrary(box3d_lib);
     const cimgui_bindings = b.createModule(.{
-        .root_source_file = b.path("src/generated/cimgui.zig"),
+        .root_source_file = b.path("src/examples/generated/cimgui.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
     cimgui_bindings.linkLibrary(cimgui_lib);
     const cgltf_bindings = b.createModule(.{
-        .root_source_file = b.path("src/generated/cgltf.zig"),
+        .root_source_file = b.path("src/examples/generated/cgltf.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
     cgltf_bindings.linkLibrary(cgltf_lib);
     const model_image_bindings = b.createModule(.{
-        .root_source_file = b.path("src/generated/model_image.zig"),
+        .root_source_file = b.path("src/examples/generated/model_image.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
@@ -187,8 +187,8 @@ pub fn build(b: *Build) !void {
     const dep_shdc = dep_sokol.builder.dependency("shdc", .{});
     const advanced_data_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/advanced_data.glsl",
-        .output = "src/generated/advanced_data_shader.zig",
+        .input = "src/examples/advanced_data.glsl",
+        .output = "src/examples/generated/advanced_data_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -200,8 +200,8 @@ pub fn build(b: *Build) !void {
     });
     const advanced_glsl_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/advanced_glsl.glsl",
-        .output = "src/generated/advanced_glsl_shader.zig",
+        .input = "src/examples/advanced_glsl.glsl",
+        .output = "src/examples/generated/advanced_glsl_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -213,8 +213,8 @@ pub fn build(b: *Build) !void {
     });
     const geometry_shader_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/geometry_shader.glsl",
-        .output = "src/generated/geometry_shader_shader.zig",
+        .input = "src/examples/geometry_shader.glsl",
+        .output = "src/examples/generated/geometry_shader_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -226,22 +226,22 @@ pub fn build(b: *Build) !void {
     });
     const instancing_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/instancing.glsl",
-        .output = "src/generated/instancing_shader.zig",
+        .input = "src/examples/instancing.glsl",
+        .output = "src/examples/generated/instancing_shader.zig",
         .slang = .{ .glsl410 = true, .glsl300es = true, .hlsl5 = true, .metal_macos = true, .wgsl = true },
         .reflection = true,
     });
     const anti_aliasing_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/anti_aliasing.glsl",
-        .output = "src/generated/anti_aliasing_shader.zig",
+        .input = "src/examples/anti_aliasing.glsl",
+        .output = "src/examples/generated/anti_aliasing_shader.zig",
         .slang = .{ .glsl410 = true, .glsl300es = true, .hlsl5 = true, .metal_macos = true, .wgsl = true },
         .reflection = true,
     });
     const box3d_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/box3d.glsl",
-        .output = "src/generated/box3d_shader.zig",
+        .input = "src/examples/box3d.glsl",
+        .output = "src/examples/generated/box3d_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -266,8 +266,8 @@ pub fn build(b: *Build) !void {
     });
     const basic_lighting_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/basic_lighting.glsl",
-        .output = "src/generated/basic_lighting_shader.zig",
+        .input = "src/examples/basic_lighting.glsl",
+        .output = "src/examples/generated/basic_lighting_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -279,8 +279,8 @@ pub fn build(b: *Build) !void {
     });
     const colors_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/colors.glsl",
-        .output = "src/generated/colors_shader.zig",
+        .input = "src/examples/colors.glsl",
+        .output = "src/examples/generated/colors_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -292,8 +292,8 @@ pub fn build(b: *Build) !void {
     });
     const materials_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/materials.glsl",
-        .output = "src/generated/materials_shader.zig",
+        .input = "src/examples/materials.glsl",
+        .output = "src/examples/generated/materials_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -305,8 +305,8 @@ pub fn build(b: *Build) !void {
     });
     const depth_testing_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/depth_testing.glsl",
-        .output = "src/generated/depth_testing_shader.zig",
+        .input = "src/examples/depth_testing.glsl",
+        .output = "src/examples/generated/depth_testing_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -318,8 +318,8 @@ pub fn build(b: *Build) !void {
     });
     const stencil_testing_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/stencil_testing.glsl",
-        .output = "src/generated/stencil_testing_shader.zig",
+        .input = "src/examples/stencil_testing.glsl",
+        .output = "src/examples/generated/stencil_testing_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -331,8 +331,8 @@ pub fn build(b: *Build) !void {
     });
     const blending_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/blending.glsl",
-        .output = "src/generated/blending_shader.zig",
+        .input = "src/examples/blending.glsl",
+        .output = "src/examples/generated/blending_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -344,8 +344,8 @@ pub fn build(b: *Build) !void {
     });
     const face_culling_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/face_culling.glsl",
-        .output = "src/generated/face_culling_shader.zig",
+        .input = "src/examples/face_culling.glsl",
+        .output = "src/examples/generated/face_culling_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -357,8 +357,8 @@ pub fn build(b: *Build) !void {
     });
     const framebuffers_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/framebuffers.glsl",
-        .output = "src/generated/framebuffers_shader.zig",
+        .input = "src/examples/framebuffers.glsl",
+        .output = "src/examples/generated/framebuffers_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -370,8 +370,8 @@ pub fn build(b: *Build) !void {
     });
     const cubemaps_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/cubemaps.glsl",
-        .output = "src/generated/cubemaps_shader.zig",
+        .input = "src/examples/cubemaps.glsl",
+        .output = "src/examples/generated/cubemaps_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -383,8 +383,8 @@ pub fn build(b: *Build) !void {
     });
     const lighting_maps_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/lighting_maps.glsl",
-        .output = "src/generated/lighting_maps_shader.zig",
+        .input = "src/examples/lighting_maps.glsl",
+        .output = "src/examples/generated/lighting_maps_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -396,8 +396,8 @@ pub fn build(b: *Build) !void {
     });
     const multiple_lights_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/multiple_lights.glsl",
-        .output = "src/generated/multiple_lights_shader.zig",
+        .input = "src/examples/multiple_lights.glsl",
+        .output = "src/examples/generated/multiple_lights_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -409,8 +409,8 @@ pub fn build(b: *Build) !void {
     });
     const model_loading_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/model_loading.glsl",
-        .output = "src/generated/model_loading_shader.zig",
+        .input = "src/examples/model_loading.glsl",
+        .output = "src/examples/generated/model_loading_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -422,8 +422,8 @@ pub fn build(b: *Build) !void {
     });
     const light_casters_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/light_casters.glsl",
-        .output = "src/generated/light_casters_shader.zig",
+        .input = "src/examples/light_casters.glsl",
+        .output = "src/examples/generated/light_casters_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -435,8 +435,8 @@ pub fn build(b: *Build) !void {
     });
     const cube_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/cube.glsl",
-        .output = "src/generated/cube_shader.zig",
+        .input = "src/examples/cube.glsl",
+        .output = "src/examples/generated/cube_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -448,8 +448,8 @@ pub fn build(b: *Build) !void {
     });
     const triangle_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/triangle.glsl",
-        .output = "src/generated/triangle_shader.zig",
+        .input = "src/examples/triangle.glsl",
+        .output = "src/examples/generated/triangle_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -461,8 +461,8 @@ pub fn build(b: *Build) !void {
     });
     const texcube_shdc_step = try sokol.shdc.createSourceFile(b, .{
         .shdc_dep = dep_shdc,
-        .input = "src/texcube.glsl",
-        .output = "src/generated/texcube_shader.zig",
+        .input = "src/examples/texcube.glsl",
+        .output = "src/examples/generated/texcube_shader.zig",
         .slang = .{
             .glsl410 = true,
             .glsl300es = true,
@@ -474,12 +474,17 @@ pub fn build(b: *Build) !void {
     });
 
     const mod_lib = b.addModule("ink_ribbon_sokol", .{
-        .root_source_file = b.path("src/root.zig"),
+        .root_source_file = b.path("src/examples/root.zig"),
         .target = target,
+    });
+    const math_mod = b.createModule(.{
+        .root_source_file = b.path("src/math.zig"),
+        .target = target,
+        .optimize = optimize,
     });
 
     const advanced_data_mod = b.createModule(.{
-        .root_source_file = b.path("src/advanced_data.zig"),
+        .root_source_file = b.path("src/examples/advanced_data.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -488,7 +493,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const advanced_glsl_mod = b.createModule(.{
-        .root_source_file = b.path("src/advanced_glsl.zig"),
+        .root_source_file = b.path("src/examples/advanced_glsl.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -497,7 +502,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const geometry_shader_mod = b.createModule(.{
-        .root_source_file = b.path("src/geometry_shader.zig"),
+        .root_source_file = b.path("src/examples/geometry_shader.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -506,7 +511,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const instancing_mod = b.createModule(.{
-        .root_source_file = b.path("src/instancing.zig"),
+        .root_source_file = b.path("src/examples/instancing.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -515,7 +520,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const anti_aliasing_mod = b.createModule(.{
-        .root_source_file = b.path("src/anti_aliasing.zig"),
+        .root_source_file = b.path("src/examples/anti_aliasing.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -525,7 +530,7 @@ pub fn build(b: *Build) !void {
     });
 
     const box3d_mod = b.createModule(.{
-        .root_source_file = b.path("src/box3d.zig"),
+        .root_source_file = b.path("src/examples/box3d.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -533,6 +538,7 @@ pub fn build(b: *Build) !void {
             .{ .name = "sokol", .module = dep_sokol.module("sokol") },
             .{ .name = "cimgui", .module = cimgui_bindings },
             .{ .name = "box3d", .module = box3d_bindings },
+            .{ .name = "math", .module = math_mod },
         },
     });
     const character_mod = b.createModule(.{
@@ -546,7 +552,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const basic_lighting_mod = b.createModule(.{
-        .root_source_file = b.path("src/basic_lighting.zig"),
+        .root_source_file = b.path("src/examples/basic_lighting.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -555,7 +561,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const cube_mod = b.createModule(.{
-        .root_source_file = b.path("src/cube.zig"),
+        .root_source_file = b.path("src/examples/cube.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -564,7 +570,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const colors_mod = b.createModule(.{
-        .root_source_file = b.path("src/colors.zig"),
+        .root_source_file = b.path("src/examples/colors.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -573,7 +579,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const depth_testing_mod = b.createModule(.{
-        .root_source_file = b.path("src/depth_testing.zig"),
+        .root_source_file = b.path("src/examples/depth_testing.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -583,7 +589,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const stencil_testing_mod = b.createModule(.{
-        .root_source_file = b.path("src/stencil_testing.zig"),
+        .root_source_file = b.path("src/examples/stencil_testing.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -593,7 +599,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const blending_mod = b.createModule(.{
-        .root_source_file = b.path("src/blending.zig"),
+        .root_source_file = b.path("src/examples/blending.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -603,7 +609,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const face_culling_mod = b.createModule(.{
-        .root_source_file = b.path("src/face_culling.zig"),
+        .root_source_file = b.path("src/examples/face_culling.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -612,7 +618,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const framebuffers_mod = b.createModule(.{
-        .root_source_file = b.path("src/framebuffers.zig"),
+        .root_source_file = b.path("src/examples/framebuffers.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -622,7 +628,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const cubemaps_mod = b.createModule(.{
-        .root_source_file = b.path("src/cubemaps.zig"),
+        .root_source_file = b.path("src/examples/cubemaps.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -632,7 +638,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const materials_mod = b.createModule(.{
-        .root_source_file = b.path("src/materials.zig"),
+        .root_source_file = b.path("src/examples/materials.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -641,7 +647,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const lighting_maps_mod = b.createModule(.{
-        .root_source_file = b.path("src/lighting_maps.zig"),
+        .root_source_file = b.path("src/examples/lighting_maps.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -650,7 +656,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const light_casters_directional_mod = b.createModule(.{
-        .root_source_file = b.path("src/light_casters_directional.zig"),
+        .root_source_file = b.path("src/examples/light_casters_directional.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -659,7 +665,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const light_casters_point_mod = b.createModule(.{
-        .root_source_file = b.path("src/light_casters_point.zig"),
+        .root_source_file = b.path("src/examples/light_casters_point.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -668,7 +674,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const light_casters_spotlight_mod = b.createModule(.{
-        .root_source_file = b.path("src/light_casters_spotlight.zig"),
+        .root_source_file = b.path("src/examples/light_casters_spotlight.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -677,7 +683,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const multiple_lights_mod = b.createModule(.{
-        .root_source_file = b.path("src/multiple_lights.zig"),
+        .root_source_file = b.path("src/examples/multiple_lights.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -686,7 +692,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const model_loading_mod = b.createModule(.{
-        .root_source_file = b.path("src/model_loading.zig"),
+        .root_source_file = b.path("src/examples/model_loading.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -697,7 +703,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const triangle_mod = b.createModule(.{
-        .root_source_file = b.path("src/triangle.zig"),
+        .root_source_file = b.path("src/examples/triangle.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -706,7 +712,7 @@ pub fn build(b: *Build) !void {
         },
     });
     const texcube_mod = b.createModule(.{
-        .root_source_file = b.path("src/texcube.zig"),
+        .root_source_file = b.path("src/examples/texcube.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -793,9 +799,9 @@ fn buildCgltf(
     });
     mod.addIncludePath(cgltf_root);
     mod.addIncludePath(stb_root);
-    mod.addIncludePath(b.path("src/c"));
-    mod.addCSourceFile(.{ .file = b.path("src/c/cgltf.c"), .flags = &.{"-std=c99"} });
-    mod.addCSourceFile(.{ .file = b.path("src/c/model_image.c"), .flags = &.{"-std=c99"} });
+    mod.addIncludePath(b.path("src/examples/c"));
+    mod.addCSourceFile(.{ .file = b.path("src/examples/c/cgltf.c"), .flags = &.{"-std=c99"} });
+    mod.addCSourceFile(.{ .file = b.path("src/examples/c/model_image.c"), .flags = &.{"-std=c99"} });
     return b.addLibrary(.{ .name = "cgltf", .linkage = .static, .root_module = mod });
 }
 
@@ -1684,10 +1690,10 @@ fn buildWeb(b: *Build, opts: Options) !void {
         .extra_args = &.{ "-sINITIAL_MEMORY=67108864", "-sALLOW_MEMORY_GROWTH=1" },
         .shell_file_path = opts.dep_sokol.path("src/sokol/web/shell.html"),
     });
-    const install_model_gltf = b.addInstallFileWithDir(b.path("src/assets/backpack/backpack.gltf"), .{ .custom = "web" }, "backpack.gltf");
-    const install_model_vertices = b.addInstallFileWithDir(b.path("src/assets/backpack/vertices.bin"), .{ .custom = "web" }, "vertices.bin");
-    const install_model_diffuse = b.addInstallFileWithDir(b.path("src/assets/backpack/diffuse.png"), .{ .custom = "web" }, "diffuse.png");
-    const install_model_specular = b.addInstallFileWithDir(b.path("src/assets/backpack/specular.png"), .{ .custom = "web" }, "specular.png");
+    const install_model_gltf = b.addInstallFileWithDir(b.path("src/examples/assets/backpack/backpack.gltf"), .{ .custom = "web" }, "backpack.gltf");
+    const install_model_vertices = b.addInstallFileWithDir(b.path("src/examples/assets/backpack/vertices.bin"), .{ .custom = "web" }, "vertices.bin");
+    const install_model_diffuse = b.addInstallFileWithDir(b.path("src/examples/assets/backpack/diffuse.png"), .{ .custom = "web" }, "diffuse.png");
+    const install_model_specular = b.addInstallFileWithDir(b.path("src/examples/assets/backpack/specular.png"), .{ .custom = "web" }, "specular.png");
     model_loading_link_step.step.dependOn(&install_model_gltf.step);
     model_loading_link_step.step.dependOn(&install_model_vertices.step);
     model_loading_link_step.step.dependOn(&install_model_diffuse.step);

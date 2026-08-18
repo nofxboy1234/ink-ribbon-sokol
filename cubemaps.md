@@ -358,5 +358,5 @@ Cubemap = ask "what colour lies in this direction?"
 | Far-depth `xyww` trick          | `skybox_vs` in the GLSL   |
 
 The implementation is in
-[`src/cubemaps.zig`](src/cubemaps.zig) and
-[`src/cubemaps.glsl`](src/cubemaps.glsl).
+[`src/examples/cubemaps.zig`](src/examples/cubemaps.zig) and
+[`src/examples/cubemaps.glsl`](src/examples/cubemaps.glsl).

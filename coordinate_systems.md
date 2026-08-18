@@ -22,7 +22,7 @@ Your cube example already implements nearly all of this.
 
 | LearnOpenGL | This Sokol/Zig project |
 |---|---|
-| GLM vector/matrix math | [cube_math.zig](/home/dylan/repos/ink-ribbon-sokol/src/cube_math.zig) |
+| GLM vector/matrix math | [cube_math.zig](/home/dylan/repos/ink-ribbon-sokol/src/examples/cube_math.zig) |
 | `glm::mat4` | `Mat4` |
 | `glm::rotate` | `Mat4.rotate` |
 | `glm::translate` | `Mat4.translate` |
@@ -260,7 +260,7 @@ It combines them:
 const model = mat4.mul(rxm, rym);
 ```
 
-See [cube.zig](/home/dylan/repos/ink-ribbon-sokol/src/cube.zig:367).
+See [cube.zig](/home/dylan/repos/ink-ribbon-sokol/src/examples/cube.zig:367).
 
 This model matrix contains rotation but no translation or scale. Therefore:
 
@@ -367,7 +367,7 @@ world origin         ● (0,0,0)
                   up = +Y
 ```
 
-See [Mat4.lookat](/home/dylan/repos/ink-ribbon-sokol/src/cube_math.zig:120).
+See [Mat4.lookat](/home/dylan/repos/ink-ribbon-sokol/src/examples/cube_math.zig:120).
 
 # 7. View space is not the screen
 
@@ -558,7 +558,7 @@ aspect = framebuffer width / height
 10.0   = far clipping distance
 ```
 
-See [Mat4.persp](/home/dylan/repos/ink-ribbon-sokol/src/cube_math.zig:108).
+See [Mat4.persp](/home/dylan/repos/ink-ribbon-sokol/src/examples/cube_math.zig:108).
 
 # 12. Field of view
 
@@ -906,7 +906,7 @@ void main() {
 }
 ```
 
-See [cube.glsl](/home/dylan/repos/ink-ribbon-sokol/src/cube.glsl:4).
+See [cube.glsl](/home/dylan/repos/ink-ribbon-sokol/src/examples/cube.glsl:4).
 
 Both approaches perform the same mathematical transformation:
 
@@ -1092,7 +1092,7 @@ Sokol puts depth-test rules into the pipeline:
 },
 ```
 
-See [cube.zig](/home/dylan/repos/ink-ribbon-sokol/src/cube.zig:214).
+See [cube.zig](/home/dylan/repos/ink-ribbon-sokol/src/examples/cube.zig:214).
 
 This means:
 

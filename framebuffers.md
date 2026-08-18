@@ -470,12 +470,12 @@ If nothing appears, check:
 | Attach colour and depth            | `recreateOffscreenTargets()`           |
 | Record the two passes              | `frame()`                              |
 | Select an effect                   | `input()` and `screen_fs_params`       |
-| Post-processing and kernels        | `screen_fs` in `src/framebuffers.glsl` |
+| Post-processing and kernels        | `screen_fs` in `src/examples/framebuffers.glsl` |
 
 Implementation:
 
-- [`src/framebuffers.zig`](src/framebuffers.zig)
-- [`src/framebuffers.glsl`](src/framebuffers.glsl)
+- [`src/examples/framebuffers.zig`](src/examples/framebuffers.zig)
+- [`src/examples/framebuffers.glsl`](src/examples/framebuffers.glsl)
 
 Keep this final mental model:
 

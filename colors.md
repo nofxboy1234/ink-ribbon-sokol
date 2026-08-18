@@ -27,9 +27,9 @@ The static camera is slightly farther back than the tutorial’s initial camera 
 
 Files added:
 
-- [`colors.zig`](/home/dylan/repos/ink-ribbon-sokol/src/colors.zig)
-- [`colors.glsl`](/home/dylan/repos/ink-ribbon-sokol/src/colors.glsl)
-- [`colors_shader.zig`](/home/dylan/repos/ink-ribbon-sokol/src/generated/colors_shader.zig)
+- [`colors.zig`](/home/dylan/repos/ink-ribbon-sokol/src/examples/colors.zig)
+- [`colors.glsl`](/home/dylan/repos/ink-ribbon-sokol/src/examples/colors.glsl)
+- [`colors_shader.zig`](/home/dylan/repos/ink-ribbon-sokol/src/examples/generated/colors_shader.zig)
 
 The build integration is in [`build.zig`](/home/dylan/repos/ink-ribbon-sokol/build.zig:141).
 

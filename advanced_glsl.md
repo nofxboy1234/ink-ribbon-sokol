@@ -333,10 +333,10 @@ shader stages
 
 | Lesson concept                    | Project location                                 |
 |-----------------------------------|--------------------------------------------------|
-| Built-in variables                | `src/advanced_glsl.glsl`                         |
+| Built-in variables                | `src/examples/advanced_glsl.glsl`                         |
 | Vertex-to-fragment interface      | `VS_OUT`                                         |
 | Shared camera calculation         | `view_projection` in `frame()`                   |
 | Per-draw uniform blocks           | `cube_vs_params`, `cube_fs_params`, `drawCube()` |
 | Explicit uniform binding slots    | `layout(binding = N)`                            |
 | Fragment-coordinate comparison    | `split_enabled` branch in `cube_fs`              |
-| Generated uniform packing         | `src/generated/advanced_glsl_shader.zig`         |
+| Generated uniform packing         | `src/examples/generated/advanced_glsl_shader.zig`         |

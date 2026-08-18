@@ -14,9 +14,9 @@ zig build run-multiple-lights -Dtarget=wasm32-emscripten
 
 Main files:
 
-- [multiple_lights.zig](/home/dylan/repos/ink-ribbon-sokol/src/multiple_lights.zig)
-- [multiple_lights.glsl](/home/dylan/repos/ink-ribbon-sokol/src/multiple_lights.glsl)
-- [generated shader](/home/dylan/repos/ink-ribbon-sokol/src/generated/multiple_lights_shader.zig)
+- [multiple_lights.zig](/home/dylan/repos/ink-ribbon-sokol/src/examples/multiple_lights.zig)
+- [multiple_lights.glsl](/home/dylan/repos/ink-ribbon-sokol/src/examples/multiple_lights.glsl)
+- [generated shader](/home/dylan/repos/ink-ribbon-sokol/src/examples/generated/multiple_lights_shader.zig)
 
 The build and ZLS configurations were updated as well.
 
@@ -54,7 +54,7 @@ This calculation happens for every generated fragment.
 
 ## The key shader code
 
-The clearest demonstration of the chapter’s new concept is in [multiple_lights.glsl](/home/dylan/repos/ink-ribbon-sokol/src/multiple_lights.glsl:136):
+The clearest demonstration of the chapter’s new concept is in [multiple_lights.glsl](/home/dylan/repos/ink-ribbon-sokol/src/examples/multiple_lights.glsl:136):
 
 ```glsl
 vec3 result = calculateDirectionalLight(
@@ -103,7 +103,7 @@ calculatePointLight(...)
 calculateSpotlight(...)
 ```
 
-They can be found in [multiple_lights.glsl](/home/dylan/repos/ink-ribbon-sokol/src/multiple_lights.glsl:63).
+They can be found in [multiple_lights.glsl](/home/dylan/repos/ink-ribbon-sokol/src/examples/multiple_lights.glsl:63).
 
 This is primarily code organization. Putting all six calculations directly inside `main()` would quickly become difficult to read.
 
@@ -164,7 +164,7 @@ The spotlight is attached to the static camera, so it acts like a flashlight.
 
 ## The point-light array
 
-The four positions are declared in Zig in [multiple_lights.zig](/home/dylan/repos/ink-ribbon-sokol/src/multiple_lights.zig:62):
+The four positions are declared in Zig in [multiple_lights.zig](/home/dylan/repos/ink-ribbon-sokol/src/examples/multiple_lights.zig:62):
 
 ```zig
 const point_light_positions = [_]vec3{

@@ -14,9 +14,9 @@ zig build run-basic-lighting -Dtarget=wasm32-emscripten
 
 Added:
 
-- [`basic_lighting.zig`](/home/dylan/repos/ink-ribbon-sokol/src/basic_lighting.zig)
-- [`basic_lighting.glsl`](/home/dylan/repos/ink-ribbon-sokol/src/basic_lighting.glsl)
-- [`basic_lighting_shader.zig`](/home/dylan/repos/ink-ribbon-sokol/src/generated/basic_lighting_shader.zig)
+- [`basic_lighting.zig`](/home/dylan/repos/ink-ribbon-sokol/src/examples/basic_lighting.zig)
+- [`basic_lighting.glsl`](/home/dylan/repos/ink-ribbon-sokol/src/examples/basic_lighting.glsl)
+- [`basic_lighting_shader.zig`](/home/dylan/repos/ink-ribbon-sokol/src/examples/generated/basic_lighting_shader.zig)
 
 The example is also registered in `build.zig` and the static ZLS configuration. Go-to-definition for Sokol symbols was verified successfully.
 

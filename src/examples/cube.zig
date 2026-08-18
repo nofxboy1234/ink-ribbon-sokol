@@ -32,7 +32,7 @@ const sdtx = sokol.debugtext; // Simple GPU-rendered text for the FPS display.
 const vec3 = @import("cube_math.zig").Vec3;
 const mat4 = @import("cube_math.zig").Mat4;
 
-// sokol-shdc generated this Zig module from src/cube.glsl. It contains:
+// sokol-shdc generated this Zig module from src/examples/cube.glsl. It contains:
 //   - a shader variant for each graphics backend;
 //   - typed uniform structs such as VsParams;
 //   - constants identifying shader inputs and uniform binding slots.

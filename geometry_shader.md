@@ -310,4 +310,4 @@ The durable concept is not the OpenGL-specific stage. It is this question:
 | Animated face explosion        | `drawCubeScene()` and `mesh_vs`               |
 | CPU-generated normal lines     | `normal_lines` construction in `init()`       |
 | Normal-line overlay draw       | `.normals` branch in `drawCubeScene()`        |
-| Portable shader programs       | `src/geometry_shader.glsl`                    |
+| Portable shader programs       | `src/examples/geometry_shader.glsl`                    |

@@ -130,15 +130,15 @@ generate_bindings() {
             "$deps_root/cgltf/cgltf.h" > "$generated/cgltf.zig"
         "$zig" translate-c -lc \
             -target x86_64-linux-gnu \
-            "$project_root/src/c/model_image.h" > "$generated/model_image.zig"
+            "$project_root/src/examples/c/model_image.h" > "$generated/model_image.zig"
     )
 
     sed -i "s#$project_root/.toolchain/deps/##g" "$generated/box3d.zig" "$generated/cimgui.zig" "$generated/cgltf.zig" "$generated/model_image.zig"
     mkdir -p "$project_root/src/generated"
     mv "$generated/box3d.zig" "$project_root/src/generated/box3d.zig"
-    mv "$generated/cimgui.zig" "$project_root/src/generated/cimgui.zig"
-    mv "$generated/cgltf.zig" "$project_root/src/generated/cgltf.zig"
-    mv "$generated/model_image.zig" "$project_root/src/generated/model_image.zig"
+    mv "$generated/cimgui.zig" "$project_root/src/examples/generated/cimgui.zig"
+    mv "$generated/cgltf.zig" "$project_root/src/examples/generated/cgltf.zig"
+    mv "$generated/model_image.zig" "$project_root/src/examples/generated/model_image.zig"
 }
 
 install_zls() {

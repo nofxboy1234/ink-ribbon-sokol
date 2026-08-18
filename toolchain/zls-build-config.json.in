@@ -6,53 +6,54 @@
     "box3d": "@PROJECT_ROOT@/.toolchain/deps/box3d/build.zig"
   },
   "modules": {
-    "@PROJECT_ROOT@/src/advanced_data.zig": {
+    "@PROJECT_ROOT@/src/examples/advanced_data.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
-    "@PROJECT_ROOT@/src/advanced_glsl.zig": {
+    "@PROJECT_ROOT@/src/examples/advanced_glsl.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
-    "@PROJECT_ROOT@/src/geometry_shader.zig": {
+    "@PROJECT_ROOT@/src/examples/geometry_shader.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
-    "@PROJECT_ROOT@/src/instancing.zig": {
+    "@PROJECT_ROOT@/src/examples/instancing.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
-    "@PROJECT_ROOT@/src/anti_aliasing.zig": {
+    "@PROJECT_ROOT@/src/examples/anti_aliasing.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
-    "@PROJECT_ROOT@/src/basic_lighting.zig": {
+    "@PROJECT_ROOT@/src/examples/basic_lighting.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
-    "@PROJECT_ROOT@/src/box3d.zig": {
+    "@PROJECT_ROOT@/src/examples/box3d.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig",
-        "cimgui": "@PROJECT_ROOT@/src/generated/cimgui.zig",
-        "box3d": "@PROJECT_ROOT@/src/generated/box3d.zig"
+        "cimgui": "@PROJECT_ROOT@/src/examples/generated/cimgui.zig",
+        "box3d": "@PROJECT_ROOT@/src/generated/box3d.zig",
+        "math": "@PROJECT_ROOT@/src/math.zig"
       }
     },
     "@PROJECT_ROOT@/src/character.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig",
         "box3d": "@PROJECT_ROOT@/src/generated/box3d.zig"
       }
@@ -67,218 +68,218 @@
         "box3d": "@PROJECT_ROOT@/src/generated/box3d.zig"
       }
     },
-    "@PROJECT_ROOT@/src/colors.zig": {
+    "@PROJECT_ROOT@/src/examples/colors.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
-    "@PROJECT_ROOT@/src/cube.zig": {
+    "@PROJECT_ROOT@/src/examples/cube.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
-    "@PROJECT_ROOT@/src/depth_testing.zig": {
+    "@PROJECT_ROOT@/src/examples/depth_testing.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig",
-        "model_image": "@PROJECT_ROOT@/src/generated/model_image.zig"
+        "model_image": "@PROJECT_ROOT@/src/examples/generated/model_image.zig"
       }
     },
-    "@PROJECT_ROOT@/src/stencil_testing.zig": {
+    "@PROJECT_ROOT@/src/examples/stencil_testing.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig",
-        "model_image": "@PROJECT_ROOT@/src/generated/model_image.zig"
+        "model_image": "@PROJECT_ROOT@/src/examples/generated/model_image.zig"
       }
     },
-    "@PROJECT_ROOT@/src/blending.zig": {
+    "@PROJECT_ROOT@/src/examples/blending.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig",
-        "model_image": "@PROJECT_ROOT@/src/generated/model_image.zig"
+        "model_image": "@PROJECT_ROOT@/src/examples/generated/model_image.zig"
       }
     },
-    "@PROJECT_ROOT@/src/face_culling.zig": {
+    "@PROJECT_ROOT@/src/examples/face_culling.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
-    "@PROJECT_ROOT@/src/framebuffers.zig": {
+    "@PROJECT_ROOT@/src/examples/framebuffers.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig",
-        "model_image": "@PROJECT_ROOT@/src/generated/model_image.zig"
+        "model_image": "@PROJECT_ROOT@/src/examples/generated/model_image.zig"
       }
     },
-    "@PROJECT_ROOT@/src/cubemaps.zig": {
+    "@PROJECT_ROOT@/src/examples/cubemaps.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig",
-        "model_image": "@PROJECT_ROOT@/src/generated/model_image.zig"
+        "model_image": "@PROJECT_ROOT@/src/examples/generated/model_image.zig"
       }
     },
-    "@PROJECT_ROOT@/src/materials.zig": {
+    "@PROJECT_ROOT@/src/examples/materials.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
-    "@PROJECT_ROOT@/src/multiple_lights.zig": {
+    "@PROJECT_ROOT@/src/examples/multiple_lights.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
-    "@PROJECT_ROOT@/src/model_loading.zig": {
+    "@PROJECT_ROOT@/src/examples/model_loading.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig",
-        "cgltf": "@PROJECT_ROOT@/src/generated/cgltf.zig",
-        "model_image": "@PROJECT_ROOT@/src/generated/model_image.zig"
+        "cgltf": "@PROJECT_ROOT@/src/examples/generated/cgltf.zig",
+        "model_image": "@PROJECT_ROOT@/src/examples/generated/model_image.zig"
       }
     },
-    "@PROJECT_ROOT@/src/lighting_maps.zig": {
+    "@PROJECT_ROOT@/src/examples/lighting_maps.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
-    "@PROJECT_ROOT@/src/light_casters.zig": {
+    "@PROJECT_ROOT@/src/examples/light_casters.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
-    "@PROJECT_ROOT@/src/light_casters_directional.zig": {
+    "@PROJECT_ROOT@/src/examples/light_casters_directional.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
-    "@PROJECT_ROOT@/src/light_casters_point.zig": {
+    "@PROJECT_ROOT@/src/examples/light_casters_point.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
-    "@PROJECT_ROOT@/src/light_casters_spotlight.zig": {
+    "@PROJECT_ROOT@/src/examples/light_casters_spotlight.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
-    "@PROJECT_ROOT@/src/triangle.zig": {
+    "@PROJECT_ROOT@/src/examples/triangle.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
-    "@PROJECT_ROOT@/src/texcube.zig": {
+    "@PROJECT_ROOT@/src/examples/texcube.zig": {
       "import_table": {
-        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/root.zig",
+        "ink_ribbon_sokol": "@PROJECT_ROOT@/src/examples/root.zig",
         "sokol": "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig"
       }
     },
-    "@PROJECT_ROOT@/src/root.zig": {
+    "@PROJECT_ROOT@/src/examples/root.zig": {
       "import_table": {}
     },
     "@PROJECT_ROOT@/.toolchain/deps/sokol/src/sokol/sokol.zig": {
       "import_table": {}
     },
-    "@PROJECT_ROOT@/src/generated/cimgui.zig": {
+    "@PROJECT_ROOT@/src/examples/generated/cimgui.zig": {
       "import_table": {}
     },
     "@PROJECT_ROOT@/src/generated/box3d.zig": {
       "import_table": {}
     },
-    "@PROJECT_ROOT@/src/generated/cgltf.zig": {
+    "@PROJECT_ROOT@/src/examples/generated/cgltf.zig": {
       "import_table": {}
     },
-    "@PROJECT_ROOT@/src/generated/model_image.zig": {
+    "@PROJECT_ROOT@/src/examples/generated/model_image.zig": {
       "import_table": {}
     }
   },
   "compilations": [
     {
-      "root_module": "@PROJECT_ROOT@/src/advanced_data.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/advanced_data.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/advanced_glsl.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/advanced_glsl.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/geometry_shader.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/geometry_shader.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/instancing.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/instancing.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/anti_aliasing.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/anti_aliasing.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/basic_lighting.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/basic_lighting.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/box3d.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/box3d.zig"
     },
     {
       "root_module": "@PROJECT_ROOT@/src/character.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/colors.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/colors.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/cube.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/cube.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/depth_testing.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/depth_testing.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/stencil_testing.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/stencil_testing.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/blending.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/blending.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/face_culling.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/face_culling.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/framebuffers.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/framebuffers.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/cubemaps.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/cubemaps.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/materials.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/materials.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/multiple_lights.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/multiple_lights.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/model_loading.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/model_loading.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/lighting_maps.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/lighting_maps.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/light_casters_directional.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/light_casters_directional.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/light_casters_point.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/light_casters_point.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/light_casters_spotlight.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/light_casters_spotlight.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/triangle.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/triangle.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/texcube.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/texcube.zig"
     },
     {
-      "root_module": "@PROJECT_ROOT@/src/root.zig"
+      "root_module": "@PROJECT_ROOT@/src/examples/root.zig"
     }
   ],
   "top_level_steps": [

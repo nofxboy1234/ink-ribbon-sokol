@@ -546,7 +546,7 @@ const sin_theta = math.sin(radians(angle));
 const cos_theta = math.cos(radians(angle));
 ```
 
-See [Mat4.rotate](/home/dylan/repos/ink-ribbon-sokol/src/cube_math.zig:147).
+See [Mat4.rotate](/home/dylan/repos/ink-ribbon-sokol/src/examples/cube_math.zig:147).
 
 Perspective projection uses tangent:
 
@@ -556,7 +556,7 @@ const t = math.tan(
 );
 ```
 
-See [Mat4.persp](/home/dylan/repos/ink-ribbon-sokol/src/cube_math.zig:108).
+See [Mat4.persp](/home/dylan/repos/ink-ribbon-sokol/src/examples/cube_math.zig:108).
 
 The perspective calculation effectively uses a right triangle formed by:
 

@@ -139,8 +139,8 @@ Clicking empty space stores `null`, so no outline pass is recorded.
 
 ## Files and commands
 
-- Scene: `src/stencil_testing.zig`
-- Shader: `src/stencil_testing.glsl`
+- Scene: `src/examples/stencil_testing.zig`
+- Shader: `src/examples/stencil_testing.glsl`
 - Native: `zig build run-stencil-testing`
 - WASM: `zig build run-stencil-testing -Dtarget=wasm32-emscripten`
 

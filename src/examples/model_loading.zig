@@ -25,7 +25,7 @@ const shd = @import("generated/model_loading_shader.zig");
 const max_gltf_bytes = 16 * 1024;
 const max_vertex_bytes = 7 * 1024 * 1024;
 const max_encoded_texture_bytes = 1024 * 1024;
-const asset_prefix = if (builtin.target.os.tag == .emscripten) "" else "src/assets/backpack/";
+const asset_prefix = if (builtin.target.os.tag == .emscripten) "" else "src/examples/assets/backpack/";
 
 const LoadBits = packed struct(u8) {
     vertices: bool = false,

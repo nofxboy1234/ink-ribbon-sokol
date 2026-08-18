@@ -78,7 +78,7 @@ makeBuffer(size only)       updateBuffer(data)
 Reserved memory is **not automatically zero-filled**. Do not draw bytes until
 you have uploaded valid data for them.
 
-The right triangle in `src/advanced_data.zig` demonstrates this. Its vertices
+The right triangle in `src/examples/advanced_data.zig` demonstrates this. Its vertices
 are replaced each frame, which makes the triangle move.
 
 ## 4. Updating buffer contents
@@ -244,4 +244,4 @@ The central lesson is:
 | Reserve without initial data     | `dynamic_bindings` buffer in `init()`          |
 | Replace mutable data             | `sg.updateBuffer()` in `frame()`               |
 | Attribute formats and offsets    | `interleavedLayout()` and `planarLayout()`     |
-| Shader attribute inputs          | `src/advanced_data.glsl`                       |
+| Shader attribute inputs          | `src/examples/advanced_data.glsl`                       |

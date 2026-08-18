@@ -14,10 +14,10 @@ zig build run-lighting-maps -Dtarget=wasm32-emscripten
 
 Added:
 
-- [`lighting_maps.zig`](/home/dylan/repos/ink-ribbon-sokol/src/lighting_maps.zig)
-- [`lighting_maps.glsl`](/home/dylan/repos/ink-ribbon-sokol/src/lighting_maps.glsl)
-- [`lighting_maps_shader.zig`](/home/dylan/repos/ink-ribbon-sokol/src/generated/lighting_maps_shader.zig)
-- Exact LearnOpenGL texture assets under [`src/assets/lighting_maps`](/home/dylan/repos/ink-ribbon-sokol/src/assets/lighting_maps)
+- [`lighting_maps.zig`](/home/dylan/repos/ink-ribbon-sokol/src/examples/lighting_maps.zig)
+- [`lighting_maps.glsl`](/home/dylan/repos/ink-ribbon-sokol/src/examples/lighting_maps.glsl)
+- [`lighting_maps_shader.zig`](/home/dylan/repos/ink-ribbon-sokol/src/examples/generated/lighting_maps_shader.zig)
+- Exact LearnOpenGL texture assets under [`src/examples/assets/lighting_maps`](/home/dylan/repos/ink-ribbon-sokol/src/examples/assets/lighting_maps)
 
 The camera was statically matched against the chapter’s [specular-map reference image](https://learnopengl.com/img/lighting/materials_specular_map.png).
 
