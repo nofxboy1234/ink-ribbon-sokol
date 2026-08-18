@@ -77,9 +77,9 @@ pub const boxes = [_]Box{
     wallZ(9, 0, 0.5, 3.5, hall_color),
     wallZ(9, 0, 10.5, 4.5, hall_color),
     // Reception/security desks around the central entrance sightline.
-    solid(-4.8, 0.65, 8.5, 2.2, 0.65, 0.45, rgba(0.37, 0.26, 0.17, 1)),
-    solid(4.8, 0.65, 8.5, 2.2, 0.65, 0.45, rgba(0.37, 0.26, 0.17, 1)),
-    solid(0, 0.85, -1, 3.2, 0.85, 1.2, rgba(0.34, 0.31, 0.27, 1)),
+    visual(-4.8, 0.65, 8.5, 2.2, 0.65, 0.45, rgba(0.37, 0.26, 0.17, 1)),
+    visual(4.8, 0.65, 8.5, 2.2, 0.65, 0.45, rgba(0.37, 0.26, 0.17, 1)),
+    visual(0, 0.85, -1, 3.2, 0.85, 1.2, rgba(0.34, 0.31, 0.27, 1)),
 
     // West: Reception, West Office, Records, Safety Deposit, Operations,
     // Darkroom and the enclosed north-west stair tower.
@@ -116,10 +116,10 @@ pub const boxes = [_]Box{
     // 2F — U-shaped gallery around the double-height Main Hall.
     // ---------------------------------------------------------------------
     // Split around the west stair shaft (x=-23, z=-5..7).
-    slab(-25.7, floor_height, 0, 1.3, 18),
-    slab(-15.3, floor_height, 0, 6.3, 18),
-    slab(-23, floor_height, 12.5, 1.4, 5.5),
-    slab(-23, floor_height, -11.5, 1.4, 6.5),
+    slab(-26, floor_height, 0, 1, 18),
+    slab(-15, floor_height, 0, 6, 18),
+    slab(-23, floor_height, 12.5, 2, 5.5),
+    slab(-23, floor_height, -11.5, 2, 6.5),
     // Split the gallery rails around both grand-stair flights.
     slab(-7, floor_height, 11.5, 2, 6.5),
     slab(-7, floor_height, -13, 2, 5),
@@ -135,7 +135,7 @@ pub const boxes = [_]Box{
     // One continuous strip prevents seams between the independently blocked
     // north bridge and room-wing slabs. The reference map shows this corridor
     // as an uninterrupted east-west route.
-    slab(-0.5, floor_height, -12, 26.5, 2),
+    slab(-0.5, floor_height, -12, 26.5, 4),
 
     // Main Hall gallery edges follow the long central void shown on 2F.
     // Leave a broad north opening around z=-12. The previous rail reached to
@@ -146,11 +146,11 @@ pub const boxes = [_]Box{
     wallX(0, floor_height, -10, 5, hall_color),
     wallX(-3.5, floor_height, 12, 1.5, hall_color),
     wallX(3.5, floor_height, 12, 1.5, hall_color),
-    wallZ(-9, floor_height, -16, 2, wall_color),
+    wallZ(-9, floor_height, -17.5, 0.5, wall_color),
     wallZ(-9, floor_height, -7, 3, wall_color),
     wallZ(-9, floor_height, 4, 6, wall_color),
     wallZ(-9, floor_height, 15.5, 2.5, wall_color),
-    wallZ(9, floor_height, -16, 2, wall_color),
+    wallZ(9, floor_height, -17.5, 0.5, wall_color),
     wallZ(9, floor_height, -7, 3, wall_color),
     wallZ(9, floor_height, 4, 6, wall_color),
     wallZ(9, floor_height, 15.5, 2.5, wall_color),
@@ -159,10 +159,15 @@ pub const boxes = [_]Box{
     // STARS form the narrower northern chain from the reference map.
     wallX(-18, floor_height, 10, 9, wall_color),
     wallX(-18, floor_height, 0, 9, wall_color),
-    wallX(-18, floor_height, -8, 9, wall_color),
+    // Split around the west stair shaft. The previous full run crossed the
+    // landing and prevented approaching the upper ramp from its lower end.
+    wallX(-26, floor_height, -8, 1, wall_color),
+    wallX(-13.5, floor_height, -8, 4.5, wall_color),
     wallZ(-14, floor_height, 14, 4, wall_color),
     wallZ(-14, floor_height, 4, 4, wall_color),
-    wallZ(-19, floor_height, -13, 5, wall_color),
+    // Broad south doorway prevents the capsule catching on the partition end
+    // while turning from the north gallery into the west stair tower.
+    wallZ(-19, floor_height, -14, 4, wall_color),
     // Split around the west stair flight at x=-23. A single wall here crossed
     // the ramp at z=-13 and made the otherwise valid 2F -> 3F route impassable.
     wallX(-25.75, floor_height, -13, 1.25, wall_color),
@@ -185,13 +190,15 @@ pub const boxes = [_]Box{
     // 3F — much smaller west Clock Tower/storage loop and east roof wing.
     // ---------------------------------------------------------------------
     // The 3F west footprint is split around the upper west-stair flight.
-    slab(-25.7, 2 * floor_height, -3, 1.3, 15),
-    slab(-15.3, 2 * floor_height, -3, 6.3, 15),
-    slab(-23, 2 * floor_height, 3.5, 1.4, 8.5),
-    slab(-23, 2 * floor_height, -16.5, 1.4, 1.5),
+    slab(-26, 2 * floor_height, -3, 1, 15),
+    slab(-15, 2 * floor_height, -3, 6, 15),
+    slab(-23, 2 * floor_height, 3.5, 2, 8.5),
+    slab(-23, 2 * floor_height, -16.5, 2, 1.5),
     slab(-8, 2 * floor_height, -10, 1, 6),
-    slab(-5, 2 * floor_height, -14, 4, 2),
-    slab(2, 2 * floor_height, -13, 3, 3),
+    // Open Main Hall balcony. It joins the west stair route to the narrow
+    // bridge while leaving the three-storey atrium below unobstructed.
+    slab(-4, 2 * floor_height, -13, 5, 3),
+    slab(2, 2 * floor_height, -13, 1, 3),
     slab(8, 2 * floor_height, -7, 3, 9),
     slab(17, 2 * floor_height, -8, 6, 8),
 
@@ -200,7 +207,9 @@ pub const boxes = [_]Box{
     wallX(-17, 2 * floor_height, -18, 8, wall_color),
     wallX(-17, 2 * floor_height, 12, 8, wall_color),
     wallZ(-9, 2 * floor_height, 6, 6, wall_color),
-    wallZ(-9, 2 * floor_height, -11, 5, wall_color),
+    // Door-sized break from West Storage onto the Main Hall balcony.
+    wallZ(-9, 2 * floor_height, -8.5, 2.5, wall_color),
+    wallZ(-9, 2 * floor_height, -17, 1, wall_color),
     wallX(-17, 2 * floor_height, 5, 6, wall_color),
     wallX(-17, 2 * floor_height, -6, 6, wall_color),
     wallZ(-21, 2 * floor_height, 8, 3, wall_color),
@@ -211,9 +220,11 @@ pub const boxes = [_]Box{
     // Clock machinery blockout.
     solid(-17, 2 * floor_height + 1.2, 0, 3.2, 1.2, 1.1, rgba(0.34, 0.25, 0.15, 1)),
 
+    // A waist-high rail keeps the balcony edge open to the Main Hall view.
+    railX(-4, 2 * floor_height, -10, 5, hall_color),
+
     // Narrow bridge and east storage/roof access wing.
     wallX(-4, 2 * floor_height, -16, 5, wall_color),
-    wallZ(1, 2 * floor_height, -13, 3, wall_color),
     wallX(5, 2 * floor_height, -10, 4, wall_color),
     wallZ(5, 2 * floor_height, -6, 4, wall_color),
     wallZ(11, 2 * floor_height, -7, 5, wall_color),
@@ -253,8 +264,8 @@ pub const staircases = [_]Staircase{
     .{ .lower_center = .{ .x = -6.5, .z = 5 }, .width = 3.2, .run = 13, .rise = floor_height, .direction_z = -1, .steps = 18 },
     .{ .lower_center = .{ .x = 6.5, .z = 5 }, .width = 3.2, .run = 13, .rise = floor_height, .direction_z = -1, .steps = 18 },
     // Enclosed north-west stair tower links all primary floors.
-    .{ .lower_center = .{ .x = -23, .z = 7 }, .width = 2.8, .run = 12, .rise = floor_height, .direction_z = -1 },
-    .{ .lower_center = .{ .x = -23, .y = floor_height, .z = -5 }, .width = 2.8, .run = 10, .rise = floor_height, .direction_z = -1 },
+    .{ .lower_center = .{ .x = -23, .z = 7 }, .width = 3.6, .run = 12, .rise = floor_height, .direction_z = -1 },
+    .{ .lower_center = .{ .x = -23, .y = floor_height, .z = -8 }, .width = 3.6, .run = 10, .rise = floor_height, .direction_z = -1 },
     // East fire stair, 1F -> 2F.
     .{ .lower_center = .{ .x = 23, .z = -15 }, .width = 2.8, .run = 11, .rise = floor_height, .direction_z = 1 },
     // Clock Tower machinery stair, 3F -> the small 4F platform.
@@ -302,6 +313,17 @@ fn wallX(x: f32, y: f32, z: f32, hx: f32, color: Vec4) Box {
 
 fn wallZ(x: f32, y: f32, z: f32, hz: f32, color: Vec4) Box {
     return solid(x, y + wall_half_height, z, wall_half_width, wall_half_height, hz, color);
+}
+
+fn railX(x: f32, y: f32, z: f32, hx: f32, color: Vec4) Box {
+    const rail_half_height = 0.55;
+    return solid(x, y + rail_half_height, z, hx, rail_half_height, wall_half_width, color);
+}
+
+fn visual(x: f32, y: f32, z: f32, hx: f32, hy: f32, hz: f32, color: Vec4) Box {
+    var result = solid(x, y, z, hx, hy, hz, color);
+    result.collidable = false;
+    return result;
 }
 
 fn solid(x: f32, y: f32, z: f32, hx: f32, hy: f32, hz: f32, color: Vec4) Box {

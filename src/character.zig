@@ -464,7 +464,7 @@ fn draw(position: b3.b3Pos) void {
         drawInstances(game.render.capsule_instances, game.render.capsule_cylinder_range, 0, 1, true);
         drawInstances(game.render.capsule_instances, game.render.capsule_sphere_range, @sizeOf(Instance), 2, true);
     }
-    drawFps();
+    drawHud(position);
     sg.endPass();
     sg.commit();
 }
@@ -496,7 +496,7 @@ fn updateCapsuleInstances(position: b3.b3Pos) void {
     sg.updateBuffer(game.render.capsule_instances, sg.asRange(&instances));
 }
 
-fn drawFps() void {
+fn drawHud(position: b3.b3Pos) void {
     const frame_duration = sapp.frameDuration();
     const fps = if (frame_duration > 0) 1.0 / frame_duration else 0;
     const text_width = 11.0; // "FPS: " plus a six-character numeric field.
@@ -504,6 +504,10 @@ fn drawFps() void {
     sdtx.pos(@max(1.0, sapp.widthf() / 8.0 - text_width - 1.0), 1.0);
     sdtx.color3b(255, 255, 255);
     sdtx.print("FPS: {d:>6.1}", .{fps});
+    if (game.debug.draw_physics) {
+        sdtx.pos(1.0, 1.0);
+        sdtx.print("POS {d:.1} {d:.1} {d:.1}", .{ position.x, position.y, position.z });
+    }
     sdtx.draw();
 }
 
