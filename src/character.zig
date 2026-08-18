@@ -25,6 +25,7 @@ const Mat4 = math.Mat4;
 const fixed_dt: f64 = 1.0 / 60.0;
 const max_frame_dt: f64 = 0.1;
 const max_ticks_per_frame = 6;
+const shadow_map_size = 2048;
 const character_half_extents = Vec3{ .x = 0.32, .y = 0.9, .z = 0.22 };
 
 const SceneBox = struct {
@@ -95,7 +96,12 @@ const RenderState = struct {
     index_buffer: sg.Buffer = .{},
     level_instances: sg.Buffer = .{},
     character_instance: sg.Buffer = .{},
-    pipeline: sg.Pipeline = .{},
+    display_pipeline: sg.Pipeline = .{},
+    shadow_pipeline: sg.Pipeline = .{},
+    shadow_pass: sg.Pass = .{},
+    shadow_view: sg.View = .{},
+    shadow_sampler: sg.Sampler = .{},
+    light_view_projection: Mat4 = Mat4.identity(),
     index_range: sshape.ElementRange = .{},
     pass_action: sg.PassAction = .{},
 };
@@ -247,20 +253,65 @@ fn initRenderer() void {
     var layout: sg.VertexLayoutState = .{};
     layout.buffers[0] = sshape.vertexBufferLayoutState(builder);
     layout.buffers[1] = .{ .step_func = .PER_INSTANCE, .stride = @sizeOf(Instance) };
-    layout.attrs[shd.ATTR_character_position] = sshape.positionVertexAttrState(builder);
-    layout.attrs[shd.ATTR_character_normal] = sshape.normalVertexAttrState(builder);
-    layout.attrs[shd.ATTR_character_inst_x] = instanceAttr(0);
-    layout.attrs[shd.ATTR_character_inst_y] = instanceAttr(16);
-    layout.attrs[shd.ATTR_character_inst_z] = instanceAttr(32);
-    layout.attrs[shd.ATTR_character_inst_color] = instanceAttr(48);
-    game.render.pipeline = sg.makePipeline(.{
-        .shader = sg.makeShader(shd.characterShaderDesc(sg.queryBackend())),
+    layout.attrs[shd.ATTR_display_position] = sshape.positionVertexAttrState(builder);
+    layout.attrs[shd.ATTR_display_normal] = sshape.normalVertexAttrState(builder);
+    layout.attrs[shd.ATTR_display_inst_x] = instanceAttr(0);
+    layout.attrs[shd.ATTR_display_inst_y] = instanceAttr(16);
+    layout.attrs[shd.ATTR_display_inst_z] = instanceAttr(32);
+    layout.attrs[shd.ATTR_display_inst_color] = instanceAttr(48);
+    game.render.display_pipeline = sg.makePipeline(.{
+        .shader = sg.makeShader(shd.displayShaderDesc(sg.queryBackend())),
         .layout = layout,
         .depth = .{ .write_enabled = true, .compare = .LESS_EQUAL },
         .index_type = .UINT16,
         .cull_mode = .BACK,
         .label = "character-scene-pipeline",
     });
+
+    const shadow_image = sg.makeImage(.{
+        .usage = .{ .depth_stencil_attachment = true },
+        .width = shadow_map_size,
+        .height = shadow_map_size,
+        .pixel_format = .DEPTH,
+        .sample_count = 1,
+        .label = "character-shadow-map",
+    });
+    game.render.shadow_view = sg.makeView(.{ .texture = .{ .image = shadow_image } });
+    game.render.shadow_sampler = sg.makeSampler(.{
+        .min_filter = .LINEAR,
+        .mag_filter = .LINEAR,
+        .wrap_u = .CLAMP_TO_EDGE,
+        .wrap_v = .CLAMP_TO_EDGE,
+        .compare = .LESS,
+    });
+    game.render.shadow_pass = .{
+        .action = .{ .depth = .{ .load_action = .CLEAR, .store_action = .STORE, .clear_value = 1 } },
+        .attachments = .{ .depth_stencil = sg.makeView(.{ .depth_stencil_attachment = .{ .image = shadow_image } }) },
+        .label = "character-shadow-pass",
+    };
+
+    var shadow_layout: sg.VertexLayoutState = .{};
+    shadow_layout.buffers[0] = sshape.vertexBufferLayoutState(builder);
+    shadow_layout.buffers[1] = .{ .step_func = .PER_INSTANCE, .stride = @sizeOf(Instance) };
+    shadow_layout.attrs[shd.ATTR_shadow_position] = sshape.positionVertexAttrState(builder);
+    shadow_layout.attrs[shd.ATTR_shadow_inst_x] = instanceAttr(0);
+    shadow_layout.attrs[shd.ATTR_shadow_inst_y] = instanceAttr(16);
+    shadow_layout.attrs[shd.ATTR_shadow_inst_z] = instanceAttr(32);
+    game.render.shadow_pipeline = sg.makePipeline(.{
+        .shader = sg.makeShader(shd.shadowShaderDesc(sg.queryBackend())),
+        .layout = shadow_layout,
+        .depth = .{ .pixel_format = .DEPTH, .write_enabled = true, .compare = .LESS_EQUAL },
+        .colors = noColorTargets(),
+        .sample_count = 1,
+        .index_type = .UINT16,
+        .cull_mode = .FRONT,
+        .label = "character-shadow-pipeline",
+    });
+
+    const light_position = Vec3{ .x = 8, .y = 14, .z = -10 };
+    const light_view = Mat4.lookAtRh(light_position, .{}, .{ .y = 1 });
+    const light_projection = Mat4.orthoOffCenterRh(-14, 14, -14, 14, 1, 40);
+    game.render.light_view_projection = Mat4.mul(light_view, light_projection);
     game.render.pass_action.colors[0] = .{ .load_action = .CLEAR, .clear_value = .{ .r = 0.035, .g = 0.045, .b = 0.055, .a = 1 } };
 }
 
@@ -269,18 +320,33 @@ fn draw(position: b3.b3Pos) void {
         .{ .x = position.x, .y = position.y, .z = position.z },
         character_half_extents,
         game.character.yaw,
-        rgb(0.72, 0.14, 0.10),
+        rgb(0.20, 0.694, 1.0), // Oxocarbon blue: #33B1FF
     );
     sg.updateBuffer(game.render.character_instance, sg.asRange(&instance));
-    const vs_params: shd.VsParams = .{ .view_projection = game.camera.view_projection };
-    const fs_params: shd.FsParams = .{ .light_direction = .{ .x = -0.4, .y = 0.8, .z = 0.3 } };
+
+    const shadow_params: shd.ShadowVsParams = .{ .light_view_projection = game.render.light_view_projection };
+    sg.beginPass(game.render.shadow_pass);
+    sg.applyPipeline(game.render.shadow_pipeline);
+    sg.applyUniforms(shd.UB_shadow_vs_params, sg.asRange(&shadow_params));
+    drawInstances(game.render.level_instances, scene_boxes.len, false);
+    drawInstances(game.render.character_instance, 1, false);
+    sg.endPass();
+
+    const vs_params: shd.DisplayVsParams = .{
+        .view_projection = game.camera.view_projection,
+        .light_view_projection = game.render.light_view_projection,
+    };
+    const fs_params: shd.DisplayFsParams = .{
+        .light_direction = Vec3.normalized(.{ .x = 8, .y = 14, .z = -10 }),
+        .eye_position = game.camera.eye,
+    };
 
     sg.beginPass(.{ .action = game.render.pass_action, .swapchain = sglue.swapchain() });
-    sg.applyPipeline(game.render.pipeline);
-    sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
-    sg.applyUniforms(shd.UB_fs_params, sg.asRange(&fs_params));
-    drawInstances(game.render.level_instances, scene_boxes.len);
-    drawInstances(game.render.character_instance, 1);
+    sg.applyPipeline(game.render.display_pipeline);
+    sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));
+    sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
+    drawInstances(game.render.level_instances, scene_boxes.len, true);
+    drawInstances(game.render.character_instance, 1, true);
     drawFps();
     sg.endPass();
     sg.commit();
@@ -297,17 +363,27 @@ fn drawFps() void {
     sdtx.draw();
 }
 
-fn drawInstances(instance_buffer: sg.Buffer, count: usize) void {
+fn drawInstances(instance_buffer: sg.Buffer, count: usize, with_shadow_texture: bool) void {
     var bindings: sg.Bindings = .{};
     bindings.vertex_buffers[0] = game.render.vertex_buffer;
     bindings.vertex_buffers[1] = instance_buffer;
     bindings.index_buffer = game.render.index_buffer;
+    if (with_shadow_texture) {
+        bindings.views[shd.VIEW_shadow_map] = game.render.shadow_view;
+        bindings.samplers[shd.SMP_shadow_sampler] = game.render.shadow_sampler;
+    }
     sg.applyBindings(bindings);
     sg.draw(
         @intCast(game.render.index_range.base_element),
         @intCast(game.render.index_range.num_elements),
         @intCast(count),
     );
+}
+
+fn noColorTargets() [8]sg.ColorTargetState {
+    var colors: [8]sg.ColorTargetState = @splat(.{});
+    colors[0].pixel_format = .NONE;
+    return colors;
 }
 
 fn makeInstance(center: Vec3, half: Vec3, yaw: f32, color: Vec4) Instance {

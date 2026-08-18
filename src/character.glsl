@@ -2,9 +2,46 @@
 @ctype mat4 math.Mat4
 @ctype vec3 math.Vec3
 
-@vs vs
-layout(binding = 0) uniform vs_params {
+@block shadow_util
+float sample_shadow_pcf(texture2D tex, sampler smp, vec3 position) {
+    vec2 size = vec2(textureSize(sampler2DShadow(tex, smp), 0));
+    float result = 0.0;
+    for (int x = -2; x <= 2; x++) {
+        for (int y = -2; y <= 2; y++) {
+            result += texture(sampler2DShadow(tex, smp), vec3(position.xy + vec2(x, y) / size, position.z));
+        }
+    }
+    return result / 25.0;
+}
+@end
+
+@vs shadow_vs
+@glsl_options fixup_clipspace
+layout(binding = 0) uniform shadow_vs_params {
+    mat4 light_view_projection;
+};
+
+layout(location = 0) in vec4 position;
+layout(location = 1) in vec4 inst_x;
+layout(location = 2) in vec4 inst_y;
+layout(location = 3) in vec4 inst_z;
+
+void main() {
+    vec4 world_position = vec4(dot(position, inst_x), dot(position, inst_y), dot(position, inst_z), 1.0);
+    gl_Position = light_view_projection * world_position;
+}
+@end
+
+@fs shadow_fs
+void main() {}
+@end
+
+@program shadow shadow_vs shadow_fs
+
+@vs display_vs
+layout(binding = 0) uniform display_vs_params {
     mat4 view_projection;
+    mat4 light_view_projection;
 };
 
 layout(location = 0) in vec4 position;
@@ -14,32 +51,63 @@ layout(location = 3) in vec4 inst_y;
 layout(location = 4) in vec4 inst_z;
 layout(location = 5) in vec4 inst_color;
 
-out vec3 world_normal;
 out vec3 color;
+out vec4 light_position;
+out vec3 world_position;
+out vec3 world_normal;
 
 void main() {
-    vec4 world_position = vec4(dot(position, inst_x), dot(position, inst_y), dot(position, inst_z), 1.0);
+    vec4 wp = vec4(dot(position, inst_x), dot(position, inst_y), dot(position, inst_z), 1.0);
     vec4 local_normal = vec4(normal, 0.0);
     world_normal = vec3(dot(local_normal, inst_x), dot(local_normal, inst_y), dot(local_normal, inst_z));
+    world_position = wp.xyz;
     color = inst_color.rgb;
-    gl_Position = view_projection * world_position;
+    light_position = light_view_projection * wp;
+    #if !SOKOL_GLSL
+        light_position.y = -light_position.y;
+    #endif
+    gl_Position = view_projection * wp;
 }
 @end
 
-@fs fs
-layout(binding = 1) uniform fs_params {
+@fs display_fs
+@include_block shadow_util
+layout(binding = 1) uniform display_fs_params {
     vec3 light_direction;
+    vec3 eye_position;
 };
 
-in vec3 world_normal;
+layout(binding = 0) uniform texture2D shadow_map;
+layout(binding = 0) uniform sampler shadow_sampler;
+
 in vec3 color;
+in vec4 light_position;
+in vec3 world_position;
+in vec3 world_normal;
 out vec4 frag_color;
 
 void main() {
-    float diffuse = max(dot(normalize(world_normal), normalize(light_direction)), 0.0);
-    vec3 linear_color = color * (0.25 + 0.75 * diffuse);
+    vec3 n = normalize(world_normal);
+    vec3 l = normalize(light_direction);
+    float n_dot_l = dot(n, l);
+    float intensity = 0.25;
+    float specular = 0.0;
+
+    if (n_dot_l > 0.0) {
+        vec3 projected = light_position.xyz / light_position.w;
+        float bias = max(0.0001 * (1.0 - n_dot_l), 0.00001);
+        vec3 shadow_position = vec3((projected.xy + 1.0) * 0.5, projected.z + bias);
+        float shadow = sample_shadow_pcf(shadow_map, shadow_sampler, shadow_position);
+        intensity += n_dot_l * shadow;
+
+        vec3 view_direction = normalize(eye_position - world_position);
+        vec3 reflected = reflect(-l, n);
+        specular = pow(max(dot(reflected, view_direction), 0.0), 16.0) * n_dot_l * shadow;
+    }
+
+    vec3 linear_color = vec3(specular) + intensity * color;
     frag_color = vec4(pow(linear_color, vec3(1.0 / 2.2)), 1.0);
 }
 @end
 
-@program character vs fs
+@program display display_vs display_fs
