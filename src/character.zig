@@ -96,13 +96,17 @@ const RenderState = struct {
     index_buffer: sg.Buffer = .{},
     level_instances: sg.Buffer = .{},
     character_instance: sg.Buffer = .{},
+    capsule_instances: sg.Buffer = .{},
     display_pipeline: sg.Pipeline = .{},
+    debug_pipeline: sg.Pipeline = .{},
     shadow_pipeline: sg.Pipeline = .{},
     shadow_pass: sg.Pass = .{},
     shadow_view: sg.View = .{},
     shadow_sampler: sg.Sampler = .{},
     light_view_projection: Mat4 = Mat4.identity(),
-    index_range: sshape.ElementRange = .{},
+    box_range: sshape.ElementRange = .{},
+    capsule_cylinder_range: sshape.ElementRange = .{},
+    capsule_sphere_range: sshape.ElementRange = .{},
     pass_action: sg.PassAction = .{},
 };
 
@@ -229,15 +233,19 @@ fn initPhysics() void {
 }
 
 fn initRenderer() void {
-    var vertices: [sshape.max_vertex_size * 24]u8 = undefined;
-    var indices: [36]u16 = undefined;
+    var vertices: [sshape.max_vertex_size * 4096]u8 = undefined;
+    var indices: [4096]u16 = undefined;
     var builder: sshape.State = .{
         .vertices = .{ .buffer = sshape.asRange(&vertices) },
         .indices = .{ .buffer = sshape.asRange(&indices) },
         .disable = .{ .texcoords = true, .colors = true },
     };
     sshape.buildBox(&builder, .{ .width = 1, .height = 1, .depth = 1 });
-    game.render.index_range = sshape.elementRange(builder);
+    game.render.box_range = sshape.elementRange(builder);
+    sshape.buildCylinder(&builder, .{ .radius = 1, .height = 1, .slices = 16, .stacks = 1 });
+    game.render.capsule_cylinder_range = sshape.elementRange(builder);
+    sshape.buildSphere(&builder, .{ .radius = 1, .slices = 16, .stacks = 8 });
+    game.render.capsule_sphere_range = sshape.elementRange(builder);
     game.render.vertex_buffer = sg.makeBuffer(sshape.vertexBufferDesc(builder));
     game.render.index_buffer = sg.makeBuffer(sshape.indexBufferDesc(builder));
 
@@ -248,6 +256,11 @@ fn initRenderer() void {
         .size = @sizeOf(Instance),
         .usage = .{ .stream_update = true },
         .label = "character-dynamic-instance",
+    });
+    game.render.capsule_instances = sg.makeBuffer(.{
+        .size = 3 * @sizeOf(Instance),
+        .usage = .{ .stream_update = true },
+        .label = "character-capsule-debug-instances",
     });
 
     var layout: sg.VertexLayoutState = .{};
@@ -266,6 +279,15 @@ fn initRenderer() void {
         .index_type = .UINT16,
         .cull_mode = .BACK,
         .label = "character-scene-pipeline",
+    });
+    game.render.debug_pipeline = sg.makePipeline(.{
+        .shader = sg.makeShader(shd.displayShaderDesc(sg.queryBackend())),
+        .layout = layout,
+        .depth = .{ .write_enabled = false, .compare = .LESS_EQUAL },
+        .colors = blendingTargets(),
+        .index_type = .UINT16,
+        .cull_mode = .BACK,
+        .label = "character-capsule-debug-pipeline",
     });
 
     const shadow_image = sg.makeImage(.{
@@ -323,13 +345,37 @@ fn draw(position: b3.b3Pos) void {
         rgb(0.20, 0.694, 1.0), // Oxocarbon blue: #33B1FF
     );
     sg.updateBuffer(game.render.character_instance, sg.asRange(&instance));
+    const capsule_radius = game.character_config.capsule_radius;
+    const half_segment = game.character_config.capsule_half_segment;
+    const capsule_color = Vec4{ .x = 0.25, .y = 1.0, .z = 0.55, .w = 0.32 };
+    const capsule_instances = [_]Instance{
+        makeScaledInstance(
+            .{ .x = position.x, .y = position.y, .z = position.z },
+            .{ .x = capsule_radius, .y = 2 * half_segment, .z = capsule_radius },
+            0,
+            capsule_color,
+        ),
+        makeScaledInstance(
+            .{ .x = position.x, .y = position.y - half_segment, .z = position.z },
+            .{ .x = capsule_radius, .y = capsule_radius, .z = capsule_radius },
+            0,
+            capsule_color,
+        ),
+        makeScaledInstance(
+            .{ .x = position.x, .y = position.y + half_segment, .z = position.z },
+            .{ .x = capsule_radius, .y = capsule_radius, .z = capsule_radius },
+            0,
+            capsule_color,
+        ),
+    };
+    sg.updateBuffer(game.render.capsule_instances, sg.asRange(&capsule_instances));
 
     const shadow_params: shd.ShadowVsParams = .{ .light_view_projection = game.render.light_view_projection };
     sg.beginPass(game.render.shadow_pass);
     sg.applyPipeline(game.render.shadow_pipeline);
     sg.applyUniforms(shd.UB_shadow_vs_params, sg.asRange(&shadow_params));
-    drawInstances(game.render.level_instances, scene_boxes.len, false);
-    drawInstances(game.render.character_instance, 1, false);
+    drawInstances(game.render.level_instances, game.render.box_range, 0, scene_boxes.len, false);
+    drawInstances(game.render.character_instance, game.render.box_range, 0, 1, false);
     sg.endPass();
 
     const vs_params: shd.DisplayVsParams = .{
@@ -345,8 +391,13 @@ fn draw(position: b3.b3Pos) void {
     sg.applyPipeline(game.render.display_pipeline);
     sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));
     sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
-    drawInstances(game.render.level_instances, scene_boxes.len, true);
-    drawInstances(game.render.character_instance, 1, true);
+    drawInstances(game.render.level_instances, game.render.box_range, 0, scene_boxes.len, true);
+    drawInstances(game.render.character_instance, game.render.box_range, 0, 1, true);
+    sg.applyPipeline(game.render.debug_pipeline);
+    sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));
+    sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
+    drawInstances(game.render.capsule_instances, game.render.capsule_cylinder_range, 0, 1, true);
+    drawInstances(game.render.capsule_instances, game.render.capsule_sphere_range, @sizeOf(Instance), 2, true);
     drawFps();
     sg.endPass();
     sg.commit();
@@ -363,10 +414,17 @@ fn drawFps() void {
     sdtx.draw();
 }
 
-fn drawInstances(instance_buffer: sg.Buffer, count: usize, with_shadow_texture: bool) void {
+fn drawInstances(
+    instance_buffer: sg.Buffer,
+    range: sshape.ElementRange,
+    instance_offset: usize,
+    count: usize,
+    with_shadow_texture: bool,
+) void {
     var bindings: sg.Bindings = .{};
     bindings.vertex_buffers[0] = game.render.vertex_buffer;
     bindings.vertex_buffers[1] = instance_buffer;
+    bindings.vertex_buffer_offsets[1] = @intCast(instance_offset);
     bindings.index_buffer = game.render.index_buffer;
     if (with_shadow_texture) {
         bindings.views[shd.VIEW_shadow_map] = game.render.shadow_view;
@@ -374,8 +432,8 @@ fn drawInstances(instance_buffer: sg.Buffer, count: usize, with_shadow_texture: 
     }
     sg.applyBindings(bindings);
     sg.draw(
-        @intCast(game.render.index_range.base_element),
-        @intCast(game.render.index_range.num_elements),
+        @intCast(range.base_element),
+        @intCast(range.num_elements),
         @intCast(count),
     );
 }
@@ -386,15 +444,31 @@ fn noColorTargets() [8]sg.ColorTargetState {
     return colors;
 }
 
+fn blendingTargets() [8]sg.ColorTargetState {
+    var colors: [8]sg.ColorTargetState = @splat(.{});
+    colors[0].blend = .{
+        .enabled = true,
+        .src_factor_rgb = .SRC_ALPHA,
+        .dst_factor_rgb = .ONE_MINUS_SRC_ALPHA,
+        .src_factor_alpha = .ONE,
+        .dst_factor_alpha = .ONE_MINUS_SRC_ALPHA,
+    };
+    return colors;
+}
+
 fn makeInstance(center: Vec3, half: Vec3, yaw: f32, color: Vec4) Instance {
+    return makeScaledInstance(center, Vec3.scale(half, 2), yaw, color);
+}
+
+fn makeScaledInstance(center: Vec3, scale: Vec3, yaw: f32, color: Vec4) Instance {
     const c = @cos(yaw);
     const s = @sin(yaw);
     // Each row maps the unit box directly into world space. Scale is baked in,
     // so the shader needs no per-object uniform or matrix multiplication.
     return .{
-        .x = .{ .x = 2 * half.x * c, .y = 0, .z = 2 * half.z * s, .w = center.x },
-        .y = .{ .x = 0, .y = 2 * half.y, .z = 0, .w = center.y },
-        .z = .{ .x = -2 * half.x * s, .y = 0, .z = 2 * half.z * c, .w = center.z },
+        .x = .{ .x = scale.x * c, .y = 0, .z = scale.z * s, .w = center.x },
+        .y = .{ .x = 0, .y = scale.y, .z = 0, .w = center.y },
+        .z = .{ .x = -scale.x * s, .y = 0, .z = scale.z * c, .w = center.z },
         .color = color,
     };
 }

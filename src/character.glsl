@@ -52,6 +52,7 @@ layout(location = 4) in vec4 inst_z;
 layout(location = 5) in vec4 inst_color;
 
 out vec3 color;
+out float alpha;
 out vec4 light_position;
 out vec3 world_position;
 out vec3 world_normal;
@@ -62,6 +63,7 @@ void main() {
     world_normal = vec3(dot(local_normal, inst_x), dot(local_normal, inst_y), dot(local_normal, inst_z));
     world_position = wp.xyz;
     color = inst_color.rgb;
+    alpha = inst_color.a;
     light_position = light_view_projection * wp;
     #if !SOKOL_GLSL
         light_position.y = -light_position.y;
@@ -81,6 +83,7 @@ layout(binding = 0) uniform texture2D shadow_map;
 layout(binding = 0) uniform sampler shadow_sampler;
 
 in vec3 color;
+in float alpha;
 in vec4 light_position;
 in vec3 world_position;
 in vec3 world_normal;
@@ -106,7 +109,7 @@ void main() {
     }
 
     vec3 linear_color = vec3(specular) + intensity * color;
-    frag_color = vec4(pow(linear_color, vec3(1.0 / 2.2)), 1.0);
+    frag_color = vec4(pow(linear_color, vec3(1.0 / 2.2)), alpha);
 }
 @end
 
