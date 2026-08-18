@@ -36,15 +36,42 @@ const SceneBox = struct {
 
 // One description feeds both Box3D and the immutable render-instance buffer.
 const scene_boxes = [_]SceneBox{
-    .{ .center = .{ .y = -0.25 }, .half_extents = .{ .x = 10, .y = 0.25, .z = 10 }, .color = rgb(0.26, 0.29, 0.31) },
-    .{ .center = .{ .x = -10, .y = 1.5 }, .half_extents = .{ .x = 0.25, .y = 1.75, .z = 10 }, .color = rgb(0.38, 0.40, 0.42) },
-    .{ .center = .{ .x = 10, .y = 1.5 }, .half_extents = .{ .x = 0.25, .y = 1.75, .z = 10 }, .color = rgb(0.38, 0.40, 0.42) },
-    .{ .center = .{ .z = -10, .y = 1.5 }, .half_extents = .{ .x = 10, .y = 1.75, .z = 0.25 }, .color = rgb(0.38, 0.40, 0.42) },
-    .{ .center = .{ .z = 10, .y = 1.5 }, .half_extents = .{ .x = 10, .y = 1.75, .z = 0.25 }, .color = rgb(0.38, 0.40, 0.42) },
-    .{ .center = .{ .x = -3.2, .y = 0.75, .z = -1.5 }, .half_extents = .{ .x = 1.2, .y = 0.75, .z = 1.2 }, .color = rgb(0.55, 0.31, 0.20) },
-    .{ .center = .{ .x = 2.8, .y = 1.0, .z = -2.8 }, .half_extents = .{ .x = 0.7, .y = 1.0, .z = 2.2 }, .color = rgb(0.25, 0.42, 0.52) },
-    .{ .center = .{ .x = 0.5, .y = 0.5, .z = 3.5 }, .half_extents = .{ .x = 2.5, .y = 0.5, .z = 0.6 }, .color = rgb(0.43, 0.35, 0.22) },
-    .{ .center = .{ .x = -5.8, .y = 1.2, .z = 5.0 }, .half_extents = .{ .x = 0.5, .y = 1.2, .z = 2.5 }, .color = rgb(0.32, 0.45, 0.30) },
+    // Floor and exterior shell: 40 by 32 metres with 3.5 metre walls.
+    .{ .center = .{ .y = -0.25 }, .half_extents = .{ .x = 20, .y = 0.25, .z = 16 }, .color = rgb(0.22, 0.25, 0.27) },
+    .{ .center = .{ .x = -20, .y = 1.75 }, .half_extents = .{ .x = 0.2, .y = 1.75, .z = 16 }, .color = rgb(0.42, 0.43, 0.45) },
+    .{ .center = .{ .x = 20, .y = 1.75 }, .half_extents = .{ .x = 0.2, .y = 1.75, .z = 16 }, .color = rgb(0.42, 0.43, 0.45) },
+    .{ .center = .{ .z = -16, .y = 1.75 }, .half_extents = .{ .x = 20, .y = 1.75, .z = 0.2 }, .color = rgb(0.42, 0.43, 0.45) },
+    .{ .center = .{ .z = 16, .y = 1.75 }, .half_extents = .{ .x = 20, .y = 1.75, .z = 0.2 }, .color = rgb(0.42, 0.43, 0.45) },
+
+    // Walls bordering the north-south corridor. The missing two-metre sections
+    // at z=-9 and z=9 are doorways; the central gap is the cross-corridor.
+    .{ .center = .{ .x = -2, .y = 1.5, .z = -13 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3 }, .color = rgb(0.50, 0.51, 0.53) },
+    .{ .center = .{ .x = -2, .y = 1.5, .z = -4.75 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3.25 }, .color = rgb(0.50, 0.51, 0.53) },
+    .{ .center = .{ .x = -2, .y = 1.5, .z = 4.75 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3.25 }, .color = rgb(0.50, 0.51, 0.53) },
+    .{ .center = .{ .x = -2, .y = 1.5, .z = 13 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3 }, .color = rgb(0.50, 0.51, 0.53) },
+    .{ .center = .{ .x = 2, .y = 1.5, .z = -13 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3 }, .color = rgb(0.50, 0.51, 0.53) },
+    .{ .center = .{ .x = 2, .y = 1.5, .z = -4.75 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3.25 }, .color = rgb(0.50, 0.51, 0.53) },
+    .{ .center = .{ .x = 2, .y = 1.5, .z = 4.75 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3.25 }, .color = rgb(0.50, 0.51, 0.53) },
+    .{ .center = .{ .x = 2, .y = 1.5, .z = 13 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3 }, .color = rgb(0.50, 0.51, 0.53) },
+
+    // Walls bordering the east-west corridor. Door gaps at x=-11 and x=11
+    // connect four large rooms to the crossing corridors.
+    .{ .center = .{ .x = -16, .y = 1.5, .z = -1.5 }, .half_extents = .{ .x = 4, .y = 1.5, .z = 0.15 }, .color = rgb(0.47, 0.48, 0.50) },
+    .{ .center = .{ .x = -6, .y = 1.5, .z = -1.5 }, .half_extents = .{ .x = 4, .y = 1.5, .z = 0.15 }, .color = rgb(0.47, 0.48, 0.50) },
+    .{ .center = .{ .x = 6, .y = 1.5, .z = -1.5 }, .half_extents = .{ .x = 4, .y = 1.5, .z = 0.15 }, .color = rgb(0.47, 0.48, 0.50) },
+    .{ .center = .{ .x = 16, .y = 1.5, .z = -1.5 }, .half_extents = .{ .x = 4, .y = 1.5, .z = 0.15 }, .color = rgb(0.47, 0.48, 0.50) },
+    .{ .center = .{ .x = -16, .y = 1.5, .z = 1.5 }, .half_extents = .{ .x = 4, .y = 1.5, .z = 0.15 }, .color = rgb(0.47, 0.48, 0.50) },
+    .{ .center = .{ .x = -6, .y = 1.5, .z = 1.5 }, .half_extents = .{ .x = 4, .y = 1.5, .z = 0.15 }, .color = rgb(0.47, 0.48, 0.50) },
+    .{ .center = .{ .x = 6, .y = 1.5, .z = 1.5 }, .half_extents = .{ .x = 4, .y = 1.5, .z = 0.15 }, .color = rgb(0.47, 0.48, 0.50) },
+    .{ .center = .{ .x = 16, .y = 1.5, .z = 1.5 }, .half_extents = .{ .x = 4, .y = 1.5, .z = 0.15 }, .color = rgb(0.47, 0.48, 0.50) },
+
+    // Simple room contents make each doorway and room volume easy to read.
+    .{ .center = .{ .x = -13, .y = 0.55, .z = -9 }, .half_extents = .{ .x = 2.2, .y = 0.55, .z = 0.7 }, .color = rgb(0.45, 0.29, 0.18) },
+    .{ .center = .{ .x = -8, .y = 0.8, .z = 9 }, .half_extents = .{ .x = 0.8, .y = 0.8, .z = 2.4 }, .color = rgb(0.23, 0.39, 0.48) },
+    .{ .center = .{ .x = 9, .y = 0.5, .z = -10 }, .half_extents = .{ .x = 2.8, .y = 0.5, .z = 0.65 }, .color = rgb(0.38, 0.32, 0.20) },
+    .{ .center = .{ .x = 14, .y = 1.0, .z = 8 }, .half_extents = .{ .x = 0.7, .y = 1.0, .z = 2.2 }, .color = rgb(0.29, 0.43, 0.28) },
+    .{ .center = .{ .x = -15, .y = 0.75, .z = 6 }, .half_extents = .{ .x = 1.0, .y = 0.75, .z = 1.0 }, .color = rgb(0.50, 0.24, 0.18) },
+    .{ .center = .{ .x = 7, .y = 0.65, .z = 11 }, .half_extents = .{ .x = 1.5, .y = 0.65, .z = 1.5 }, .color = rgb(0.28, 0.34, 0.46) },
 };
 
 const Instance = extern struct {
@@ -338,9 +365,9 @@ fn initRenderer() void {
         .label = "character-shadow-pipeline",
     });
 
-    const light_position = Vec3{ .x = 8, .y = 14, .z = -10 };
+    const light_position = Vec3{ .x = 20, .y = 32, .z = -24 };
     const light_view = Mat4.lookAtRh(light_position, .{}, .{ .y = 1 });
-    const light_projection = Mat4.orthoOffCenterRh(-14, 14, -14, 14, 1, 40);
+    const light_projection = Mat4.orthoOffCenterRh(-30, 30, -30, 30, 1, 80);
     game.render.light_view_projection = Mat4.mul(light_view, light_projection);
     game.render.pass_action.colors[0] = .{ .load_action = .CLEAR, .clear_value = .{ .r = 0.035, .g = 0.045, .b = 0.055, .a = 1 } };
 }
@@ -368,7 +395,7 @@ fn draw(position: b3.b3Pos) void {
         .light_view_projection = game.render.light_view_projection,
     };
     const fs_params: shd.DisplayFsParams = .{
-        .light_direction = Vec3.normalized(.{ .x = 8, .y = 14, .z = -10 }),
+        .light_direction = Vec3.normalized(.{ .x = 20, .y = 32, .z = -24 }),
         .eye_position = game.camera.eye,
     };
 
