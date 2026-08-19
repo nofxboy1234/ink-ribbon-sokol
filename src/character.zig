@@ -29,68 +29,6 @@ const max_ticks_per_frame = 6;
 const shadow_map_size = 2048;
 const character_half_extents = Vec3{ .x = 0.32, .y = 0.9, .z = 0.22 };
 
-const SceneBox = struct {
-    center: Vec3,
-    half_extents: Vec3,
-    color: Vec4,
-};
-
-// One description feeds both Box3D and the immutable render-instance buffer.
-const scene_boxes = [_]SceneBox{
-    // Entrance shell and the broad central Main Hall.
-    .{ .center = .{ .y = -0.25 }, .half_extents = .{ .x = 22, .y = 0.25, .z = 20 }, .color = rgb(0.20, 0.23, 0.25) },
-    .{ .center = .{ .x = -22, .y = 1.75 }, .half_extents = .{ .x = 0.2, .y = 1.75, .z = 20 }, .color = rgb(0.42, 0.43, 0.45) },
-    .{ .center = .{ .x = 22, .y = 1.75 }, .half_extents = .{ .x = 0.2, .y = 1.75, .z = 20 }, .color = rgb(0.42, 0.43, 0.45) },
-    .{ .center = .{ .z = -20, .y = 1.75 }, .half_extents = .{ .x = 22, .y = 1.75, .z = 0.2 }, .color = rgb(0.42, 0.43, 0.45) },
-    .{ .center = .{ .x = -12, .y = 1.75, .z = 20 }, .half_extents = .{ .x = 10, .y = 1.75, .z = 0.2 }, .color = rgb(0.42, 0.43, 0.45) },
-    .{ .center = .{ .x = 12, .y = 1.75, .z = 20 }, .half_extents = .{ .x = 10, .y = 1.75, .z = 0.2 }, .color = rgb(0.42, 0.43, 0.45) },
-
-    // Main Hall edges. Matching gaps lead into narrow west and east corridors.
-    .{ .center = .{ .x = -7, .y = 1.5, .z = -18 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 2 }, .color = rgb(0.52, 0.52, 0.54) },
-    .{ .center = .{ .x = -7, .y = 1.5, .z = -11 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3 }, .color = rgb(0.52, 0.52, 0.54) },
-    .{ .center = .{ .x = -7, .y = 1.5, .z = -2 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 4 }, .color = rgb(0.52, 0.52, 0.54) },
-    .{ .center = .{ .x = -7, .y = 1.5, .z = 7.5 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3.5 }, .color = rgb(0.52, 0.52, 0.54) },
-    .{ .center = .{ .x = -7, .y = 1.5, .z = 15.5 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 2.5 }, .color = rgb(0.52, 0.52, 0.54) },
-    .{ .center = .{ .x = 7, .y = 1.5, .z = -18 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 2 }, .color = rgb(0.52, 0.52, 0.54) },
-    .{ .center = .{ .x = 7, .y = 1.5, .z = -11 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3 }, .color = rgb(0.52, 0.52, 0.54) },
-    .{ .center = .{ .x = 7, .y = 1.5, .z = -2 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 4 }, .color = rgb(0.52, 0.52, 0.54) },
-    .{ .center = .{ .x = 7, .y = 1.5, .z = 7.5 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3.5 }, .color = rgb(0.52, 0.52, 0.54) },
-    .{ .center = .{ .x = 7, .y = 1.5, .z = 15.5 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 2.5 }, .color = rgb(0.52, 0.52, 0.54) },
-
-    // Room-facing sides of the west/east corridors, with aligned doorways.
-    .{ .center = .{ .x = -9, .y = 1.5, .z = -18 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 2 }, .color = rgb(0.46, 0.47, 0.49) },
-    .{ .center = .{ .x = -9, .y = 1.5, .z = -11 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3 }, .color = rgb(0.46, 0.47, 0.49) },
-    .{ .center = .{ .x = -9, .y = 1.5, .z = -2 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 4 }, .color = rgb(0.46, 0.47, 0.49) },
-    .{ .center = .{ .x = -9, .y = 1.5, .z = 7.5 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3.5 }, .color = rgb(0.46, 0.47, 0.49) },
-    .{ .center = .{ .x = -9, .y = 1.5, .z = 15.5 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 2.5 }, .color = rgb(0.46, 0.47, 0.49) },
-    .{ .center = .{ .x = 9, .y = 1.5, .z = -18 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 2 }, .color = rgb(0.46, 0.47, 0.49) },
-    .{ .center = .{ .x = 9, .y = 1.5, .z = -11 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3 }, .color = rgb(0.46, 0.47, 0.49) },
-    .{ .center = .{ .x = 9, .y = 1.5, .z = -2 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 4 }, .color = rgb(0.46, 0.47, 0.49) },
-    .{ .center = .{ .x = 9, .y = 1.5, .z = 7.5 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 3.5 }, .color = rgb(0.46, 0.47, 0.49) },
-    .{ .center = .{ .x = 9, .y = 1.5, .z = 15.5 }, .half_extents = .{ .x = 0.15, .y = 1.5, .z = 2.5 }, .color = rgb(0.46, 0.47, 0.49) },
-
-    // West: Reception, West Office, Safety Deposit, Operations/Dark Room zone.
-    .{ .center = .{ .x = -15.5, .y = 1.5, .z = 8 }, .half_extents = .{ .x = 6.5, .y = 1.5, .z = 0.15 }, .color = rgb(0.48, 0.49, 0.51) },
-    .{ .center = .{ .x = -15.5, .y = 1.5, .z = -2 }, .half_extents = .{ .x = 6.5, .y = 1.5, .z = 0.15 }, .color = rgb(0.48, 0.49, 0.51) },
-    .{ .center = .{ .x = -15.5, .y = 1.5, .z = -11 }, .half_extents = .{ .x = 6.5, .y = 1.5, .z = 0.15 }, .color = rgb(0.48, 0.49, 0.51) },
-    // East: East Office, Press Room, Waiting, Watchman's side.
-    .{ .center = .{ .x = 15.5, .y = 1.5, .z = 8 }, .half_extents = .{ .x = 6.5, .y = 1.5, .z = 0.15 }, .color = rgb(0.48, 0.49, 0.51) },
-    .{ .center = .{ .x = 15.5, .y = 1.5, .z = -2 }, .half_extents = .{ .x = 6.5, .y = 1.5, .z = 0.15 }, .color = rgb(0.48, 0.49, 0.51) },
-    .{ .center = .{ .x = 15.5, .y = 1.5, .z = -11 }, .half_extents = .{ .x = 6.5, .y = 1.5, .z = 0.15 }, .color = rgb(0.48, 0.49, 0.51) },
-
-    // Blockout furniture establishes the office/press-room scale.
-    .{ .center = .{ .x = -15, .y = 0.55, .z = 3 }, .half_extents = .{ .x = 3.0, .y = 0.55, .z = 0.7 }, .color = rgb(0.43, 0.28, 0.17) },
-    .{ .center = .{ .x = -16, .y = 0.9, .z = -7 }, .half_extents = .{ .x = 0.7, .y = 0.9, .z = 3.0 }, .color = rgb(0.25, 0.38, 0.47) },
-    .{ .center = .{ .x = 15, .y = 0.55, .z = 12 }, .half_extents = .{ .x = 2.6, .y = 0.55, .z = 0.8 }, .color = rgb(0.40, 0.31, 0.19) },
-    .{ .center = .{ .x = 15, .y = 0.7, .z = 3 }, .half_extents = .{ .x = 2.0, .y = 0.7, .z = 1.2 }, .color = rgb(0.31, 0.40, 0.29) },
-};
-
-const stair_placeholder = SceneBox{
-    .center = .{ .x = 0, .y = 1.0, .z = -14 },
-    .half_extents = .{ .x = 4.0, .y = 1.0, .z = 2.0 },
-    .color = .{ .x = 0.35, .y = 0.78, .z = 1.0, .w = 0.32 },
-};
-
 const static_instance_count = visible: {
     var count: usize = level.tread_count;
     for (level.boxes) |box| count += @intFromBool(box.visible);
