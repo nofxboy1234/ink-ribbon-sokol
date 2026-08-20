@@ -20,6 +20,7 @@ pub const Config = struct {
     friction: f32 = 12.0,
     gravity: f32 = 15.0,
     turn_speed: f32 = 12.0,
+    run_turn_speed: f32 = 16.0,
     ground_normal_y: f32 = 0.65,
     capsule_half_segment: f32 = 0.55,
     capsule_radius: f32 = 0.35,
@@ -76,9 +77,17 @@ pub fn update(
         state.velocity.y -= config.gravity * dt;
     }
 
+    // Facing follows RE2R movement rules: while walking the body turns to face
+    // away from the camera (camera-forward) for any input direction, so the
+    // camera-relative translation below reads as strafing; while running the
+    // body turns toward the camera-relative movement direction instead.
     if (lengthSquared(wish) > 0.0001) {
-        const target_yaw = std.math.atan2(wish.x, wish.z);
-        state.yaw = approachAngle(state.yaw, target_yaw, config.turn_speed * dt);
+        const target_yaw = if (input.run)
+            std.math.atan2(wish.x, wish.z)
+        else
+            std.math.atan2(basis.forward.x, basis.forward.z);
+        const rate = if (input.run) config.run_turn_speed else config.turn_speed;
+        state.yaw = approachAngle(state.yaw, target_yaw, rate * dt);
     }
 
     const capsule = localCapsule(config);
