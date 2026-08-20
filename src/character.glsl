@@ -4,6 +4,8 @@
 @ctype vec4 math.Vec4
 
 @block shadow_util
+// 5x5 PCF (percentage-closer filtering): average shadow lookups over a
+// neighborhood to soften shadow edges instead of a hard single sample.
 float sample_shadow_pcf(texture2D tex, sampler smp, vec3 position) {
     vec2 size = vec2(textureSize(sampler2DShadow(tex, smp), 0));
     float result = 0.0;
@@ -22,18 +24,22 @@ layout(binding = 0) uniform shadow_vs_params {
     mat4 light_view_projection;
 };
 
+// Renders the scene from the sun's point of view into the shadow map.
+// inst_* vectors are the instanced transform basis (rotation + scale axes).
 layout(location = 0) in vec4 position;
 layout(location = 1) in vec4 inst_x;
 layout(location = 2) in vec4 inst_y;
 layout(location = 3) in vec4 inst_z;
 
 void main() {
+    // Transform the local vertex into world space using the instanced basis.
     vec4 world_position = vec4(dot(position, inst_x), dot(position, inst_y), dot(position, inst_z), 1.0);
     gl_Position = light_view_projection * world_position;
 }
 @end
 
 @fs shadow_fs
+// Nothing to shade: only depth is written to the shadow map.
 void main() {}
 @end
 
@@ -59,14 +65,17 @@ out vec3 world_position;
 out vec3 world_normal;
 
 void main() {
+    // Local -> world position/normal via the instanced basis (same as shadow_vs).
     vec4 wp = vec4(dot(position, inst_x), dot(position, inst_y), dot(position, inst_z), 1.0);
     vec4 local_normal = vec4(normal, 0.0);
     world_normal = vec3(dot(local_normal, inst_x), dot(local_normal, inst_y), dot(local_normal, inst_z));
     world_position = wp.xyz;
     color = inst_color.rgb;
     alpha = inst_color.a;
+    // Where this fragment is from the light's point of view (for shadow lookup).
     light_position = light_view_projection * wp;
     #if !SOKOL_GLSL
+        // Fix coordinate-system mismatch for non-GL backends.
         light_position.y = -light_position.y;
     #endif
     gl_Position = view_projection * wp;
@@ -98,6 +107,8 @@ in vec3 world_position;
 in vec3 world_normal;
 out vec4 frag_color;
 
+// Point-light contribution: falls off with squared distance inside the
+// fixture's radius (stored in .w), scaled by how much the surface faces it.
 float indoor_light(vec4 fixture, vec3 normal) {
     vec3 to_light = fixture.xyz - world_position;
     float distance_squared = dot(to_light, to_light);
@@ -109,18 +120,22 @@ float indoor_light(vec4 fixture, vec3 normal) {
 
 void main() {
     vec3 n = normalize(world_normal);
-    vec3 l = normalize(light_direction);
-    float n_dot_l = dot(n, l);
-    float intensity = 0.12;
+    vec3 l = normalize(light_direction); // direction from surface TOWARD the sun
+    float n_dot_l = dot(n, l); // > 0 = surface faces the sun
+    float intensity = 0.12; // faint ambient so shadows aren't pitch black
     float specular = 0.0;
 
     if (n_dot_l > 0.0) {
+        // Project fragment into shadow-map UV space, add a small bias to the
+        // depth to avoid acne (self-shadowing), then sample the PCF shadow.
         vec3 projected = light_position.xyz / light_position.w;
         float bias = max(0.0001 * (1.0 - n_dot_l), 0.00001);
         vec3 shadow_position = vec3((projected.xy + 1.0) * 0.5, projected.z + bias);
         float shadow = sample_shadow_pcf(shadow_map, shadow_sampler, shadow_position);
         intensity += n_dot_l * shadow;
 
+        // Blinn-style specular highlight: how closely the reflected light
+        // aligns with the view direction (raised to 16 = tight, shiny spot).
         vec3 view_direction = normalize(eye_position - world_position);
         vec3 reflected = reflect(-l, n);
         specular = pow(max(dot(reflected, view_direction), 0.0), 16.0) * n_dot_l * shadow;
@@ -132,9 +147,10 @@ void main() {
         + indoor_light(indoor_light_2, n) + indoor_light(indoor_light_3, n)
         + indoor_light(indoor_light_4, n) + indoor_light(indoor_light_5, n)
         + indoor_light(indoor_light_6, n) + indoor_light(indoor_light_7, n);
-    vec3 indoor_tint = vec3(1.0, 0.78, 0.52);
+    vec3 indoor_tint = vec3(1.0, 0.78, 0.52); // warm orange for interior lights
 
     vec3 linear_color = vec3(specular) + intensity * color + warm * indoor_tint * color;
+    // Gamma-correct: convert linear lighting result back to display space.
     frag_color = vec4(pow(linear_color, vec3(1.0 / 2.2)), alpha);
 }
 @end
