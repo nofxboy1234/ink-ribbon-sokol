@@ -1,8 +1,10 @@
-//! Data-oriented RPD blockout based on the four stacked MapGenie floor plans.
+//! Data-oriented RPD-style blockout: one floor, one shared grid.
 //!
 //! Dimensions are authored in metres on one shared grid. Thin boxes form floor
-//! slabs and walls; gaps between wall segments are intentional doorways. The
-//! four floors deliberately have different footprints, matching the reference.
+//! slabs, walls and the roof; gaps between wall segments are intentional
+//! doorways. A closed ring of corridors loops around the central hall and the
+//! surrounding rooms reconnect through several doorways, so a player can get
+//! lost and find their way back by multiple routes.
 
 const std = @import("std");
 const math = @import("math.zig");
@@ -18,15 +20,7 @@ pub const Box = struct {
     collidable: bool = true,
 };
 
-pub const Staircase = struct {
-    lower_center: Vec3,
-    width: f32,
-    run: f32,
-    rise: f32,
-    direction_z: f32,
-    steps: usize = 16,
-};
-
+// Roof height in metres (one floor of the former stacked plan).
 pub const floor_height: f32 = 5.5;
 const wall_half_height: f32 = 2.65;
 const wall_half_width: f32 = 0.16;
@@ -36,270 +30,177 @@ const floor_color = rgba(0.18, 0.21, 0.23, 1);
 const wall_color = rgba(0.43, 0.44, 0.46, 1);
 const hall_color = rgba(0.51, 0.50, 0.48, 1);
 const roof_color = rgba(0.13, 0.14, 0.15, 1);
-const stair_color = rgba(0.42, 0.37, 0.31, 1);
+const wood_color = rgba(0.42, 0.37, 0.31, 1);
+const darkwood_color = rgba(0.30, 0.24, 0.18, 1);
+const crate_color = rgba(0.55, 0.47, 0.33, 1);
+const shelf_color = rgba(0.33, 0.30, 0.27, 1);
+const locker_color = rgba(0.47, 0.51, 0.53, 1);
+const rack_color = rgba(0.36, 0.38, 0.40, 1);
+const plant_color = rgba(0.25, 0.45, 0.30, 1);
 const oxocarbon_pink = rgba(1.0, 0.49, 0.71, 1);
+
+// ---------------------------------------------------------------------------
+// Layout summary (building spans x in [-26, 26], z in [-19, 19]):
+//
+//   Outer shell of four walls. Inside it a 4m-wide ring of corridors loops
+//   around the central Main Hall (x/z in [-9, 9]). Door gaps in the ring lead
+//   into eight rooms beyond it (four edge rooms and four corner rooms), and
+//   the corner rooms also link to their neighbours, so several routes loop
+//   back on themselves. Solid boxes are furniture (tables, cupboards, crates).
+// ---------------------------------------------------------------------------
 
 pub const boxes = [_]Box{
     // ---------------------------------------------------------------------
-    // 1F — broad full station, projecting entrance and east-side annex.
+    // Floor and roof spanning the whole footprint.
     // ---------------------------------------------------------------------
-    slab(-18, 0, 0, 9, 18), // west offices and records wing
-    slab(-7, 0, 0, 2, 18), // west circulation spine
-    slab(0, 0, 2, 7, 18), // Main Hall and entrance
-    slab(7, 0, 0, 2, 18), // east circulation spine
-    slab(17.5, 0, 0, 8.5, 18), // east office/press wing
-    slab(22, 0, -22, 4, 4), // watchman's/boiler projection
-
-    // Exterior outline. The south wall has the wide Main Hall entrance.
-    wallZ(-27, 0, 0, 18, wall_color),
-    wallZ(26, 0, 1, 17, wall_color),
-    wallX(-18, 0, -18, 9, wall_color),
-    wallX(-2, 0, -18, 7, wall_color),
-    wallX(15.5, 0, -18, 10.5, wall_color),
-    wallZ(18, 0, -22, 4, wall_color),
-    wallZ(26, 0, -22, 4, wall_color),
-    wallX(22, 0, -26, 4, wall_color),
-    wallX(-17, 0, 18, 10, wall_color),
-    wallX(-6, 0, 18, 1, wall_color),
-    wallX(6, 0, 18, 1, wall_color),
-    wallX(17, 0, 18, 9, wall_color),
-    wallZ(-7, 0, 19, 1, hall_color),
-    wallZ(7, 0, 19, 1, hall_color),
-    wallX(-5, 0, 20, 2, hall_color),
-    wallX(5, 0, 20, 2, hall_color),
-
-    // Main Hall enclosure. Split runs reproduce the map's west/east doors.
-    wallZ(-9, 0, -15, 3, hall_color),
-    wallZ(-9, 0, -7.5, 2.5, hall_color),
-    wallZ(-9, 0, 0.5, 3.5, hall_color),
-    wallZ(-9, 0, 10.5, 4.5, hall_color),
-    wallZ(9, 0, -15, 3, hall_color),
-    wallZ(9, 0, -7.5, 2.5, hall_color),
-    wallZ(9, 0, 0.5, 3.5, hall_color),
-    wallZ(9, 0, 10.5, 4.5, hall_color),
-    // Reception/security desks around the central entrance sightline.
-    visual(-4.8, 0.65, 8.5, 2.2, 0.65, 0.45, rgba(0.37, 0.26, 0.17, 1)),
-    visual(4.8, 0.65, 8.5, 2.2, 0.65, 0.45, rgba(0.37, 0.26, 0.17, 1)),
-    visual(0, 0.85, -1, 3.2, 0.85, 1.2, rgba(0.34, 0.31, 0.27, 1)),
-
-    // West: Reception, West Office, Records, Safety Deposit, Operations,
-    // Darkroom and the enclosed north-west stair tower.
-    wallZ(-12, 0, 13, 5, wall_color),
-    wallZ(-12, 0, 2, 4, wall_color),
-    wallZ(-12, 0, -11.5, 6.5, wall_color),
-    wallX(-19.5, 0, 9, 7.5, wall_color),
-    wallX(-19.5, 0, 1, 7.5, wall_color),
-    wallX(-19.5, 0, -8, 7.5, wall_color),
-    wallZ(-20, 0, 13.5, 4.5, wall_color),
-    wallZ(-20, 0, 4.5, 3.5, wall_color),
-    wallZ(-20, 0, -13, 5, wall_color),
-    wallX(-23.5, 0, 6, 3.5, wall_color),
-    wallX(-23.5, 0, -3, 3.5, wall_color),
-    // A distinct landmark desk inside the 1F West Office.
-    solid(-17.5, 0.65, 5, 3.8, 0.65, 0.7, oxocarbon_pink),
-    solid(-23, 1.0, -12, 0.7, 1.0, 3.3, rgba(0.24, 0.35, 0.42, 1)),
-
-    // East: East Office, Press Room, bathroom/interrogation side, Watchman's
-    // Room and the narrow exterior fire-escape stair strip.
-    wallZ(12, 0, 13, 5, wall_color),
-    wallZ(12, 0, 2.5, 3.5, wall_color),
-    wallZ(12, 0, -12, 6, wall_color),
-    wallX(18.5, 0, 9, 6.5, wall_color),
-    wallX(18.5, 0, 0, 6.5, wall_color),
-    wallX(18.5, 0, -9, 6.5, wall_color),
-    wallZ(21, 0, 13.5, 4.5, wall_color),
-    wallZ(21, 0, 3, 4, wall_color),
-    wallZ(21, 0, -11.5, 6.5, wall_color),
-    wallX(23.5, 0, 5, 2.5, wall_color),
-    wallX(22, 0, -18, 4, wall_color),
-    solid(17.5, 0.65, 11.5, 3.6, 0.65, 0.75, rgba(0.37, 0.28, 0.18, 1)),
+    slab(0, 0, 0, 26, 19),
+    ceiling(0, floor_height, 0, 26, 19),
 
     // ---------------------------------------------------------------------
-    // 2F — U-shaped gallery around the double-height Main Hall.
+    // Outer shell.
     // ---------------------------------------------------------------------
-    // Split around the west stair shaft (x=-23, z=-5..7).
-    slab(-26, floor_height, 0, 1, 18),
-    slab(-15, floor_height, 0, 6, 18),
-    slab(-23, floor_height, 12.5, 2, 5.5),
-    slab(-23, floor_height, -11.5, 2, 6.5),
-    // Split the gallery rails around both grand-stair flights.
-    slab(-7, floor_height, 11.5, 2, 6.5),
-    slab(-7, floor_height, -13, 2, 5),
-    slab(7, floor_height, 11.5, 2, 6.5),
-    slab(7, floor_height, -13, 2, 5),
-    // Split around the east fire stair (x=23, z=-15..-4).
-    slab(13.8, floor_height, 0, 4.8, 18),
-    slab(25.2, floor_height, 0, 0.8, 18),
-    slab(23, floor_height, 7, 1.4, 11),
-    slab(23, floor_height, -16.5, 1.4, 1.5),
-    slab(0, floor_height, -14, 7, 4), // north bridge/Lounge
-    slab(0, floor_height, 16, 7, 2), // south gallery/entrance overlook
-    // One continuous strip prevents seams between the independently blocked
-    // north bridge and room-wing slabs. The reference map shows this corridor
-    // as an uninterrupted east-west route.
-    slab(-0.5, floor_height, -12, 26.5, 4),
-
-    // Main Hall gallery edges follow the long central void shown on 2F.
-    // Leave a broad north opening around z=-12. The previous rail reached to
-    // z=-10 and formed a tight stagger with the outer wall that could trap the
-    // capsule between two collision planes.
-    wallZ(-5, floor_height, 3, 9, hall_color),
-    wallZ(5, floor_height, 3, 9, hall_color),
-    wallX(0, floor_height, -10, 5, hall_color),
-    wallX(-3.5, floor_height, 12, 1.5, hall_color),
-    wallX(3.5, floor_height, 12, 1.5, hall_color),
-    wallZ(-9, floor_height, -17.5, 0.5, wall_color),
-    wallZ(-9, floor_height, -7, 3, wall_color),
-    wallZ(-9, floor_height, 4, 6, wall_color),
-    wallZ(-9, floor_height, 15.5, 2.5, wall_color),
-    wallZ(9, floor_height, -17.5, 0.5, wall_color),
-    wallZ(9, floor_height, -7, 3, wall_color),
-    wallZ(9, floor_height, 4, 6, wall_color),
-    wallZ(9, floor_height, 15.5, 2.5, wall_color),
-
-    // West 2F: Library fills the south-west block; Linen/Lounge, Shower and
-    // STARS form the narrower northern chain from the reference map.
-    wallX(-18, floor_height, 10, 9, wall_color),
-    wallX(-18, floor_height, 0, 9, wall_color),
-    // Split around the west stair shaft. The previous full run crossed the
-    // landing and prevented approaching the upper ramp from its lower end.
-    wallX(-26, floor_height, -8, 1, wall_color),
-    wallX(-13.5, floor_height, -8, 4.5, wall_color),
-    wallZ(-14, floor_height, 14, 4, wall_color),
-    wallZ(-14, floor_height, 4, 4, wall_color),
-    // Broad south doorway prevents the capsule catching on the partition end
-    // while turning from the north gallery into the west stair tower.
-    wallZ(-19, floor_height, -14, 4, wall_color),
-    // Split around the west stair flight at x=-23. A single wall here crossed
-    // the ramp at z=-13 and made the otherwise valid 2F -> 3F route impassable.
-    wallX(-25.75, floor_height, -13, 1.25, wall_color),
-    wallX(-20.25, floor_height, -13, 1.25, wall_color),
-    // Library shelves are visual scale cues but remain collidable cover.
-    solid(-21, floor_height + 1, 5, 0.55, 1, 3.5, rgba(0.29, 0.25, 0.20, 1)),
-    solid(-17.5, floor_height + 1, 5, 0.55, 1, 3.5, rgba(0.29, 0.25, 0.20, 1)),
-
-    // East 2F: Waiting Room/Art Room and Chief's Office/Private Collection.
-    wallX(17.5, floor_height, 9, 8.5, wall_color),
-    wallX(17.5, floor_height, 0, 8.5, wall_color),
-    wallX(17.5, floor_height, -9, 8.5, wall_color),
-    wallZ(14, floor_height, 13.5, 4.5, wall_color),
-    wallZ(14, floor_height, 4, 3, wall_color),
-    wallZ(20, floor_height, -13, 5, wall_color),
-    wallX(23, floor_height, -13, 3, wall_color),
-    solid(18, floor_height + 0.7, -4, 3.4, 0.7, 0.7, rgba(0.31, 0.25, 0.19, 1)),
+    wallZ(-26, 0, 0, 19, wall_color), // west
+    wallZ(26, 0, 0, 19, wall_color), // east
+    wallX(0, 0, -19, 26, wall_color), // north
+    wallX(0, 0, 19, 26, wall_color), // south
 
     // ---------------------------------------------------------------------
-    // 3F — much smaller west Clock Tower/storage loop and east roof wing.
+    // Main Hall enclosure (inner ring). Gaps in each side are the hall doors.
     // ---------------------------------------------------------------------
-    // The 3F west footprint is split around the upper west-stair flight.
-    slab(-26, 2 * floor_height, -3, 1, 15),
-    slab(-15, 2 * floor_height, -3, 6, 15),
-    slab(-23, 2 * floor_height, 3.5, 2, 8.5),
-    slab(-23, 2 * floor_height, -16.5, 2, 1.5),
-    slab(-8, 2 * floor_height, -10, 1, 6),
-    // Open Main Hall balcony. It joins the west stair route to the narrow
-    // bridge while leaving the three-storey atrium below unobstructed.
-    slab(-4, 2 * floor_height, -13, 5, 3),
-    slab(2, 2 * floor_height, -13, 1, 3),
-    slab(8, 2 * floor_height, -7, 3, 9),
-    slab(17, 2 * floor_height, -8, 6, 8),
-
-    // West Storage outer loop and Clock Tower inner chamber.
-    wallZ(-25, 2 * floor_height, -2, 14, wall_color),
-    wallX(-17, 2 * floor_height, -18, 8, wall_color),
-    wallX(-17, 2 * floor_height, 12, 8, wall_color),
-    wallZ(-9, 2 * floor_height, 6, 6, wall_color),
-    // Door-sized break from West Storage onto the Main Hall balcony.
-    wallZ(-9, 2 * floor_height, -8.5, 2.5, wall_color),
-    wallZ(-9, 2 * floor_height, -17, 1, wall_color),
-    wallX(-17, 2 * floor_height, 5, 6, wall_color),
-    wallX(-17, 2 * floor_height, -6, 6, wall_color),
-    wallZ(-21, 2 * floor_height, 8, 3, wall_color),
-    wallZ(-21, 2 * floor_height, -11, 5, wall_color),
-    wallZ(-13, 2 * floor_height, 8.5, 3.5, hall_color),
-    wallZ(-13, 2 * floor_height, -1, 4, hall_color),
-    wallX(-17, 2 * floor_height, -5, 4, hall_color),
-    // Clock machinery blockout.
-    solid(-17, 2 * floor_height + 1.2, 0, 3.2, 1.2, 1.1, rgba(0.34, 0.25, 0.15, 1)),
-
-    // A waist-high rail keeps the balcony edge open to the Main Hall view.
-    railX(-4, 2 * floor_height, -10, 5, hall_color),
-
-    // Narrow bridge and east storage/roof access wing.
-    wallX(-4, 2 * floor_height, -16, 5, wall_color),
-    wallX(5, 2 * floor_height, -10, 4, wall_color),
-    wallZ(5, 2 * floor_height, -6, 4, wall_color),
-    wallZ(11, 2 * floor_height, -7, 5, wall_color),
-    wallZ(23, 2 * floor_height, -8, 8, wall_color),
-    wallX(17, 2 * floor_height, -16, 6, wall_color),
-    wallX(17, 2 * floor_height, 0, 6, wall_color),
-    wallX(17, 2 * floor_height, -7, 6, wall_color),
-
-    // 3F roof pieces close lower wings while leaving the Clock Tower stair
-    // shaft open to its small 4F platform.
-    // Roof pieces leave x=-17, z=-2..8 open for the 4F stair shaft.
-    ceiling(-22, 3 * floor_height, 6, 3, 6),
-    ceiling(-13, 3 * floor_height, 6, 2, 6),
-    ceiling(-17, 3 * floor_height, 10, 2, 2),
-    ceiling(-18, 3 * floor_height, -11, 7, 5),
-    ceiling(-10, 3 * floor_height, -10, 1, 6),
-    ceiling(3, 3 * floor_height, -11, 5, 5),
-    ceiling(17, 3 * floor_height, -8, 6, 8),
+    wallZ(-9, 0, -5.5, 3.5, hall_color),
+    wallZ(-9, 0, 5.5, 3.5, hall_color),
+    wallZ(9, 0, -5.5, 3.5, hall_color),
+    wallZ(9, 0, 5.5, 3.5, hall_color),
+    wallX(-5.5, 0, -9, 3.5, hall_color),
+    wallX(5.5, 0, -9, 3.5, hall_color),
+    wallX(-5.5, 0, 9, 3.5, hall_color),
+    wallX(5.5, 0, 9, 3.5, hall_color),
 
     // ---------------------------------------------------------------------
-    // 4F — the small upper Clock Tower machinery platform only.
+    // Ring corridor walls. North ring at z=-13, south ring at z=13, west ring
+    // at x=-13, east ring at x=13. Gaps are doorways into the rooms beyond.
     // ---------------------------------------------------------------------
-    // Side strips and a north landing leave the incoming ramp unobstructed.
-    slab(-19.65, 3 * floor_height, 0, 1.35, 3),
-    slab(-14.35, 3 * floor_height, 0, 1.35, 3),
-    slab(-17, 3 * floor_height, -2.5, 1.3, 0.5),
-    wallZ(-21, 3 * floor_height, 0, 3, wall_color),
-    wallZ(-13, 3 * floor_height, 0, 3, wall_color),
-    wallX(-17, 3 * floor_height, -3, 4, wall_color),
-    wallX(-19, 3 * floor_height, 3, 2, wall_color),
-    wallX(-14, 3 * floor_height, 3, 1, wall_color),
-    ceiling(-17, 4 * floor_height, 0, 4, 3),
+    wallX(-22, 0, -13, 4, wall_color), // z=-13, x -26..-18 (NW corner room)
+    wallX(-13.75, 0, -13, 1.25, wall_color), // x -15..-12.5
+    wallX(-8.75, 0, -13, 0.75, wall_color), // x -9.5..-8
+    wallX(0, 0, -13, 5, wall_color), // x -5..5
+    wallX(8.75, 0, -13, 0.75, wall_color), // x 8..9.5
+    wallX(13.75, 0, -13, 1.25, wall_color), // x 12.5..15
+    wallX(22, 0, -13, 4, wall_color), // x 18..26 (NE corner room)
+
+    wallX(-22, 0, 13, 4, wall_color), // z=13, x -26..-18 (SW corner room)
+    wallX(-13.75, 0, 13, 1.25, wall_color),
+    wallX(-8.75, 0, 13, 0.75, wall_color),
+    wallX(0, 0, 13, 5, wall_color),
+    wallX(8.75, 0, 13, 0.75, wall_color),
+    wallX(13.75, 0, 13, 1.25, wall_color),
+    wallX(22, 0, 13, 4, wall_color), // x 18..26 (SE corner room)
+
+    wallZ(-13, 0, -11.5, 1.5, wall_color), // x=-13, z -13..-10
+    wallZ(-13, 0, -4.25, 2.75, wall_color), // z -7..-1.5
+    wallZ(-13, 0, 4.25, 2.75, wall_color), // z 1.5..7
+    wallZ(-13, 0, 11.5, 1.5, wall_color), // z 10..13
+
+    wallZ(13, 0, -11.5, 1.5, wall_color), // x=13, z -13..-10
+    wallZ(13, 0, -4.25, 2.75, wall_color),
+    wallZ(13, 0, 4.25, 2.75, wall_color),
+    wallZ(13, 0, 11.5, 1.5, wall_color), // z 10..13
+
+    // ---------------------------------------------------------------------
+    // West rooms: W1 storage, W2 office, W3 records (partitions at z=-4, z=4).
+    // ---------------------------------------------------------------------
+    wallX(-22.5, 0, -4, 3.5, wall_color), // z=-4, x -26..-19
+    wallX(-14.5, 0, -4, 1.5, wall_color), // x -16..-13 (door x -19..-16)
+    wallX(-22.5, 0, 4, 3.5, wall_color), // z=4, x -26..-19
+    wallX(-14.5, 0, 4, 1.5, wall_color), // x -16..-13 (door x -19..-16)
+
+    // East rooms: E1, E2 office, E3 conference.
+    wallX(14.5, 0, -4, 1.5, wall_color), // z=-4, x 13..16 (door x 16..19)
+    wallX(22.5, 0, -4, 3.5, wall_color), // x 19..26
+    wallX(14.5, 0, 4, 1.5, wall_color), // z=4, x 13..16 (door x 16..19)
+    wallX(22.5, 0, 4, 3.5, wall_color), // x 19..26
+
+    // ---------------------------------------------------------------------
+    // North rooms: NW2 lab and NE2 evidence (partition at x=0), plus the two
+    // corner rooms beyond them, which also link into the west/east rooms.
+    // ---------------------------------------------------------------------
+    wallZ(0, 0, -18.25, 0.75, wall_color), // x=0, z -19..-17.5
+    wallZ(0, 0, -14, 1, wall_color), // z -15..-13 (door z -17.5..-15)
+
+    wallZ(-13, 0, -18, 1, wall_color), // x=-13, z -19..-17 (NW corner room)
+    wallZ(-13, 0, -13.5, 0.5, wall_color), // z -14..-13 (door z -17..-14)
+
+    wallZ(13, 0, -18, 1, wall_color), // x=13, z -19..-17 (NE corner room)
+    wallZ(13, 0, -13.5, 0.5, wall_color), // z -14..-13 (door z -17..-14)
+
+    // ---------------------------------------------------------------------
+    // South rooms: SW2 locker room and SE2 interview, plus the two corner
+    // rooms beyond them.
+    // ---------------------------------------------------------------------
+    wallZ(0, 0, 14, 1, wall_color), // x=0, z 13..15 (door z 15..17.5)
+    wallZ(0, 0, 18.25, 0.75, wall_color), // z 17.5..19
+
+    wallZ(-13, 0, 13.5, 0.5, wall_color), // x=-13, z 13..14 (SW corner room)
+    wallZ(-13, 0, 18, 1, wall_color), // z 17..19 (door z 14..17)
+
+    wallZ(13, 0, 13.5, 0.5, wall_color), // x=13, z 13..14 (SE corner room)
+    wallZ(13, 0, 18, 1, wall_color), // z 17..19 (door z 14..17)
+
+    // ---------------------------------------------------------------------
+    // Main Hall furniture (desk and plant are non-collidable decor).
+    // ---------------------------------------------------------------------
+    visual(0, 0.9, 5.5, 3, 0.9, 1, darkwood_color), // reception desk
+    visual(0, 1.0, -4, 0.35, 1.0, 0.35, plant_color), // pot plant
+    solid(-4, 0.75, 0, 1.8, 0.75, 0.8, wood_color), // hall table
+    solid(4, 0.75, 0, 1.8, 0.75, 0.8, wood_color), // hall table
+
+    // ---------------------------------------------------------------------
+    // West furniture.
+    // ---------------------------------------------------------------------
+    solid(-25, 1.0, -8.5, 0.5, 1.0, 3.5, darkwood_color), // W1 cupboards
+    solid(-25, 1.0, -5.5, 0.5, 1.0, 1.5, darkwood_color),
+    solid(-20, 0.6, -11, 1, 0.6, 1, crate_color), // W1 crates
+    solid(-18, 0.6, -11, 1, 0.6, 1, crate_color),
+    solid(-17.5, 0.85, 0, 2.5, 0.85, 1.1, oxocarbon_pink), // W2 landmark desk
+    solid(-23, 0.75, -2, 2.2, 0.75, 0.9, wood_color), // W2 table
+    solid(-24.5, 1.1, 2, 0.5, 1.1, 1.6, darkwood_color), // W2 cupboard
+    solid(-18, 1.2, 6, 0.5, 1.2, 2.5, shelf_color), // W3 shelves
+    solid(-18, 1.2, 10, 0.5, 1.2, 2, shelf_color),
+    solid(-22, 0.75, 8.5, 2, 0.75, 1, wood_color), // W3 table
+
+    // ---------------------------------------------------------------------
+    // East furniture.
+    // ---------------------------------------------------------------------
+    solid(20, 0.75, -8, 2.4, 0.75, 1.2, wood_color), // E1 table
+    solid(24.5, 1.0, -6, 0.5, 1.0, 2.5, darkwood_color), // E1 cupboard
+    solid(18, 0.75, -1, 2, 0.75, 1, wood_color), // E2 tables
+    solid(23, 0.75, 1, 2, 0.75, 1, wood_color),
+    solid(20, 0.75, 8, 4, 0.75, 1.4, wood_color), // E3 conference table
+    solid(24.5, 1.1, 5, 0.5, 1.1, 1.8, darkwood_color), // E3 cupboard
+
+    // ---------------------------------------------------------------------
+    // North furniture.
+    // ---------------------------------------------------------------------
+    solid(-8, 0.75, -16, 2.4, 0.75, 1, wood_color), // NW2 work table
+    solid(-3.5, 1.0, -18, 2.5, 1.0, 0.5, darkwood_color), // NW2 cupboard
+    solid(5, 1.1, -17.5, 2, 1.1, 0.5, shelf_color), // NE2 shelves
+    solid(9, 0.75, -15, 2, 0.75, 1, wood_color), // NE2 table
+    solid(-20, 0.5, -17, 1, 0.5, 1, crate_color), // NW corner crates
+    solid(-17.5, 0.5, -16, 1, 0.5, 1, crate_color),
+    solid(-23, 0.8, -15.5, 1.2, 0.8, 1.2, crate_color),
+    solid(18, 1.0, -16.5, 3, 1.0, 0.5, rack_color), // NE corner racks
+    solid(23, 1.0, -16.5, 1.8, 1.0, 0.5, rack_color),
+
+    // ---------------------------------------------------------------------
+    // South furniture.
+    // ---------------------------------------------------------------------
+    solid(-8, 1.1, 14, 2.6, 1.1, 0.5, locker_color), // SW2 lockers
+    solid(-4.5, 1.1, 14, 1.3, 1.1, 0.5, locker_color),
+    solid(6, 0.75, 17, 2.4, 0.75, 1, wood_color), // SE2 table
+    solid(-20, 0.75, 15, 3, 0.75, 1, wood_color), // SW corner work table
+    solid(17, 1.2, 15, 0.5, 1.2, 2.6, shelf_color), // SE corner shelves
+    solid(23, 1.2, 15, 0.5, 1.2, 2.6, shelf_color),
 };
-
-pub const staircases = [_]Staircase{
-    // Main Hall's matching grand flights, 1F -> 2F.
-    .{ .lower_center = .{ .x = -6.5, .z = 5 }, .width = 3.2, .run = 13, .rise = floor_height, .direction_z = -1, .steps = 18 },
-    .{ .lower_center = .{ .x = 6.5, .z = 5 }, .width = 3.2, .run = 13, .rise = floor_height, .direction_z = -1, .steps = 18 },
-    // Enclosed north-west stair tower links all primary floors.
-    .{ .lower_center = .{ .x = -23, .z = 7 }, .width = 3.6, .run = 12, .rise = floor_height, .direction_z = -1 },
-    .{ .lower_center = .{ .x = -23, .y = floor_height, .z = -8 }, .width = 3.6, .run = 10, .rise = floor_height, .direction_z = -1 },
-    // East fire stair, 1F -> 2F.
-    .{ .lower_center = .{ .x = 23, .z = -15 }, .width = 2.8, .run = 11, .rise = floor_height, .direction_z = 1 },
-    // Clock Tower machinery stair, 3F -> the small 4F platform.
-    .{ .lower_center = .{ .x = -17, .y = 2 * floor_height, .z = 8 }, .width = 2.6, .run = 10, .rise = floor_height, .direction_z = -1 },
-};
-
-pub const tread_count = count: {
-    var result: usize = 0;
-    for (staircases) |item| result += item.steps;
-    break :count result;
-};
-
-pub fn collisionRamp(item: Staircase) Box {
-    return .{
-        .center = .{ .x = item.lower_center.x, .y = item.lower_center.y + item.rise * 0.5 - 0.10, .z = item.lower_center.z + item.direction_z * item.run * 0.5 },
-        .half_extents = .{ .x = item.width * 0.5, .y = 0.10, .z = @sqrt(item.run * item.run + item.rise * item.rise) * 0.5 },
-        .color = stair_color,
-        .pitch = -item.direction_z * std.math.atan(item.rise / item.run),
-        .visible = false,
-    };
-}
-
-pub fn tread(item: Staircase, index: usize) Box {
-    const step_count: f32 = @floatFromInt(item.steps);
-    const fraction = @as(f32, @floatFromInt(index + 1)) / step_count;
-    return .{
-        .center = .{ .x = item.lower_center.x, .y = item.lower_center.y + item.rise * fraction - 0.08, .z = item.lower_center.z + item.direction_z * item.run * (fraction - 0.5 / step_count) },
-        .half_extents = .{ .x = item.width * 0.5, .y = 0.08, .z = item.run / step_count * 0.5 },
-        .color = stair_color,
-        .collidable = false,
-    };
-}
 
 fn slab(x: f32, y: f32, z: f32, hx: f32, hz: f32) Box {
     return solid(x, y - slab_half_height, z, hx, slab_half_height, hz, floor_color);
@@ -315,11 +216,6 @@ fn wallX(x: f32, y: f32, z: f32, hx: f32, color: Vec4) Box {
 
 fn wallZ(x: f32, y: f32, z: f32, hz: f32, color: Vec4) Box {
     return solid(x, y + wall_half_height, z, wall_half_width, wall_half_height, hz, color);
-}
-
-fn railX(x: f32, y: f32, z: f32, hx: f32, color: Vec4) Box {
-    const rail_half_height = 0.55;
-    return solid(x, y + rail_half_height, z, hx, rail_half_height, wall_half_width, color);
 }
 
 fn visual(x: f32, y: f32, z: f32, hx: f32, hy: f32, hz: f32, color: Vec4) Box {

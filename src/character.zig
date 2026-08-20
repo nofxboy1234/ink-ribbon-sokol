@@ -33,10 +33,10 @@ const shadow_map_size = 2048;
 // Half the character box's size along each axis (full size = 2x this).
 const character_half_extents = Vec3{ .x = 0.32, .y = 0.9, .z = 0.22 };
 
-const static_instance_count = visible: {
-    var count: usize = level.tread_count;
+const static_instance_count = count: {
+    var count: usize = 0;
     for (level.boxes) |box| count += @intFromBool(box.visible);
-    break :visible count;
+    break :count count;
 };
 
 const Instance = extern struct {
@@ -235,7 +235,6 @@ fn initPhysics() void {
     var world_def = b3.b3DefaultWorldDef();
     game.world = b3.b3CreateWorld(&world_def);
     for (level.boxes) |box| if (box.collidable) addStaticBox(box);
-    for (level.staircases) |staircase| addStaticBox(level.collisionRamp(staircase));
 }
 
 fn addStaticBox(box: level.Box) void {
@@ -280,13 +279,6 @@ fn initRenderer() void {
         if (!box.visible) continue;
         instances[instance_count] = makePitchedInstance(box.center, box.half_extents, box.pitch, box.color);
         instance_count += 1;
-    }
-    for (level.staircases) |staircase| {
-        for (0..staircase.steps) |step| {
-            const box = level.tread(staircase, step);
-            instances[instance_count] = makePitchedInstance(box.center, box.half_extents, box.pitch, box.color);
-            instance_count += 1;
-        }
     }
     std.debug.assert(instance_count == static_instance_count);
     game.render.level_instances = sg.makeBuffer(.{ .data = sg.asRange(&instances), .label = "character-level-instances" });
@@ -411,15 +403,16 @@ fn draw(position: b3.b3Pos) void {
     const fs_params: shd.DisplayFsParams = .{
         .light_direction = Vec3.normalized(.{ .x = 20, .y = 32, .z = -24 }),
         .eye_position = game.camera.eye,
-        // xyz is fixture position; w is its attenuation radius.
-        .indoor_light_0 = .{ .x = 0, .y = 4.5, .z = 12, .w = 18 },
-        .indoor_light_1 = .{ .x = -19, .y = 4.2, .z = 0, .w = 17 },
-        .indoor_light_2 = .{ .x = 19, .y = 4.2, .z = 0, .w = 17 },
-        .indoor_light_3 = .{ .x = 0, .y = 10, .z = 10, .w = 18 },
-        .indoor_light_4 = .{ .x = -19, .y = 9.7, .z = -3, .w = 17 },
-        .indoor_light_5 = .{ .x = 19, .y = 9.7, .z = -3, .w = 17 },
-        .indoor_light_6 = .{ .x = -17, .y = 15, .z = -3, .w = 17 },
-        .indoor_light_7 = .{ .x = -17, .y = 20.5, .z = 0, .w = 10 },
+        // xyz is fixture position; w is its attenuation radius. Fixtures sit
+        // just under the 5.5m roof, one per room cluster.
+        .indoor_light_0 = .{ .x = 0, .y = 4.2, .z = 0, .w = 10 }, // Main Hall
+        .indoor_light_1 = .{ .x = -20, .y = 4.0, .z = 0, .w = 9 }, // W2 office
+        .indoor_light_2 = .{ .x = 20, .y = 4.0, .z = 0, .w = 9 }, // E2 office
+        .indoor_light_3 = .{ .x = -20, .y = 4.0, .z = -8, .w = 9 }, // W1 storage
+        .indoor_light_4 = .{ .x = 20, .y = 4.0, .z = -8, .w = 9 }, // E1
+        .indoor_light_5 = .{ .x = -6, .y = 4.0, .z = -16, .w = 9 }, // NW2/NW corner
+        .indoor_light_6 = .{ .x = -6, .y = 4.0, .z = 16, .w = 9 }, // SW2
+        .indoor_light_7 = .{ .x = 20, .y = 4.0, .z = 8, .w = 9 }, // E3
     };
 
     sg.beginPass(.{ .action = game.render.pass_action, .swapchain = sglue.swapchain() });
