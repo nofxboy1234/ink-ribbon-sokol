@@ -210,24 +210,28 @@ fn frame() callconv(.c) void {
     const frame_time: f32 = @floatCast(@min(sapp.frameDuration(), max_frame_dt));
     game.clock.addFrame(frame_time);
 
-    const render_position = if (game.map.active or game.game_over) blk: {
-        // Map mode: the player is not controlled. Game over: everything freezes
-        // behind the overlay. Drain pending physics ticks so returning to
-        // gameplay doesn't burst-catch-up the simulation.
+    const render_position = if (game.game_over) blk: {
+        // Game over: everything freezes behind the overlay. Drain pending
+        // physics ticks so restarting doesn't burst-catch-up the simulation.
         while (game.clock.consumeTick()) {}
         break :blk game.character.position;
     } else blk: {
         var ticks: usize = 0;
         while (ticks < max_ticks_per_frame and game.clock.consumeTick()) : (ticks += 1) {
-            controller.update(
-                game.character_config,
-                &game.character,
-                &game.mover_scratch,
-                game.world,
-                game.input.characterInput(),
-                game.camera.basis,
-                @floatCast(fixed_dt),
-            );
+            // Map mode freezes the player character (physics paused, standing
+            // still) but keeps the world live so the hunter keeps searching —
+            // like RE2R's map, which does not pause Mr X.
+            if (!game.map.active) {
+                controller.update(
+                    game.character_config,
+                    &game.character,
+                    &game.mover_scratch,
+                    game.world,
+                    game.input.characterInput(),
+                    game.camera.basis,
+                    @floatCast(fixed_dt),
+                );
+            }
             hunter.update(
                 game.hunter_config,
                 &game.hunter,
@@ -692,7 +696,7 @@ fn drawHud(position: b3.b3Pos) void {
     if (game.map.active) {
         sdtx.pos(1.0, 1.0);
         sdtx.color3b(255, 220, 120);
-        sdtx.print("MAP (WASD pans, M exits)", .{});
+        sdtx.print("MAP (WASD pans, M exits - hunter keeps hunting)", .{});
     } else if (game.debug.draw_physics and !game.game_over) {
         sdtx.pos(1.0, 1.0);
         sdtx.print("POS {d:.1} {d:.1} {d:.1}", .{ position.x, position.y, position.z });
