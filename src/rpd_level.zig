@@ -18,6 +18,8 @@ pub const Box = struct {
     pitch: f32 = 0,
     visible: bool = true,
     collidable: bool = true,
+    // Roof boxes are hidden in the top-down map view.
+    is_roof: bool = false,
 };
 
 // Roof height in metres (one floor of the former stacked plan).
@@ -207,7 +209,9 @@ fn slab(x: f32, y: f32, z: f32, hx: f32, hz: f32) Box {
 }
 
 fn ceiling(x: f32, y: f32, z: f32, hx: f32, hz: f32) Box {
-    return solid(x, y, z, hx, slab_half_height, hz, roof_color);
+    var result = solid(x, y, z, hx, slab_half_height, hz, roof_color);
+    result.is_roof = true;
+    return result;
 }
 
 fn wallX(x: f32, y: f32, z: f32, hx: f32, color: Vec4) Box {

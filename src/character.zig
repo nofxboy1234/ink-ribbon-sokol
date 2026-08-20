@@ -33,9 +33,20 @@ const shadow_map_size = 2048;
 // Half the character box's size along each axis (full size = 2x this).
 const character_half_extents = Vec3{ .x = 0.32, .y = 0.9, .z = 0.22 };
 
-const static_instance_count = count: {
+// Top-down map view tuning.
+const map_pan_speed: f32 = 25.0; // metres/second the map pans with WASD
+const map_pan_x_max: f32 = 40.0; // keep the pan center near the level
+const map_pan_z_max: f32 = 30.0;
+
+// The roof lives in its own instance buffer so it can be hidden in map view.
+const level_instance_count = count: {
     var count: usize = 0;
-    for (level.boxes) |box| count += @intFromBool(box.visible);
+    for (level.boxes) |box| count += @intFromBool(box.visible and !box.is_roof);
+    break :count count;
+};
+const roof_instance_count = count: {
+    var count: usize = 0;
+    for (level.boxes) |box| count += @intFromBool(box.visible and box.is_roof);
     break :count count;
 };
 
@@ -96,12 +107,20 @@ const DebugState = struct {
     draw_physics: bool = true,
 };
 
+// Top-down map overlay state. `active` toggles with M; `pan` is the world
+// position the map camera is centred on (WASD pans it while in the map).
+const MapState = struct {
+    active: bool = false,
+    pan: Vec3 = .{},
+};
+
 const RenderState = struct {
     // Shared mesh geometry (all shapes built into one vertex/index buffer).
     vertex_buffer: sg.Buffer = .{},
     index_buffer: sg.Buffer = .{},
     // Per-instance transform buffers: static level, dynamic character, debug capsule.
     level_instances: sg.Buffer = .{},
+    roof_instance: sg.Buffer = .{},
     character_instance: sg.Buffer = .{},
     capsule_instances: sg.Buffer = .{},
     display_pipeline: sg.Pipeline = .{},
@@ -123,6 +142,7 @@ const GameState = struct {
     clock: Clock = .{},
     input: InputState = .{},
     debug: DebugState = .{},
+    map: MapState = .{},
     character_config: controller.Config = .{},
     character: controller.State = initialCharacter(),
     mover_scratch: controller.MoverScratch = .{},
@@ -160,34 +180,51 @@ fn frame() callconv(.c) void {
     const frame_time: f32 = @floatCast(@min(sapp.frameDuration(), max_frame_dt));
     game.clock.addFrame(frame_time);
 
-    var ticks: usize = 0;
-    while (ticks < max_ticks_per_frame and game.clock.consumeTick()) : (ticks += 1) {
-        controller.update(
-            game.character_config,
-            &game.character,
-            &game.mover_scratch,
-            game.world,
-            game.input.characterInput(),
-            game.camera.basis,
-            @floatCast(fixed_dt),
-        );
-    }
-    // Discard excess backlog after the bounded catch-up budget.
-    if (ticks == max_ticks_per_frame and game.clock.accumulator >= fixed_dt) {
-        game.clock.accumulator = @mod(game.clock.accumulator, fixed_dt);
-    }
+    const render_position = if (game.map.active) blk: {
+        // Map mode: the player is not controlled. Drain pending physics ticks
+        // so returning to gameplay doesn't burst-catch-up the simulation.
+        while (game.clock.consumeTick()) {}
+        break :blk game.character.position;
+    } else blk: {
+        var ticks: usize = 0;
+        while (ticks < max_ticks_per_frame and game.clock.consumeTick()) : (ticks += 1) {
+            controller.update(
+                game.character_config,
+                &game.character,
+                &game.mover_scratch,
+                game.world,
+                game.input.characterInput(),
+                game.camera.basis,
+                @floatCast(fixed_dt),
+            );
+        }
+        // Discard excess backlog after the bounded catch-up budget.
+        if (ticks == max_ticks_per_frame and game.clock.accumulator >= fixed_dt) {
+            game.clock.accumulator = @mod(game.clock.accumulator, fixed_dt);
+        }
+        break :blk controller.interpolatedPosition(game.character, game.clock.alpha());
+    };
 
-    const render_position = controller.interpolatedPosition(game.character, game.clock.alpha());
-    camera.update(
-        game.camera_config,
-        &game.camera,
-        render_position,
-        game.input.mouse_delta,
-        game.world,
-        frame_time,
-        sapp.widthf() / @max(sapp.heightf(), 1),
-    );
-    game.input.mouse_delta = .{};
+    if (game.map.active) {
+        // WASD pans the map camera around the level.
+        const pan_speed = map_pan_speed * frame_time;
+        game.map.pan.x += (fbool(game.input.right) - fbool(game.input.left)) * pan_speed;
+        game.map.pan.z += (fbool(game.input.back) - fbool(game.input.forward)) * pan_speed;
+        game.map.pan.x = std.math.clamp(game.map.pan.x, -map_pan_x_max, map_pan_x_max);
+        game.map.pan.z = std.math.clamp(game.map.pan.z, -map_pan_z_max, map_pan_z_max);
+        game.camera.view_projection = mapViewProjection();
+    } else {
+        camera.update(
+            game.camera_config,
+            &game.camera,
+            render_position,
+            game.input.mouse_delta,
+            game.world,
+            frame_time,
+            sapp.widthf() / @max(sapp.heightf(), 1),
+        );
+        game.input.mouse_delta = .{};
+    }
     draw(render_position);
 }
 
@@ -211,6 +248,12 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 .LEFT_SHIFT, .RIGHT_SHIFT => game.input.run = down,
                 .F1 => if (down and !value.key_repeat) {
                     game.debug.draw_physics = !game.debug.draw_physics;
+                },
+                .M => if (down and !value.key_repeat) {
+                    game.map.active = !game.map.active;
+                    // Drop held keys so the map doesn't immediately pan and
+                    // gameplay doesn't resume with the character moving.
+                    game.input = .{};
                 },
                 .ESCAPE => if (down) sapp.lockMouse(false),
                 else => {},
@@ -272,16 +315,27 @@ fn initRenderer() void {
     game.render.vertex_buffer = sg.makeBuffer(sshape.vertexBufferDesc(builder));
     game.render.index_buffer = sg.makeBuffer(sshape.indexBufferDesc(builder));
 
-    // Bake every visible level box + stair step into one static instance array.
-    var instances: [static_instance_count]Instance = undefined;
-    var instance_count: usize = 0;
+    // Bake every visible level box into one static instance array, keeping the
+    // roof separate so the map view can hide it.
+    var level_instances: [level_instance_count]Instance = undefined;
+    var roof_instances: [roof_instance_count]Instance = undefined;
+    var level_count: usize = 0;
+    var roof_count: usize = 0;
     for (level.boxes) |box| {
         if (!box.visible) continue;
-        instances[instance_count] = makePitchedInstance(box.center, box.half_extents, box.pitch, box.color);
-        instance_count += 1;
+        const instance = makePitchedInstance(box.center, box.half_extents, box.pitch, box.color);
+        if (box.is_roof) {
+            roof_instances[roof_count] = instance;
+            roof_count += 1;
+        } else {
+            level_instances[level_count] = instance;
+            level_count += 1;
+        }
     }
-    std.debug.assert(instance_count == static_instance_count);
-    game.render.level_instances = sg.makeBuffer(.{ .data = sg.asRange(&instances), .label = "character-level-instances" });
+    std.debug.assert(level_count == level_instance_count);
+    std.debug.assert(roof_count == roof_instance_count);
+    game.render.level_instances = sg.makeBuffer(.{ .data = sg.asRange(&level_instances), .label = "character-level-instances" });
+    game.render.roof_instance = sg.makeBuffer(.{ .data = sg.asRange(&roof_instances), .label = "character-roof-instance" });
     // The character's instance is uploaded fresh every frame (stream_update).
     game.render.character_instance = sg.makeBuffer(.{
         .size = @sizeOf(Instance),
@@ -385,13 +439,17 @@ fn draw(position: b3.b3Pos) void {
     if (game.debug.draw_physics) updateCapsuleInstances(position);
 
     // Pass 1: render everything from the sun's viewpoint, depth-only, to the
-    // shadow map. The character draws as a second single-instance call.
+    // shadow map. The character draws as a second single-instance call. The
+    // roof is skipped in map mode so the interior is lit from above.
     const shadow_params: shd.ShadowVsParams = .{ .light_view_projection = game.render.light_view_projection };
     sg.beginPass(game.render.shadow_pass);
     sg.applyPipeline(game.render.shadow_pipeline);
     sg.applyUniforms(shd.UB_shadow_vs_params, sg.asRange(&shadow_params));
-    drawInstances(game.render.level_instances, game.render.box_range, 0, static_instance_count, false);
+    drawInstances(game.render.level_instances, game.render.box_range, 0, level_instance_count, false);
     drawInstances(game.render.character_instance, game.render.box_range, 0, 1, false);
+    if (!game.map.active) {
+        drawInstances(game.render.roof_instance, game.render.box_range, 0, roof_instance_count, false);
+    }
     sg.endPass();
 
     // Pass 2: render the same instances to the window with full lighting, and
@@ -419,12 +477,15 @@ fn draw(position: b3.b3Pos) void {
     sg.applyPipeline(game.render.display_pipeline);
     sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));
     sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
-    drawInstances(game.render.level_instances, game.render.box_range, 0, static_instance_count, true);
+    drawInstances(game.render.level_instances, game.render.box_range, 0, level_instance_count, true);
     drawInstances(game.render.character_instance, game.render.box_range, 0, 1, true);
+    if (!game.map.active) {
+        drawInstances(game.render.roof_instance, game.render.box_range, 0, roof_instance_count, true);
+    }
     sg.applyPipeline(game.render.debug_pipeline);
     sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));
     sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
-    if (game.debug.draw_physics) {
+    if (game.debug.draw_physics and !game.map.active) {
         drawInstances(game.render.capsule_instances, game.render.capsule_cylinder_range, 0, 1, true);
         drawInstances(game.render.capsule_instances, game.render.capsule_sphere_range, @sizeOf(Instance), 2, true);
     }
@@ -468,7 +529,11 @@ fn drawHud(position: b3.b3Pos) void {
     sdtx.pos(@max(1.0, sapp.widthf() / 8.0 - text_width - 1.0), 1.0);
     sdtx.color3b(255, 255, 255);
     sdtx.print("FPS: {d:>6.1}", .{fps});
-    if (game.debug.draw_physics) {
+    if (game.map.active) {
+        sdtx.pos(1.0, 1.0);
+        sdtx.color3b(255, 220, 120);
+        sdtx.print("MAP (WASD pans, M exits)", .{});
+    } else if (game.debug.draw_physics) {
         sdtx.pos(1.0, 1.0);
         sdtx.print("POS {d:.1} {d:.1} {d:.1}", .{ position.x, position.y, position.z });
     }
@@ -553,6 +618,24 @@ fn makeScaledInstance(center: Vec3, scale: Vec3, yaw: f32, color: Vec4) Instance
 
 fn instanceAttr(offset: i32) sg.VertexAttrState {
     return .{ .format = .FLOAT4, .buffer_index = 1, .offset = offset };
+}
+
+// Orthographic top-down view of the level, centred on the map pan position.
+// North (-Z) points up on screen; the roof is hidden so interiors are visible.
+fn mapViewProjection() Mat4 {
+    const aspect = sapp.widthf() / @max(sapp.heightf(), 1);
+    const half_w: f32 = 36.0; // visible half-width in metres (covers x +-26)
+    const half_h = @max(19.5, half_w / aspect); // covers z +-19
+    const center = game.map.pan;
+    const eye = Vec3{ .x = center.x, .y = 80, .z = center.z };
+    const at = Vec3{ .x = center.x, .y = 0, .z = center.z };
+    const view = Mat4.lookAtRh(eye, at, .{ .x = 0, .y = 0, .z = -1 });
+    const projection = Mat4.orthoOffCenterRh(-half_w, half_w, -half_h, half_h, 1, 200);
+    return Mat4.mul(view, projection);
+}
+
+fn fbool(value: bool) f32 {
+    return @floatFromInt(@intFromBool(value));
 }
 
 fn rgb(r: f32, g: f32, b: f32) Vec4 {
