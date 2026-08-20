@@ -11,6 +11,7 @@ const math = @import("math.zig");
 const level = @import("rpd_level.zig");
 const controller = @import("character_controller.zig");
 const hunter = @import("hunter.zig");
+const navmesh = @import("navmesh.zig");
 const camera = @import("third_person_camera.zig");
 const shd = @import("generated/character_shader.zig");
 
@@ -196,6 +197,7 @@ fn init() callconv(.c) void {
         .logger = .{ .func = slog.func },
     });
     initPhysics();
+    navmesh.buildLevel();
     initRenderer();
     // Randomize the spawn PRNG per launch so each run starts at fresh random
     // positions. Entropy comes from ASLR (a stack address plus the data

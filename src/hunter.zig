@@ -2,12 +2,18 @@
 //!
 //! The AI mirrors how the Tyrant behaves in Resident Evil 2 Remake:
 //! - He is always present in real space (no teleporting) and navigates the
-//!   level like the player, blocked by walls and furniture.
+//!   level like the player. His routes come from a baked navigation mesh
+//!   searched with A* (the same approach the RE Engine uses for Mr X), so he
+//!   walks through doorways and around furniture instead of cutting corners.
+//! - He senses the player through two channels, like the real Mr X:
+//!     * Vision: a frontal cone with a raycast for line of sight. Walls and
+//!       furniture hide the player — ducking around a corner breaks the lock-on.
+//!     * Hearing: running is loud enough to pinpoint through walls, so a sprint
+//!       gives away the general area (with error) and he walks over to check.
+//!   Walking quietly keeps him guessing.
 //! - He moves much faster while far away and slows to a deliberate stride as
-//!   he closes in.
-//! - He tracks the player's last known position and goes straight for the kill
-//!   when he perceives them (line-of-sight radius here standing in for vision
-//!   and hearing).
+//!   he closes in; chasing is faster than walking but slower than sprinting, so
+//!   the player can build distance by running — just like the real game.
 //! - Once the player escapes his senses for long enough, he gives up and walks
 //!   a random patrol route through the level, checking different rooms.
 //! - If a path is blocked and he makes no progress toward his goal for a while,
@@ -17,6 +23,11 @@
 const std = @import("std");
 const b3 = @import("box3d");
 const controller = @import("character_controller.zig");
+const navmesh = @import("navmesh.zig");
+
+// A* routes on this level never exceed a few hundred waypoints; this bound is
+// well beyond the grid diagonal so routes always fit.
+const path_capacity = 512;
 
 pub const Config = struct {
     capsule_half_segment: f32 = 1.0,
@@ -24,15 +35,23 @@ pub const Config = struct {
     // Mr X's signature gait: a fast stride far away that slows to a menacing
     // stomp as he gets close. Speeds are balanced against the player's originals
     // (walk 3.0 / run 5.0): chasing is faster than walking but slower than
-    // sprinting, so the player can build distance by running — just like the
-    // real game.
+    // sprinting, so the player can build distance by running.
     far_speed: f32 = 5.5,
     near_speed: f32 = 3.0,
     chase_speed: f32 = 4.4,
     close_radius: f32 = 3.5, // within this distance he slows from chase to near
-    // Senses: he perceives the player inside detect_radius and only gives up
-    // after give_up_time without any new perception.
+    // Vision: a 120-degree frontal cone. He locks onto the player only when a
+    // ray from his head to theirs is unobstructed; walls and furniture block.
     detect_radius: f32 = 22.0,
+    vision_half_angle: f32 = 60.0 * std.math.pi / 180.0,
+    // Hearing: a sprint is audible through walls within this radius. The
+    // reported position carries error and only refreshes on a cadence, so sound
+    // never gives a perfect track through a wall.
+    hearing_radius: f32 = 14.0,
+    run_speed_threshold: f32 = 4.0,
+    hearing_interval: f32 = 1.5,
+    hearing_error: f32 = 2.5,
+    // He only gives up after give_up_time without any new perception.
     give_up_time: f32 = 4.0,
     // Physically touching the player ends the game.
     contact_radius: f32 = 1.1,
@@ -54,19 +73,31 @@ pub const Config = struct {
     level_half_z: f32 = 17.0,
     turn_speed: f32 = 10.0,
     solve_iterations: u8 = 5,
+    // Path following: how close to a waypoint before advancing, and how often
+    // to re-route while chasing (relentlessly) vs. investigating/patrolling.
+    waypoint_radius: f32 = 0.4,
+    chase_repath_interval: f32 = 0.4,
+    investigate_repath_interval: f32 = 0.6,
 };
 
 pub const State = struct {
     previous_position: b3.b3Pos,
     position: b3.b3Pos,
     yaw: f32 = 0,
-    // Where the hunter believes the player is; refreshed by its senses.
+    // Where the hunter believes the player is; refreshed by vision or hearing.
     last_known: b3.b3Pos,
-    // True while actively pursuing the player instead of patrolling.
+    // True while actively pursuing a player he has SEEN (he locks onto the
+    // exact position and chases hard).
     acquired: bool = false,
     acquire_timer: f32 = 0,
-    // Current destination: the last known player position while chasing,
-    // otherwise a patrol/search point.
+    // True while walking toward a spot he only HEARD the player at. He doesn't
+    // know the exact position and gives up after investigate_timer.
+    investigating: bool = false,
+    investigate_timer: f32 = 0,
+    // Cadence for hearing reports so a sprint doesn't give a perfect track.
+    hearing_timer: f32 = 0,
+    // Current destination: the last known player position while chasing or
+    // investigating, otherwise a patrol/search point.
     target: b3.b3Pos,
     // Time spent without making progress toward the current goal. When it
     // exceeds Config.stuck_time the hunter abandons the goal.
@@ -75,6 +106,18 @@ pub const State = struct {
     last_goal_distance: f32 = 0,
     // Remaining "search the last-known area" period after a chase gets stuck.
     disengage_timer: f32 = 0,
+    // The A* route to the current goal, rebuilt as the goal moves.
+    path: [path_capacity]b3.b3Pos = undefined,
+    path_len: usize = 0,
+    path_index: usize = 0,
+    // The snapped goal cell the current path was built for.
+    path_goal_cell: i64 = -1,
+    repath_timer: f32 = 0,
+    // True when the last A* attempt found no route; used to re-roll an
+    // unreachable patrol/search destination instead of retrying it forever.
+    last_path_failed: bool = false,
+    // The player's position last tick, to measure their speed for hearing.
+    previous_player_position: b3.b3Pos,
 
     pub fn init(position: b3.b3Pos) State {
         return .{
@@ -82,6 +125,7 @@ pub const State = struct {
             .position = position,
             .last_known = position,
             .target = position,
+            .previous_player_position = position,
         };
     }
 };
@@ -98,32 +142,66 @@ pub fn update(
 
     const to_player = subPos(player_position, state.position);
     const player_distance = length(to_player);
+    const player_speed = length(subPos(player_position, state.previous_player_position)) / dt;
+    state.previous_player_position = player_position;
 
-    // Sense the player. Within detect_radius the hunter knows exactly where the
-    // player is; outside it he only remembers the last known position, and
-    // eventually loses interest and returns to patrolling. While searching the
-    // last-known area (after a blocked chase) he is briefly deaf, so he can't
-    // instantly re-lock onto the player through a wall.
+    // --- Senses: vision first, then hearing (Mr X's two channels) ---
+    if (state.hearing_timer > 0) state.hearing_timer -= dt;
+    if (state.investigate_timer > 0) state.investigate_timer -= dt;
+    if (state.investigating and state.investigate_timer <= 0) state.investigating = false;
+
+    // After a blocked chase he is briefly deaf so a wall-blocked lock-on can't
+    // instantly repeat.
+    const sensing = state.disengage_timer <= 0;
     if (state.disengage_timer > 0) {
         state.disengage_timer -= dt;
         if (state.disengage_timer <= 0) state.acquire_timer = 0;
-    } else if (player_distance < config.detect_radius) {
-        if (!state.acquired) {
+    }
+
+    if (sensing) {
+        const seen = player_distance < config.detect_radius and
+            inVisionCone(state.yaw, to_player, config.vision_half_angle) and
+            lineOfSight(world, state.position, player_position);
+        if (seen) {
             // Fresh lock-on: start tracking progress toward this goal from
             // scratch (the previous patrol goal is irrelevant).
-            state.stuck_timer = 0;
-            state.last_goal_distance = std.math.floatMax(f32);
+            if (!state.acquired) {
+                state.stuck_timer = 0;
+                state.last_goal_distance = std.math.floatMax(f32);
+            }
+            state.last_known = player_position;
+            state.acquired = true;
+            state.investigating = false;
+            state.investigate_timer = 0;
+            state.acquire_timer = 0;
+        } else {
+            const heard = player_speed > config.run_speed_threshold and
+                player_distance < config.hearing_radius and
+                state.hearing_timer <= 0;
+            if (heard) {
+                // A sprint pinpoints only the general area, with error.
+                const error_x = randomRange(-config.hearing_error, config.hearing_error);
+                const error_z = randomRange(-config.hearing_error, config.hearing_error);
+                state.last_known = offset(player_position, .{ .x = error_x, .y = 0, .z = error_z });
+                state.acquired = false;
+                state.investigating = true;
+                state.investigate_timer = config.search_time;
+                state.hearing_timer = config.hearing_interval;
+                state.stuck_timer = 0;
+                state.last_goal_distance = std.math.floatMax(f32);
+                state.acquire_timer = 0;
+            } else {
+                state.acquire_timer += dt;
+                if (state.acquire_timer > config.give_up_time) state.acquired = false;
+            }
         }
-        state.last_known = player_position;
-        state.acquired = true;
-        state.acquire_timer = 0;
-    } else {
-        state.acquire_timer += dt;
-        if (state.acquire_timer > config.give_up_time) state.acquired = false;
     }
 
     var chasing = state.acquired;
-    var target = if (chasing) state.last_known else state.target;
+    var investigating = state.investigating;
+    // Chasing and investigating both aim at the last perceived spot; patrol
+    // heads for its own destination.
+    var target: b3.b3Pos = if (chasing or investigating) state.last_known else state.target;
 
     const to_target = subPos(target, state.position);
     const target_distance = length(to_target);
@@ -138,7 +216,8 @@ pub fn update(
     }
     state.last_goal_distance = target_distance;
 
-    if (state.stuck_timer > config.stuck_time or (!chasing and target_distance < config.arrive_radius)) {
+    if (state.stuck_timer > config.stuck_time) {
+        // No progress for a long time: the route failed. Give up and start over.
         state.stuck_timer = 0;
         state.last_goal_distance = std.math.floatMax(f32);
         if (chasing) {
@@ -149,9 +228,20 @@ pub fn update(
             state.target = searchPoint(config, state.last_known);
             chasing = false;
         } else {
+            state.investigating = false;
             state.target = randomPatrolTarget(config, state.position);
         }
         target = state.target;
+        investigating = state.investigating;
+    } else if (!chasing and target_distance < config.arrive_radius) {
+        if (investigating) {
+            // Standing at the spot he heard the player: hold still and wait out
+            // the search before returning to patrol.
+            target = state.position;
+        } else {
+            state.target = randomPatrolTarget(config, state.position);
+            target = state.target;
+        }
     }
 
     const to_goal = subPos(target, state.position);
@@ -160,21 +250,86 @@ pub fn update(
     var speed = config.far_speed;
     if (chasing) {
         speed = if (player_distance < config.close_radius) config.near_speed else config.chase_speed;
+    } else if (investigating) {
+        speed = config.near_speed; // the menacing walk toward a sound
     } else if (goal_distance < config.close_radius) {
         speed = config.near_speed;
     }
 
-    const move_delta = if (goal_distance > 0.0001)
-        scale(to_goal, speed * dt / goal_distance)
-    else
-        b3.b3Vec3{};
+    // --- Route: recompute the A* path when the goal moves or it goes stale ---
+    if (state.repath_timer > 0) state.repath_timer -= dt;
+    const repath_interval = if (chasing) config.chase_repath_interval else config.investigate_repath_interval;
+
+    if (state.path_len == 0) {
+        // No route yet (first frame, or the previous goal was unreachable).
+        // Retry on the timer instead of every tick, and re-roll an unreachable
+        // patrol/search destination right away so we do not keep pathing to it.
+        if (state.repath_timer <= 0) {
+            if (state.last_path_failed and !chasing) {
+                if (investigating) state.investigating = false;
+                state.target = randomPatrolTarget(config, state.position);
+                target = state.target;
+            }
+            state.repath_timer = repath_interval;
+            const goal_cell = navmesh.level_nav.cellAt(target.x, target.z);
+            state.path_goal_cell = if (goal_cell) |cell| @as(i64, @intCast(cell)) else -1;
+            state.path_len = navmesh.level_nav.findPath(
+                state.position.x,
+                state.position.z,
+                target.x,
+                target.z,
+                state.path[0..],
+            );
+            state.last_path_failed = state.path_len == 0;
+            state.path_index = 0;
+        }
+    } else {
+        // A route exists; re-route when it is exhausted, the goal moved to a
+        // different cell (a moving player), or the refresh timer elapsed.
+        const goal_cell = navmesh.level_nav.cellAt(target.x, target.z);
+        const goal_cell_changed = (goal_cell != null) and (state.path_goal_cell >= 0) and
+            (@as(i64, @intCast(goal_cell.?)) != state.path_goal_cell);
+        if (state.path_index >= state.path_len or goal_cell_changed or state.repath_timer <= 0) {
+            state.repath_timer = repath_interval;
+            state.path_goal_cell = if (goal_cell) |cell| @as(i64, @intCast(cell)) else -1;
+            state.path_len = navmesh.level_nav.findPath(
+                state.position.x,
+                state.position.z,
+                target.x,
+                target.z,
+                state.path[0..],
+            );
+            state.last_path_failed = state.path_len == 0;
+            state.path_index = 0;
+        }
+    }
+
+    // --- Move along the route ---
+    var move_delta: b3.b3Vec3 = .{};
+    if (state.path_len == 0) {
+        // No route (unreachable, or the goal snapped to this cell): go straight.
+        if (goal_distance > 0.0001) move_delta = scale(to_goal, speed * dt / goal_distance);
+    } else if (state.path_index < state.path_len) {
+        const waypoint = state.path[state.path_index];
+        const to_waypoint = subPos(waypoint, state.position);
+        const waypoint_distance = length(to_waypoint);
+        if (waypoint_distance < config.waypoint_radius) {
+            state.path_index += 1;
+        } else {
+            move_delta = scale(to_waypoint, speed * dt / waypoint_distance);
+        }
+    } else if (goal_distance > 0.0001) {
+        // Route walked off the end; close the final gap.
+        move_delta = scale(to_goal, speed * dt / goal_distance);
+    }
+    move_delta.y = 0;
 
     const capsule = localCapsule(config);
     controller.moveCapsule(scratch, world, &state.position, &capsule, move_delta, controller.hunterFilter(), config.solve_iterations);
 
     // Face the direction of travel, turning gradually like a heavy stalker.
     if (lengthSquared(move_delta) > 0.0001) {
-        const target_yaw = std.math.atan2(to_goal.x, to_goal.z);
+        const target_yaw = std.math.atan2(move_delta.x, move_delta.z);
         state.yaw = approachAngle(state.yaw, target_yaw, config.turn_speed * dt);
     }
 }
@@ -185,6 +340,28 @@ pub fn interpolatedPosition(state: State, alpha: f32) b3.b3Pos {
         .y = state.previous_position.y + (state.position.y - state.previous_position.y) * alpha,
         .z = state.previous_position.z + (state.position.z - state.previous_position.z) * alpha,
     };
+}
+
+// True when the direction to the player lies inside the frontal vision cone
+// centered on the hunter's facing direction.
+fn inVisionCone(facing_yaw: f32, to_player: b3.b3Vec3, half_angle: f32) bool {
+    const distance_sq = lengthSquared(to_player);
+    if (distance_sq <= 0.0001) return true;
+    const facing_x = @sin(facing_yaw);
+    const facing_z = @cos(facing_yaw);
+    const dot = (to_player.x * facing_x + to_player.z * facing_z) / @sqrt(distance_sq);
+    return dot >= @cos(half_angle);
+}
+
+// True when the ray from the hunter to the player is unobstructed. Only level
+// geometry (walls and furniture) can block his view: the ray runs above the
+// floor and below the roof, and the player and hunter are not level-category
+// shapes, so neither can occlude it.
+fn lineOfSight(world: b3.b3WorldId, from: b3.b3Pos, to: b3.b3Pos) bool {
+    var filter = b3.b3DefaultQueryFilter();
+    filter.maskBits = controller.level_category;
+    const ray = b3.b3World_CastRayClosest(world, from, subPos(to, from), filter);
+    return !ray.hit;
 }
 
 // Deterministic pseudo-random generator for spawns and patrol routes.
@@ -298,4 +475,33 @@ test "search point stays near the last known location" {
 test "angle approach takes the shortest path" {
     const result = approachAngle(3.0, -3.0, 0.1);
     try std.testing.expect(result > 3.0);
+}
+
+test "vision cone is frontal" {
+    const half = 60.0 * std.math.pi / 180.0;
+    try std.testing.expect(inVisionCone(0, .{ .x = 0, .y = 0, .z = 5 }, half)); // dead ahead
+    try std.testing.expect(inVisionCone(0, .{ .x = 3, .y = 0, .z = 5 }, half)); // inside the cone
+    try std.testing.expect(!inVisionCone(0, .{ .x = 0, .y = 0, .z = -5 }, half)); // behind
+    try std.testing.expect(!inVisionCone(0, .{ .x = 5, .y = 0, .z = -1 }, half)); // behind the shoulder
+    try std.testing.expect(inVisionCone(std.math.pi, .{ .x = 0, .y = 0, .z = -5 }, half)); // facing -Z
+}
+
+test "line of sight is blocked by walls but clear in the open" {
+    var world_def = b3.b3DefaultWorldDef();
+    const world = b3.b3CreateWorld(&world_def);
+    defer b3.b3DestroyWorld(world);
+
+    // A level-category wall spanning x[-2,2] at z=0, from the floor up.
+    var body_def = b3.b3DefaultBodyDef();
+    body_def.position = .{ .x = 0, .y = 1.0, .z = 0 };
+    const body = b3.b3CreateBody(world, &body_def);
+    var shape_def = b3.b3DefaultShapeDef();
+    shape_def.filter.categoryBits = controller.level_category;
+    var hull = b3.b3MakeBoxHull(2.0, 1.0, 0.2);
+    _ = b3.b3CreateHullShape(body, &shape_def, &hull.base);
+
+    // Clear view entirely on one side of the wall.
+    try std.testing.expect(lineOfSight(world, .{ .x = 0, .y = 1.5, .z = 5 }, .{ .x = 0, .y = 0.9, .z = 8 }));
+    // The wall between the two heads blocks the view.
+    try std.testing.expect(!lineOfSight(world, .{ .x = 0, .y = 1.5, .z = 5 }, .{ .x = 0, .y = 0.9, .z = -5 }));
 }
