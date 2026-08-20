@@ -49,6 +49,7 @@ pub const MoverScratch = struct {
 };
 
 pub const player_query_category: u64 = 1 << 1;
+pub const hunter_query_category: u64 = 1 << 3;
 pub const level_category: u64 = 1 << 0;
 
 pub fn update(
@@ -92,28 +93,11 @@ pub fn update(
 
     const capsule = localCapsule(config);
     const desired_position = offset(state.position, scale(state.velocity, dt));
-    var iterations: u8 = 0;
-    while (iterations < config.solve_iterations) : (iterations += 1) {
-        collectPlanes(scratch, world, state.position, &capsule);
-        const target_delta = subPos(desired_position, state.position);
-        const solved = b3.b3SolvePlanes(target_delta, &scratch.planes, @intCast(scratch.count));
-        const fraction = b3.b3World_CastMover(
-            world,
-            state.position,
-            &capsule,
-            solved.delta,
-            moverFilter(),
-            null,
-            null,
-        );
-        const delta = scale(solved.delta, fraction);
-        state.position = offset(state.position, delta);
-        if (lengthSquared(delta) < 0.000001) break;
-    }
+    moveCapsule(scratch, world, &state.position, &capsule, subPos(desired_position, state.position), moverFilter(), config.solve_iterations);
 
     // Refresh planes at the final pose: these are the contacts used for both
     // grounding and velocity clipping during the next tick.
-    collectPlanes(scratch, world, state.position, &capsule);
+    collectPlanes(scratch, world, state.position, &capsule, moverFilter());
     state.grounded = false;
     for (scratch.planes[0..scratch.count]) |plane| {
         if (plane.plane.normal.y >= config.ground_normal_y) state.grounded = true;
@@ -137,9 +121,44 @@ fn localCapsule(config: Config) b3.b3Capsule {
     };
 }
 
-fn collectPlanes(scratch: *MoverScratch, world: b3.b3WorldId, origin: b3.b3Pos, capsule: *const b3.b3Capsule) void {
+// Slide a capsule from its current position along `delta`, resolving contact
+// with level geometry via plane solving and shape casting. Shared by the
+// player controller and the hunter AI, which move explicitly (no rigid body).
+pub fn moveCapsule(
+    scratch: *MoverScratch,
+    world: b3.b3WorldId,
+    position: *b3.b3Pos,
+    capsule: *const b3.b3Capsule,
+    delta: b3.b3Vec3,
+    filter: b3.b3QueryFilter,
+    iterations: u8,
+) void {
+    var i: u8 = 0;
+    // Resolve toward one fixed destination, so each iteration only moves the
+    // remaining distance and never re-applies the full displacement (which
+    // would multiply movement speed by the iteration count in open space).
+    const desired = offset(position.*, delta);
+    while (i < iterations) : (i += 1) {
+        collectPlanes(scratch, world, position.*, capsule, filter);
+        const target_delta = subPos(desired, position.*);
+        const solved = b3.b3SolvePlanes(target_delta, &scratch.planes, @intCast(scratch.count));
+        const fraction = b3.b3World_CastMover(world, position.*, capsule, solved.delta, filter, null, null);
+        const actual = scale(solved.delta, fraction);
+        position.* = offset(position.*, actual);
+        if (lengthSquared(actual) < 0.000001) break;
+    }
+}
+
+pub fn hunterFilter() b3.b3QueryFilter {
+    var filter = b3.b3DefaultQueryFilter();
+    filter.categoryBits = hunter_query_category;
+    filter.maskBits = level_category;
+    return filter;
+}
+
+fn collectPlanes(scratch: *MoverScratch, world: b3.b3WorldId, origin: b3.b3Pos, capsule: *const b3.b3Capsule, filter: b3.b3QueryFilter) void {
     scratch.count = 0;
-    b3.b3World_CollideMover(world, origin, capsule, moverFilter(), collectPlane, scratch);
+    b3.b3World_CollideMover(world, origin, capsule, filter, collectPlane, scratch);
 }
 
 fn collectPlane(_: b3.b3ShapeId, results: [*c]const b3.b3PlaneResult, count: c_int, context: ?*anyopaque) callconv(.c) bool {

@@ -10,6 +10,7 @@ const sokol = @import("sokol");
 const math = @import("math.zig");
 const level = @import("rpd_level.zig");
 const controller = @import("character_controller.zig");
+const hunter = @import("hunter.zig");
 const camera = @import("third_person_camera.zig");
 const shd = @import("generated/character_shader.zig");
 
@@ -32,6 +33,21 @@ const max_ticks_per_frame = 6;
 const shadow_map_size = 2048;
 // Half the character box's size along each axis (full size = 2x this).
 const character_half_extents = Vec3{ .x = 0.32, .y = 0.9, .z = 0.22 };
+
+// The hunter is a larger, red Tyrant-style box.
+const hunter_half_extents = Vec3{ .x = 0.45, .y = 1.25, .z = 0.30 };
+const hunter_color = Vec4{ .x = 0.92, .y = 0.12, .z = 0.14, .w = 1 };
+
+// Spawn sampling lives inside the walkable floor area, clear of walls and
+// furniture. The capsule centre heights match each actor's capsule geometry
+// (half_segment + radius), so the capsule sits on the floor.
+const spawn_half_x: f32 = 24.0;
+const spawn_half_z: f32 = 17.0;
+const player_spawn_y: f32 = 0.9;
+const hunter_spawn_y: f32 = 1.5;
+// Keep the hunter from starting on top of the player — and beyond his
+// perception radius, so he begins patrolling rather than instantly chasing.
+const min_spawn_separation: f32 = 24.0;
 
 // Top-down map view tuning.
 const map_pan_speed: f32 = 25.0; // metres/second the map pans with WASD
@@ -122,6 +138,7 @@ const RenderState = struct {
     level_instances: sg.Buffer = .{},
     roof_instance: sg.Buffer = .{},
     character_instance: sg.Buffer = .{},
+    hunter_instance: sg.Buffer = .{},
     capsule_instances: sg.Buffer = .{},
     display_pipeline: sg.Pipeline = .{},
     debug_pipeline: sg.Pipeline = .{},
@@ -145,6 +162,9 @@ const GameState = struct {
     map: MapState = .{},
     character_config: controller.Config = .{},
     character: controller.State = initialCharacter(),
+    hunter_config: hunter.Config = .{},
+    hunter: hunter.State = initialHunter(),
+    game_over: bool = false,
     mover_scratch: controller.MoverScratch = .{},
     camera_config: camera.Config = .{},
     camera: camera.State = .{},
@@ -161,6 +181,10 @@ fn initialCharacter() controller.State {
     return character;
 }
 
+fn initialHunter() hunter.State {
+    return hunter.State.init(.{ .x = 0, .y = 1.5, .z = -17 });
+}
+
 fn init() callconv(.c) void {
     sg.setup(.{ .environment = sglue.environment(), .logger = .{ .func = slog.func } });
     sdtx.setup(.{
@@ -173,6 +197,12 @@ fn init() callconv(.c) void {
     });
     initPhysics();
     initRenderer();
+    // Randomize the spawn PRNG per launch so each run starts at fresh random
+    // positions. Entropy comes from ASLR (a stack address plus the data
+    // segment address both differ between processes). Restarts then continue
+    // the PRNG sequence rather than re-seeding.
+    seedSpawnRandomness();
+    spawnPlayerAndHunter();
     sapp.lockMouse(true);
 }
 
@@ -180,9 +210,10 @@ fn frame() callconv(.c) void {
     const frame_time: f32 = @floatCast(@min(sapp.frameDuration(), max_frame_dt));
     game.clock.addFrame(frame_time);
 
-    const render_position = if (game.map.active) blk: {
-        // Map mode: the player is not controlled. Drain pending physics ticks
-        // so returning to gameplay doesn't burst-catch-up the simulation.
+    const render_position = if (game.map.active or game.game_over) blk: {
+        // Map mode: the player is not controlled. Game over: everything freezes
+        // behind the overlay. Drain pending physics ticks so returning to
+        // gameplay doesn't burst-catch-up the simulation.
         while (game.clock.consumeTick()) {}
         break :blk game.character.position;
     } else blk: {
@@ -197,6 +228,18 @@ fn frame() callconv(.c) void {
                 game.camera.basis,
                 @floatCast(fixed_dt),
             );
+            hunter.update(
+                game.hunter_config,
+                &game.hunter,
+                &game.mover_scratch,
+                game.world,
+                game.character.position,
+                @floatCast(fixed_dt),
+            );
+            if (hunterContacted()) {
+                game.game_over = true;
+                break;
+            }
         }
         // Discard excess backlog after the bounded catch-up budget.
         if (ticks == max_ticks_per_frame and game.clock.accumulator >= fixed_dt) {
@@ -213,7 +256,7 @@ fn frame() callconv(.c) void {
         game.map.pan.x = std.math.clamp(game.map.pan.x, -map_pan_x_max, map_pan_x_max);
         game.map.pan.z = std.math.clamp(game.map.pan.z, -map_pan_z_max, map_pan_z_max);
         game.camera.view_projection = mapViewProjection();
-    } else {
+    } else if (!game.game_over) {
         camera.update(
             game.camera_config,
             &game.camera,
@@ -255,6 +298,9 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     // gameplay doesn't resume with the character moving.
                     game.input = .{};
                 },
+                .R => if (down and !value.key_repeat and game.game_over) {
+                    spawnPlayerAndHunter();
+                },
                 .ESCAPE => if (down) sapp.lockMouse(false),
                 else => {},
             }
@@ -291,9 +337,104 @@ fn addStaticBox(box: level.Box) void {
     var shape_def = b3.b3DefaultShapeDef();
     // The character and camera query these boxes; other objects ignore them.
     shape_def.filter.categoryBits = controller.level_category;
-    shape_def.filter.maskBits = controller.player_query_category | camera.camera_query_category;
+    shape_def.filter.maskBits = controller.player_query_category | camera.camera_query_category | controller.hunter_query_category;
     var hull = b3.b3MakeBoxHull(box.half_extents.x, box.half_extents.y, box.half_extents.z);
     _ = b3.b3CreateHullShape(body, &shape_def, &hull.base);
+}
+
+// Mix ASLR-derived addresses into the PRNG seed: both a stack local and the
+// global game state live at different addresses in each process.
+fn seedSpawnRandomness() void {
+    var stack_marker: u32 = 0;
+    const entropy = @as(u64, @bitCast(@intFromPtr(&stack_marker))) ^ @as(u64, @bitCast(@intFromPtr(&game)));
+    hunter.seedRandom(@truncate(entropy));
+}
+
+// Place the player and hunter at collision-free random positions, then reset
+// the whole round (clock, camera, map, game-over flag).
+fn spawnPlayerAndHunter() void {
+    const player_spawn = randomValidSpawn(
+        player_spawn_y,
+        game.character_config.capsule_half_segment,
+        game.character_config.capsule_radius,
+    );
+    var hunter_spawn = randomValidSpawn(
+        hunter_spawn_y,
+        game.hunter_config.capsule_half_segment,
+        game.hunter_config.capsule_radius,
+    );
+    // Resample the hunter until it starts far enough from the player to give a
+    // fair opening, but fall back to the first sample if the level is crowded.
+    var attempts: usize = 0;
+    while (attempts < 64) : (attempts += 1) {
+        const dx = hunter_spawn.x - player_spawn.x;
+        const dz = hunter_spawn.z - player_spawn.z;
+        if (dx * dx + dz * dz >= min_spawn_separation * min_spawn_separation) break;
+        hunter_spawn = randomValidSpawn(
+            hunter_spawn_y,
+            game.hunter_config.capsule_half_segment,
+            game.hunter_config.capsule_radius,
+        );
+    }
+
+    game.character = controller.State.init(player_spawn);
+    game.character.yaw = std.math.pi; // face -Z, matching the initial camera
+    game.hunter = hunter.State.init(hunter_spawn);
+    game.hunter.yaw = std.math.pi;
+    game.camera = .{};
+    game.clock = .{};
+    game.map = .{};
+    game.game_over = false;
+    game.input = .{};
+}
+
+// Rejection-sample a capsule-sized clear spot inside the walkable floor area.
+fn randomValidSpawn(y: f32, half_segment: f32, radius: f32) b3.b3Pos {
+    var attempts: usize = 0;
+    while (attempts < 256) : (attempts += 1) {
+        const position = b3.b3Pos{
+            .x = hunter.randomRange(-spawn_half_x, spawn_half_x),
+            .y = y,
+            .z = hunter.randomRange(-spawn_half_z, spawn_half_z),
+        };
+        if (capsuleClear(position, half_segment, radius)) return position;
+    }
+    // Fallback: the middle of the Main Hall is always open.
+    return .{ .x = 0, .y = y, .z = 0 };
+}
+
+const SpawnCheck = struct { hit: bool = false };
+
+fn overlapHit(_: b3.b3ShapeId, context: ?*anyopaque) callconv(.c) bool {
+    const check: *SpawnCheck = @ptrCast(@alignCast(context.?));
+    check.hit = true;
+    return false; // stop at the first overlap
+}
+
+// True when no level geometry intersects the capsule at `position`. The two
+// probe points (mid height and top) sit well above the floor slab so the floor
+// itself never counts as a blocker; walls and furniture span that height range,
+// so anything the capsule would collide with still overlaps one of them.
+fn capsuleClear(position: b3.b3Pos, half_segment: f32, radius: f32) bool {
+    var check: SpawnCheck = .{};
+    const points = [_]b3.b3Vec3{
+        .{ .x = position.x, .y = position.y, .z = position.z },
+        .{ .x = position.x, .y = position.y + half_segment, .z = position.z },
+    };
+    var proxy: b3.b3ShapeProxy = .{ .points = &points, .count = 2, .radius = radius };
+    var filter = b3.b3DefaultQueryFilter();
+    filter.categoryBits = controller.player_query_category;
+    filter.maskBits = controller.level_category;
+    _ = b3.b3World_OverlapShape(game.world, position, &proxy, filter, overlapHit, &check);
+    return !check.hit;
+}
+
+// The hunter catches the player when their capsules touch horizontally.
+fn hunterContacted() bool {
+    const dx = game.hunter.position.x - game.character.position.x;
+    const dz = game.hunter.position.z - game.character.position.z;
+    const radius = game.hunter_config.contact_radius;
+    return dx * dx + dz * dz < radius * radius;
 }
 
 fn initRenderer() void {
@@ -341,6 +482,12 @@ fn initRenderer() void {
         .size = @sizeOf(Instance),
         .usage = .{ .stream_update = true },
         .label = "character-dynamic-instance",
+    });
+    // The hunter is a second dynamic single-instance buffer, drawn in red.
+    game.render.hunter_instance = sg.makeBuffer(.{
+        .size = @sizeOf(Instance),
+        .usage = .{ .stream_update = true },
+        .label = "character-hunter-instance",
     });
     game.render.capsule_instances = sg.makeBuffer(.{
         .size = 3 * @sizeOf(Instance),
@@ -438,6 +585,17 @@ fn draw(position: b3.b3Pos) void {
     sg.updateBuffer(game.render.character_instance, sg.asRange(&instance));
     if (game.debug.draw_physics) updateCapsuleInstances(position);
 
+    // The hunter renders from its own interpolated position so it moves just as
+    // smoothly as the character.
+    const hunter_render = hunter.interpolatedPosition(game.hunter, game.clock.alpha());
+    const hunter_instance = makeInstance(
+        .{ .x = hunter_render.x, .y = hunter_render.y, .z = hunter_render.z },
+        hunter_half_extents,
+        game.hunter.yaw,
+        hunter_color,
+    );
+    sg.updateBuffer(game.render.hunter_instance, sg.asRange(&hunter_instance));
+
     // Pass 1: render everything from the sun's viewpoint, depth-only, to the
     // shadow map. The character draws as a second single-instance call. The
     // roof is skipped in map mode so the interior is lit from above.
@@ -447,6 +605,7 @@ fn draw(position: b3.b3Pos) void {
     sg.applyUniforms(shd.UB_shadow_vs_params, sg.asRange(&shadow_params));
     drawInstances(game.render.level_instances, game.render.box_range, 0, level_instance_count, false);
     drawInstances(game.render.character_instance, game.render.box_range, 0, 1, false);
+    drawInstances(game.render.hunter_instance, game.render.box_range, 0, 1, false);
     if (!game.map.active) {
         drawInstances(game.render.roof_instance, game.render.box_range, 0, roof_instance_count, false);
     }
@@ -479,6 +638,7 @@ fn draw(position: b3.b3Pos) void {
     sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
     drawInstances(game.render.level_instances, game.render.box_range, 0, level_instance_count, true);
     drawInstances(game.render.character_instance, game.render.box_range, 0, 1, true);
+    drawInstances(game.render.hunter_instance, game.render.box_range, 0, 1, true);
     if (!game.map.active) {
         drawInstances(game.render.roof_instance, game.render.box_range, 0, roof_instance_count, true);
     }
@@ -533,9 +693,21 @@ fn drawHud(position: b3.b3Pos) void {
         sdtx.pos(1.0, 1.0);
         sdtx.color3b(255, 220, 120);
         sdtx.print("MAP (WASD pans, M exits)", .{});
-    } else if (game.debug.draw_physics) {
+    } else if (game.debug.draw_physics and !game.game_over) {
         sdtx.pos(1.0, 1.0);
         sdtx.print("POS {d:.1} {d:.1} {d:.1}", .{ position.x, position.y, position.z });
+    }
+    if (game.game_over) {
+        const title = "YOU WERE CAUGHT BY THE HUNTER";
+        const prompt = "PRESS R TO PLAY AGAIN";
+        // The 8x8 font renders in text units of 8 px, so dividing the pixel
+        // canvas by 8 centres a line of `len` characters.
+        sdtx.pos(sapp.widthf() / 8.0 / 2.0 - @as(f32, @floatFromInt(title.len)) / 2.0, sapp.heightf() / 8.0 / 2.0 - 1.0);
+        sdtx.color3b(255, 60, 60);
+        sdtx.print(title, .{});
+        sdtx.pos(sapp.widthf() / 8.0 / 2.0 - @as(f32, @floatFromInt(prompt.len)) / 2.0, sapp.heightf() / 8.0 / 2.0 + 1.0);
+        sdtx.color3b(255, 255, 255);
+        sdtx.print(prompt, .{});
     }
     sdtx.draw();
 }
@@ -673,4 +845,8 @@ test "clock consumes fixed ticks independent of frame chunks" {
         while (b.consumeTick()) count_b += 1;
     }
     try std.testing.expectEqual(count_a, count_b);
+}
+
+test "hunter AI tests" {
+    std.testing.refAllDecls(@import("hunter.zig"));
 }
