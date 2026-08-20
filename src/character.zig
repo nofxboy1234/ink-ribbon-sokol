@@ -109,13 +109,18 @@ const InputState = struct {
 
     // Turn held keys into a movement intent. x is strafe (right-left),
     // y is forward-back (positive = toward where the camera looks).
-    fn characterInput(self: InputState) controller.Input {
+    fn characterInput(self: *InputState) controller.Input {
+        const move: controller.Vec2 = .{
+            .x = @as(f32, @floatFromInt(@intFromBool(self.right))) - @as(f32, @floatFromInt(@intFromBool(self.left))),
+            .y = @as(f32, @floatFromInt(@intFromBool(self.forward))) - @as(f32, @floatFromInt(@intFromBool(self.back))),
+        };
+        // Running is armed by Shift but only applies while a direction is held;
+        // releasing the direction keys falls back to walking and disarms it.
+        const running = self.run and (move.x != 0 or move.y != 0);
+        if (!running) self.run = false;
         return .{
-            .move = .{
-                .x = @as(f32, @floatFromInt(@intFromBool(self.right))) - @as(f32, @floatFromInt(@intFromBool(self.left))),
-                .y = @as(f32, @floatFromInt(@intFromBool(self.forward))) - @as(f32, @floatFromInt(@intFromBool(self.back))),
-            },
-            .run = self.run,
+            .move = move,
+            .run = running,
         };
     }
 };
@@ -294,7 +299,11 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 .S => game.input.back = down,
                 .A => game.input.left = down,
                 .D => game.input.right = down,
-                .LEFT_SHIFT, .RIGHT_SHIFT => game.input.run = down,
+                .LEFT_SHIFT, .RIGHT_SHIFT => if (down and !value.key_repeat) {
+                    // Arm running. It only takes effect while a direction is
+                    // held and is never toggled off by Shift again.
+                    game.input.run = true;
+                },
                 .F1 => if (down and !value.key_repeat) {
                     game.debug.draw_physics = !game.debug.draw_physics;
                 },
