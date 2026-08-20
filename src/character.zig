@@ -390,9 +390,15 @@ fn addStaticBox(box: level.Box) void {
     body_def.rotation = .{ .v = .{ .x = @sin(half_pitch) }, .s = @cos(half_pitch) };
     const body = b3.b3CreateBody(game.world, &body_def);
     var shape_def = b3.b3DefaultShapeDef();
-    // The character and camera query these boxes; other objects ignore them.
-    shape_def.filter.categoryBits = controller.level_category;
-    shape_def.filter.maskBits = controller.player_query_category | camera.camera_query_category | controller.hunter_query_category;
+    if (box.hunter_block) {
+        // Save-room barrier: only the hunter's capsule collides with it.
+        shape_def.filter.categoryBits = controller.hunter_block_category;
+        shape_def.filter.maskBits = controller.hunter_query_category;
+    } else {
+        // The character and camera query these boxes; other objects ignore them.
+        shape_def.filter.categoryBits = controller.level_category;
+        shape_def.filter.maskBits = controller.player_query_category | camera.camera_query_category | controller.hunter_query_category;
+    }
     var hull = b3.b3MakeBoxHull(box.half_extents.x, box.half_extents.y, box.half_extents.z);
     _ = b3.b3CreateHullShape(body, &shape_def, &hull.base);
 }

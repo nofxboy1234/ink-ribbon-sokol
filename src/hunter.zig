@@ -391,13 +391,13 @@ fn inVisionCone(facing_yaw: f32, to_player: b3.b3Vec3, half_angle: f32) bool {
     return dot >= @cos(half_angle);
 }
 
-// True when the ray from the hunter to the player is unobstructed. Only level
-// geometry (walls and furniture) can block his view: the ray runs above the
-// floor and below the roof, and the player and hunter are not level-category
-// shapes, so neither can occlude it.
+// True when the ray from the hunter to the player is unobstructed. Level
+// geometry (walls and furniture) and save-room barriers can block his view:
+// the ray runs above the floor and below the roof, and the player and hunter
+// are not level-category shapes, so neither can occlude it.
 fn lineOfSight(world: b3.b3WorldId, from: b3.b3Pos, to: b3.b3Pos) bool {
     var filter = b3.b3DefaultQueryFilter();
-    filter.maskBits = controller.level_category;
+    filter.maskBits = controller.level_category | controller.hunter_block_category;
     const ray = b3.b3World_CastRayClosest(world, from, subPos(to, from), filter);
     return !ray.hit;
 }

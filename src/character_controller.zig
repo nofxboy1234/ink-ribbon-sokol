@@ -51,6 +51,8 @@ pub const MoverScratch = struct {
 pub const player_query_category: u64 = 1 << 1;
 pub const hunter_query_category: u64 = 1 << 3;
 pub const level_category: u64 = 1 << 0;
+// Used by save-room barriers: collides with (and occludes) the hunter only.
+pub const hunter_block_category: u64 = 1 << 4;
 
 pub fn update(
     config: Config,
@@ -152,7 +154,7 @@ pub fn moveCapsule(
 pub fn hunterFilter() b3.b3QueryFilter {
     var filter = b3.b3DefaultQueryFilter();
     filter.categoryBits = hunter_query_category;
-    filter.maskBits = level_category;
+    filter.maskBits = level_category | hunter_block_category;
     return filter;
 }
 

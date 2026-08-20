@@ -20,6 +20,9 @@ pub const Box = struct {
     collidable: bool = true,
     // Roof boxes are hidden in the top-down map view.
     is_roof: bool = false,
+    // Blocks the hunter only: the player and camera pass through these, but
+    // they still block the hunter's navmesh cells and line of sight.
+    hunter_block: bool = false,
 };
 
 // Roof height in metres (one floor of the former stacked plan).
@@ -40,6 +43,7 @@ const locker_color = rgba(0.47, 0.51, 0.53, 1);
 const rack_color = rgba(0.36, 0.38, 0.40, 1);
 const plant_color = rgba(0.25, 0.45, 0.30, 1);
 const oxocarbon_pink = rgba(1.0, 0.49, 0.71, 1);
+const typewriter_color = rgba(0.06, 0.06, 0.07, 1);
 
 // ---------------------------------------------------------------------------
 // Layout summary (building spans x in [-26, 26], z in [-19, 19]):
@@ -171,6 +175,16 @@ pub const boxes = [_]Box{
     solid(-22, 0.75, 8.5, 2, 0.75, 1, wood_color), // W3 table
 
     // ---------------------------------------------------------------------
+    // W2 save room: a typewriter on the pink landmark desk, and invisible
+    // hunter-block barriers sealing all three doorways (z=-4, z=4, and the
+    // corridor gap at x=-13) so the hunter cannot enter or see inside.
+    // ---------------------------------------------------------------------
+    visual(-17.5, 1.76, 0, 0.28, 0.06, 0.18, typewriter_color), // W2 typewriter
+    hunterDoorX(-17.5, -4, 1.5), // seal W2 north doorway
+    hunterDoorX(-17.5, 4, 1.5), // seal W2 south doorway
+    hunterDoorZ(-13, 0, 1.5), // seal W2 east doorway into the corridor
+
+    // ---------------------------------------------------------------------
     // East furniture.
     // ---------------------------------------------------------------------
     solid(20, 0.75, -8, 2.4, 0.75, 1.2, wood_color), // E1 table
@@ -225,6 +239,22 @@ fn wallZ(x: f32, y: f32, z: f32, hz: f32, color: Vec4) Box {
 fn visual(x: f32, y: f32, z: f32, hx: f32, hy: f32, hz: f32, color: Vec4) Box {
     var result = solid(x, y, z, hx, hy, hz, color);
     result.collidable = false;
+    return result;
+}
+
+// Invisible barrier in a doorway that only the hunter collides with (and
+// that blocks his navmesh cells and view). The player walks straight through.
+fn hunterDoorX(x: f32, z: f32, hx: f32) Box {
+    var result = wallX(x, 0, z, hx, wall_color);
+    result.visible = false;
+    result.hunter_block = true;
+    return result;
+}
+
+fn hunterDoorZ(x: f32, z: f32, hz: f32) Box {
+    var result = wallZ(x, 0, z, hz, wall_color);
+    result.visible = false;
+    result.hunter_block = true;
     return result;
 }
 
