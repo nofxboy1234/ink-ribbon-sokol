@@ -386,7 +386,12 @@ fn spawnPlayerAndHunter() void {
     game.character = controller.State.init(player_spawn);
     game.character.yaw = std.math.pi; // face -Z, matching the initial camera
     game.hunter = hunter.State.init(hunter_spawn);
-    game.hunter.yaw = std.math.pi;
+    // Face the player from the start (Mr X's head sweep then scans around this
+    // heading), and give him a real patrol destination so he sets off walking
+    // immediately instead of idling at his spawn point.
+    game.hunter.yaw = std.math.atan2(player_spawn.x - hunter_spawn.x, player_spawn.z - hunter_spawn.z);
+    game.hunter.target = hunter.randomPatrolTarget(game.hunter_config, game.hunter.position);
+    game.hunter.repath_timer = 0;
     game.camera = .{};
     game.clock = .{};
     game.map = .{};

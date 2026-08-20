@@ -118,6 +118,9 @@ pub const State = struct {
     last_path_failed: bool = false,
     // The player's position last tick, to measure their speed for hearing.
     previous_player_position: b3.b3Pos,
+    // Phase of the patrolling gaze sweep, used to scan left and right so he
+    // notices the player even when they approach from the side.
+    scan_timer: f32 = 0,
 
     pub fn init(position: b3.b3Pos) State {
         return .{
@@ -149,6 +152,7 @@ pub fn update(
     if (state.hearing_timer > 0) state.hearing_timer -= dt;
     if (state.investigate_timer > 0) state.investigate_timer -= dt;
     if (state.investigating and state.investigate_timer <= 0) state.investigating = false;
+    state.scan_timer += dt;
 
     // After a blocked chase he is briefly deaf so a wall-blocked lock-on can't
     // instantly repeat.
@@ -159,8 +163,15 @@ pub fn update(
     }
 
     if (sensing) {
+        // While chasing or investigating he stares at his target; while
+        // patrolling he slowly sweeps his gaze left and right so a quiet player
+        // walking up beside him is still noticed, like Mr X turning his head.
+        const gaze_yaw = if (state.acquired or state.investigating)
+            state.yaw
+        else
+            scanYaw(state.yaw, state.scan_timer);
         const seen = player_distance < config.detect_radius and
-            inVisionCone(state.yaw, to_player, config.vision_half_angle) and
+            inVisionCone(gaze_yaw, to_player, config.vision_half_angle) and
             lineOfSight(world, state.position, player_position);
         if (seen) {
             // Fresh lock-on: start tracking progress toward this goal from
@@ -203,7 +214,8 @@ pub fn update(
     // heads for its own destination.
     var target: b3.b3Pos = if (chasing or investigating) state.last_known else state.target;
 
-    const to_target = subPos(target, state.position);
+    var to_target = subPos(target, state.position);
+    to_target.y = 0; // only horizontal progress matters on a flat level
     const target_distance = length(to_target);
 
     // Stuck detection: meaningful progress (closing in on the goal) resets the
@@ -231,6 +243,9 @@ pub fn update(
             state.investigating = false;
             state.target = randomPatrolTarget(config, state.position);
         }
+        // Route to the fresh destination right away, not on the next timer.
+        state.repath_timer = 0;
+        state.last_path_failed = false;
         target = state.target;
         investigating = state.investigating;
     } else if (!chasing and target_distance < config.arrive_radius) {
@@ -240,11 +255,16 @@ pub fn update(
             target = state.position;
         } else {
             state.target = randomPatrolTarget(config, state.position);
+            // Route to the new destination right away so there is no pause (and
+            // no blind straight-line walk) between patrol legs.
+            state.repath_timer = 0;
+            state.last_path_failed = false;
             target = state.target;
         }
     }
 
-    const to_goal = subPos(target, state.position);
+    var to_goal = subPos(target, state.position);
+    to_goal.y = 0;
     const goal_distance = length(to_goal);
 
     var speed = config.far_speed;
@@ -285,11 +305,13 @@ pub fn update(
         }
     } else {
         // A route exists; re-route when it is exhausted, the goal moved to a
-        // different cell (a moving player), or the refresh timer elapsed.
+        // different cell (a moving player), or the refresh timer elapsed while
+        // chasing a moving target. Patrol and investigate goals are fixed, so a
+        // fresh route never goes stale and only needs rebuilding on arrival.
         const goal_cell = navmesh.level_nav.cellAt(target.x, target.z);
         const goal_cell_changed = (goal_cell != null) and (state.path_goal_cell >= 0) and
             (@as(i64, @intCast(goal_cell.?)) != state.path_goal_cell);
-        if (state.path_index >= state.path_len or goal_cell_changed or state.repath_timer <= 0) {
+        if (state.path_index >= state.path_len or goal_cell_changed or (chasing and state.repath_timer <= 0)) {
             state.repath_timer = repath_interval;
             state.path_goal_cell = if (goal_cell) |cell| @as(i64, @intCast(cell)) else -1;
             state.path_len = navmesh.level_nav.findPath(
@@ -306,21 +328,26 @@ pub fn update(
 
     // --- Move along the route ---
     var move_delta: b3.b3Vec3 = .{};
-    if (state.path_len == 0) {
-        // No route (unreachable, or the goal snapped to this cell): go straight.
-        if (goal_distance > 0.0001) move_delta = scale(to_goal, speed * dt / goal_distance);
-    } else if (state.path_index < state.path_len) {
+    // Advance past every waypoint already within reach in this frame, then move
+    // toward the next one. Stepping one waypoint per frame without moving would
+    // freeze the hunter for a frame at each 0.5 m cell, which looks like a
+    // stutter at slow patrol speeds.
+    while (true) {
+        if (state.path_len == 0 or state.path_index >= state.path_len) {
+            // No route (unreachable, or the goal snapped to this cell): go straight.
+            if (goal_distance > 0.0001) move_delta = scale(to_goal, speed * dt / goal_distance);
+            break;
+        }
         const waypoint = state.path[state.path_index];
-        const to_waypoint = subPos(waypoint, state.position);
+        var to_waypoint = subPos(waypoint, state.position);
+        to_waypoint.y = 0; // waypoints sit on the floor; progress is horizontal
         const waypoint_distance = length(to_waypoint);
         if (waypoint_distance < config.waypoint_radius) {
             state.path_index += 1;
         } else {
             move_delta = scale(to_waypoint, speed * dt / waypoint_distance);
+            break;
         }
-    } else if (goal_distance > 0.0001) {
-        // Route walked off the end; close the final gap.
-        move_delta = scale(to_goal, speed * dt / goal_distance);
     }
     move_delta.y = 0;
 
@@ -340,6 +367,17 @@ pub fn interpolatedPosition(state: State, alpha: f32) b3.b3Pos {
         .y = state.previous_position.y + (state.position.y - state.previous_position.y) * alpha,
         .z = state.previous_position.z + (state.position.z - state.previous_position.z) * alpha,
     };
+}
+
+// A slow left-right sweep of the gaze while patrolling: over one cycle the
+// heading wanders to the left extreme, back through center, to the right, and
+// home again, so the hunter regularly glances to both sides of his path.
+fn scanYaw(heading: f32, t: f32) f32 {
+    const period: f32 = 6.0; // seconds for a full left-right-left cycle
+    const amplitude: f32 = 60.0 * std.math.pi / 180.0;
+    const u = @mod(t, period) / period; // 0..1 across one cycle
+    const sweep = if (u < 0.5) 4.0 * u - 1.0 else 3.0 - 4.0 * u;
+    return heading + sweep * amplitude;
 }
 
 // True when the direction to the player lies inside the frontal vision cone
@@ -387,7 +425,7 @@ fn localCapsule(config: Config) b3.b3Capsule {
     };
 }
 
-fn randomPatrolTarget(config: Config, origin: b3.b3Pos) b3.b3Pos {
+pub fn randomPatrolTarget(config: Config, origin: b3.b3Pos) b3.b3Pos {
     const angle = randomRange(0, 2.0 * std.math.pi);
     const distance = randomRange(config.patrol_distance_min, config.patrol_distance_max);
     return .{
@@ -484,6 +522,26 @@ test "vision cone is frontal" {
     try std.testing.expect(!inVisionCone(0, .{ .x = 0, .y = 0, .z = -5 }, half)); // behind
     try std.testing.expect(!inVisionCone(0, .{ .x = 5, .y = 0, .z = -1 }, half)); // behind the shoulder
     try std.testing.expect(inVisionCone(std.math.pi, .{ .x = 0, .y = 0, .z = -5 }, half)); // facing -Z
+}
+
+test "patrol gaze sweep glances to both sides" {
+    // At phase times during one cycle the gaze should reach far left, center,
+    // and far right relative to the heading.
+    const amp = 60.0 * std.math.pi / 180.0;
+    const sweep_at = comptime blk: {
+        break :blk .{
+            scanYaw(0, 0.0), // start: left extreme
+            scanYaw(0, 1.5), // center
+            scanYaw(0, 3.0), // right extreme
+            scanYaw(0, 4.5), // center again
+            scanYaw(0, 6.0), // back at left
+        };
+    };
+    try std.testing.expectApproxEqAbs(@as(f32, -amp), sweep_at[0], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), sweep_at[1], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, amp), sweep_at[2], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), sweep_at[3], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, -amp), sweep_at[4], 1e-4);
 }
 
 test "line of sight is blocked by walls but clear in the open" {
