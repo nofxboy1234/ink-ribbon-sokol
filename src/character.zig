@@ -251,9 +251,8 @@ fn frame() callconv(.c) void {
     } else blk: {
         var ticks: usize = 0;
         while (ticks < max_ticks_per_frame and game.clock.consumeTick()) : (ticks += 1) {
-            // Map mode freezes the player character (physics paused, standing
-            // still) but keeps the world live so the hunter keeps searching —
-            // like RE2R's map, which does not pause Mr X.
+            // Map mode pauses the whole simulation: the player character and
+            // the hunter both freeze so the map can be studied without risk.
             if (!game.map.active) {
                 controller.update(
                     game.character_config,
@@ -264,19 +263,19 @@ fn frame() callconv(.c) void {
                     game.camera.basis,
                     @floatCast(fixed_dt),
                 );
-            }
-            updateQuickTurn(@floatCast(fixed_dt));
-            hunter.update(
-                game.hunter_config,
-                &game.hunter,
-                &game.mover_scratch,
-                game.world,
-                game.character.position,
-                @floatCast(fixed_dt),
-            );
-            if (hunterContacted()) {
-                game.game_over = true;
-                break;
+                updateQuickTurn(@floatCast(fixed_dt));
+                hunter.update(
+                    game.hunter_config,
+                    &game.hunter,
+                    &game.mover_scratch,
+                    game.world,
+                    game.character.position,
+                    @floatCast(fixed_dt),
+                );
+                if (hunterContacted()) {
+                    game.game_over = true;
+                    break;
+                }
             }
         }
         // Discard excess backlog after the bounded catch-up budget.
