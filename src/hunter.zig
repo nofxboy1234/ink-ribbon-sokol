@@ -10,6 +10,9 @@
 //!   and hearing).
 //! - Once the player escapes his senses for long enough, he gives up and walks
 //!   a random patrol route through the level, checking different rooms.
+//! - If a path is blocked and he makes no progress toward his goal for a while,
+//!   he abandons it: a stuck patrol re-rolls a new destination, and a stuck
+//!   chase gives up and briefly searches the player's last known area.
 
 const std = @import("std");
 const b3 = @import("box3d");
@@ -38,6 +41,15 @@ pub const Config = struct {
     stuck_time: f32 = 5.0,
     patrol_distance_min: f32 = 10.0,
     patrol_distance_max: f32 = 34.0,
+    // Progress of at least this many metres toward the goal counts as "not
+    // stuck" and resets the stuck timer.
+    progress_threshold: f32 = 0.1,
+    // After a chase gets stuck on a blocked path, he gives up and searches the
+    // last-known area for this long (deaf to new perceptions so a wall-blocked
+    // lock-on can't instantly repeat).
+    search_time: f32 = 3.0,
+    search_radius_min: f32 = 3.0,
+    search_radius_max: f32 = 8.0,
     level_half_x: f32 = 24.0,
     level_half_z: f32 = 17.0,
     turn_speed: f32 = 10.0,
@@ -53,9 +65,16 @@ pub const State = struct {
     // True while actively pursuing the player instead of patrolling.
     acquired: bool = false,
     acquire_timer: f32 = 0,
-    // Current patrol destination (used while not acquired).
+    // Current destination: the last known player position while chasing,
+    // otherwise a patrol/search point.
     target: b3.b3Pos,
-    arrive_timer: f32 = 0,
+    // Time spent without making progress toward the current goal. When it
+    // exceeds Config.stuck_time the hunter abandons the goal.
+    stuck_timer: f32 = 0,
+    // Distance to the goal at the previous check, used to detect progress.
+    last_goal_distance: f32 = 0,
+    // Remaining "search the last-known area" period after a chase gets stuck.
+    disengage_timer: f32 = 0,
 
     pub fn init(position: b3.b3Pos) State {
         return .{
@@ -82,8 +101,19 @@ pub fn update(
 
     // Sense the player. Within detect_radius the hunter knows exactly where the
     // player is; outside it he only remembers the last known position, and
-    // eventually loses interest and returns to patrolling.
-    if (player_distance < config.detect_radius) {
+    // eventually loses interest and returns to patrolling. While searching the
+    // last-known area (after a blocked chase) he is briefly deaf, so he can't
+    // instantly re-lock onto the player through a wall.
+    if (state.disengage_timer > 0) {
+        state.disengage_timer -= dt;
+        if (state.disengage_timer <= 0) state.acquire_timer = 0;
+    } else if (player_distance < config.detect_radius) {
+        if (!state.acquired) {
+            // Fresh lock-on: start tracking progress toward this goal from
+            // scratch (the previous patrol goal is irrelevant).
+            state.stuck_timer = 0;
+            state.last_goal_distance = std.math.floatMax(f32);
+        }
         state.last_known = player_position;
         state.acquired = true;
         state.acquire_timer = 0;
@@ -92,34 +122,50 @@ pub fn update(
         if (state.acquire_timer > config.give_up_time) state.acquired = false;
     }
 
-    var target = state.last_known;
-    const chasing = state.acquired;
-    if (!chasing) {
-        // Patrolling: walk to a random destination and pick a new one once it
-        // is reached (or once we've been stuck on it for long enough that the
-        // destination is clearly unreachable).
-        const to_target = subPos(state.target, state.position);
-        const arrived = length(to_target) < config.arrive_radius;
-        state.arrive_timer += dt;
-        if (arrived or state.arrive_timer > config.stuck_time) {
-            state.arrive_timer = 0;
+    var chasing = state.acquired;
+    var target = if (chasing) state.last_known else state.target;
+
+    const to_target = subPos(target, state.position);
+    const target_distance = length(to_target);
+
+    // Stuck detection: meaningful progress (closing in on the goal) resets the
+    // timer, so only a genuinely blocked path accumulates it. Reaching a patrol
+    // destination also resets it, but then a new destination is picked.
+    if (target_distance < state.last_goal_distance - config.progress_threshold or target_distance < config.arrive_radius) {
+        state.stuck_timer = 0;
+    } else {
+        state.stuck_timer += dt;
+    }
+    state.last_goal_distance = target_distance;
+
+    if (state.stuck_timer > config.stuck_time or (!chasing and target_distance < config.arrive_radius)) {
+        state.stuck_timer = 0;
+        state.last_goal_distance = std.math.floatMax(f32);
+        if (chasing) {
+            // The path to the player's last known position is blocked. Give up
+            // the chase and search the area for a moment instead.
+            state.acquired = false;
+            state.disengage_timer = config.search_time;
+            state.target = searchPoint(config, state.last_known);
+            chasing = false;
+        } else {
             state.target = randomPatrolTarget(config, state.position);
         }
         target = state.target;
     }
 
-    const to_target = subPos(target, state.position);
-    const target_distance = length(to_target);
+    const to_goal = subPos(target, state.position);
+    const goal_distance = length(to_goal);
 
     var speed = config.far_speed;
     if (chasing) {
         speed = if (player_distance < config.close_radius) config.near_speed else config.chase_speed;
-    } else if (target_distance < config.close_radius) {
+    } else if (goal_distance < config.close_radius) {
         speed = config.near_speed;
     }
 
-    const move_delta = if (target_distance > 0.0001)
-        scale(to_target, speed * dt / target_distance)
+    const move_delta = if (goal_distance > 0.0001)
+        scale(to_goal, speed * dt / goal_distance)
     else
         b3.b3Vec3{};
 
@@ -128,7 +174,7 @@ pub fn update(
 
     // Face the direction of travel, turning gradually like a heavy stalker.
     if (lengthSquared(move_delta) > 0.0001) {
-        const target_yaw = std.math.atan2(to_target.x, to_target.z);
+        const target_yaw = std.math.atan2(to_goal.x, to_goal.z);
         state.yaw = approachAngle(state.yaw, target_yaw, config.turn_speed * dt);
     }
 }
@@ -171,6 +217,18 @@ fn randomPatrolTarget(config: Config, origin: b3.b3Pos) b3.b3Pos {
         .x = std.math.clamp(origin.x + @cos(angle) * distance, -config.level_half_x, config.level_half_x),
         .y = origin.y,
         .z = std.math.clamp(origin.z + @sin(angle) * distance, -config.level_half_z, config.level_half_z),
+    };
+}
+
+// A point near the player's last known position, used while searching the area
+// after a chase gets stuck.
+fn searchPoint(config: Config, around: b3.b3Pos) b3.b3Pos {
+    const angle = randomRange(0, 2.0 * std.math.pi);
+    const distance = randomRange(config.search_radius_min, config.search_radius_max);
+    return .{
+        .x = std.math.clamp(around.x + @cos(angle) * distance, -config.level_half_x, config.level_half_x),
+        .y = around.y,
+        .z = std.math.clamp(around.z + @sin(angle) * distance, -config.level_half_z, config.level_half_z),
     };
 }
 
@@ -222,6 +280,18 @@ test "patrol target is clamped to the level" {
         try std.testing.expect(@abs(target.x) <= config.level_half_x);
         try std.testing.expect(@abs(target.z) <= config.level_half_z);
         try std.testing.expectEqual(origin.y, target.y);
+    }
+}
+
+test "search point stays near the last known location" {
+    const config: Config = .{};
+    const around = b3.b3Pos{ .x = 3, .y = 1.5, .z = 4 };
+    var i: usize = 0;
+    while (i < 1000) : (i += 1) {
+        const point = searchPoint(config, around);
+        try std.testing.expect(@abs(point.x) <= config.level_half_x);
+        try std.testing.expect(@abs(point.z) <= config.level_half_z);
+        try std.testing.expectEqual(around.y, point.y);
     }
 }
 
