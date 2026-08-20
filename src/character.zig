@@ -136,6 +136,18 @@ const MapState = struct {
     pan: Vec3 = .{},
 };
 
+// Smooth 180-degree quick-turn (RE2R): the character and camera swing around
+// over a short animation instead of snapping.
+const QuickTurn = struct {
+    active: bool = false,
+    timer: f32 = 0,
+    duration: f32 = 0.35,
+    character_start: f32 = 0,
+    character_target: f32 = 0,
+    camera_start: f32 = 0,
+    camera_target: f32 = 0,
+};
+
 const RenderState = struct {
     // Shared mesh geometry (all shapes built into one vertex/index buffer).
     vertex_buffer: sg.Buffer = .{},
@@ -171,6 +183,7 @@ const GameState = struct {
     hunter_config: hunter.Config = .{},
     hunter: hunter.State = initialHunter(),
     game_over: bool = false,
+    quick_turn: QuickTurn = .{},
     mover_scratch: controller.MoverScratch = .{},
     camera_config: camera.Config = .{},
     camera: camera.State = .{},
@@ -213,6 +226,19 @@ fn init() callconv(.c) void {
     sapp.lockMouse(true);
 }
 
+// Advance the quick-turn swing. Runs each physics tick after the controller
+// has had its say, so the animated yaw wins while it is active.
+fn updateQuickTurn(dt: f32) void {
+    if (!game.quick_turn.active) return;
+    game.quick_turn.timer += dt;
+    const t = std.math.clamp(game.quick_turn.timer / game.quick_turn.duration, 0, 1);
+    // Smoothstep: accelerate into the turn, then ease to a stop.
+    const eased = t * t * (3.0 - 2.0 * t);
+    game.character.yaw = game.quick_turn.character_start + (game.quick_turn.character_target - game.quick_turn.character_start) * eased;
+    game.camera.yaw = game.quick_turn.camera_start + (game.quick_turn.camera_target - game.quick_turn.camera_start) * eased;
+    if (t >= 1) game.quick_turn.active = false;
+}
+
 fn frame() callconv(.c) void {
     const frame_time: f32 = @floatCast(@min(sapp.frameDuration(), max_frame_dt));
     game.clock.addFrame(frame_time);
@@ -239,6 +265,7 @@ fn frame() callconv(.c) void {
                     @floatCast(fixed_dt),
                 );
             }
+            updateQuickTurn(@floatCast(fixed_dt));
             hunter.update(
                 game.hunter_config,
                 &game.hunter,
@@ -315,6 +342,19 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 },
                 .R => if (down and !value.key_repeat and game.game_over) {
                     spawnPlayerAndHunter();
+                },
+                .E => if (down and !value.key_repeat) {
+                    // RE2R quick-turn: while walking backward, swing the
+                    // character and camera 180 degrees over a short animation.
+                    if (!game.game_over and game.input.back and !game.quick_turn.active) {
+                        game.quick_turn = .{
+                            .active = true,
+                            .character_start = game.character.yaw,
+                            .character_target = game.character.yaw + std.math.pi,
+                            .camera_start = game.camera.yaw,
+                            .camera_target = game.camera.yaw + std.math.pi,
+                        };
+                    }
                 },
                 .ESCAPE => if (down) sapp.lockMouse(false),
                 else => {},
