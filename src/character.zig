@@ -23,10 +23,14 @@ const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
 const Mat4 = math.Mat4;
 
+// Physics advances in fixed 1/60 s ticks; the clock accumulates real frame
+// time and releases ticks at that rate, so simulation speed is frame-rate
+// independent. max_* bounds how much backlog a slow frame may process.
 const fixed_dt: f64 = 1.0 / 60.0;
 const max_frame_dt: f64 = 0.1;
 const max_ticks_per_frame = 6;
 const shadow_map_size = 2048;
+// Half the character box's size along each axis (full size = 2x this).
 const character_half_extents = Vec3{ .x = 0.32, .y = 0.9, .z = 0.22 };
 
 const static_instance_count = visible: {
@@ -36,6 +40,8 @@ const static_instance_count = visible: {
 };
 
 const Instance = extern struct {
+    // One GPU instance record: 3 transform axes (xyz) + origin (w), then color.
+    // Matches the vec4 attributes declared in character.glsl (inst_x/y/z/color).
     x: Vec4,
     y: Vec4,
     z: Vec4,
@@ -45,16 +51,21 @@ const Instance = extern struct {
 const Clock = struct {
     accumulator: f64 = 0,
 
+    // Add this frame's duration, clamped so a single slow frame can't flood
+    // the physics backlog.
     fn addFrame(self: *Clock, frame_time: f64) void {
         self.accumulator += @min(frame_time, max_frame_dt);
     }
 
+    // Pop one fixed tick whenever a full tick's worth of time has accrued.
     fn consumeTick(self: *Clock) bool {
         if (self.accumulator < fixed_dt) return false;
         self.accumulator -= fixed_dt;
         return true;
     }
 
+    // Fraction of the way toward the next tick — used to interpolate the
+    // character's render position between two physics states.
     fn alpha(self: Clock) f32 {
         return @floatCast(self.accumulator / fixed_dt);
     }
@@ -68,6 +79,8 @@ const InputState = struct {
     run: bool = false,
     mouse_delta: math.Vec2 = .{},
 
+    // Turn held keys into a movement intent. x is strafe (right-left),
+    // y is forward-back (positive = toward where the camera looks).
     fn characterInput(self: InputState) controller.Input {
         return .{
             .move = .{
@@ -84,8 +97,10 @@ const DebugState = struct {
 };
 
 const RenderState = struct {
+    // Shared mesh geometry (all shapes built into one vertex/index buffer).
     vertex_buffer: sg.Buffer = .{},
     index_buffer: sg.Buffer = .{},
+    // Per-instance transform buffers: static level, dynamic character, debug capsule.
     level_instances: sg.Buffer = .{},
     character_instance: sg.Buffer = .{},
     capsule_instances: sg.Buffer = .{},
@@ -96,6 +111,7 @@ const RenderState = struct {
     shadow_view: sg.View = .{},
     shadow_sampler: sg.Sampler = .{},
     light_view_projection: Mat4 = Mat4.identity(),
+    // Element ranges into the shared buffers for each shape type.
     box_range: sshape.ElementRange = .{},
     capsule_cylinder_range: sshape.ElementRange = .{},
     capsule_sphere_range: sshape.ElementRange = .{},
@@ -214,6 +230,8 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
 }
 
 fn initPhysics() void {
+    // Give every visible, collidable level box and stair step a Box3D body so
+    // the character and camera can collide against them.
     var world_def = b3.b3DefaultWorldDef();
     game.world = b3.b3CreateWorld(&world_def);
     for (level.boxes) |box| if (box.collidable) addStaticBox(box);
@@ -229,6 +247,7 @@ fn addStaticBox(box: level.Box) void {
     body_def.rotation = .{ .v = .{ .x = @sin(half_pitch) }, .s = @cos(half_pitch) };
     const body = b3.b3CreateBody(game.world, &body_def);
     var shape_def = b3.b3DefaultShapeDef();
+    // The character and camera query these boxes; other objects ignore them.
     shape_def.filter.categoryBits = controller.level_category;
     shape_def.filter.maskBits = controller.player_query_category | camera.camera_query_category;
     var hull = b3.b3MakeBoxHull(box.half_extents.x, box.half_extents.y, box.half_extents.z);
@@ -243,6 +262,8 @@ fn initRenderer() void {
         .indices = .{ .buffer = sshape.asRange(&indices) },
         .disable = .{ .texcoords = true, .colors = true },
     };
+    // Build all meshes into one shared vertex/index buffer, one shape at a
+    // time. Each shape's element range records where it lives in the buffer.
     sshape.buildBox(&builder, .{ .width = 1, .height = 1, .depth = 1 });
     game.render.box_range = sshape.elementRange(builder);
     sshape.buildCylinder(&builder, .{ .radius = 1, .height = 1, .slices = 16, .stacks = 1 });
@@ -252,6 +273,7 @@ fn initRenderer() void {
     game.render.vertex_buffer = sg.makeBuffer(sshape.vertexBufferDesc(builder));
     game.render.index_buffer = sg.makeBuffer(sshape.indexBufferDesc(builder));
 
+    // Bake every visible level box + stair step into one static instance array.
     var instances: [static_instance_count]Instance = undefined;
     var instance_count: usize = 0;
     for (level.boxes) |box| {
@@ -268,6 +290,7 @@ fn initRenderer() void {
     }
     std.debug.assert(instance_count == static_instance_count);
     game.render.level_instances = sg.makeBuffer(.{ .data = sg.asRange(&instances), .label = "character-level-instances" });
+    // The character's instance is uploaded fresh every frame (stream_update).
     game.render.character_instance = sg.makeBuffer(.{
         .size = @sizeOf(Instance),
         .usage = .{ .stream_update = true },
@@ -280,6 +303,8 @@ fn initRenderer() void {
     });
 
     var layout: sg.VertexLayoutState = .{};
+    // Buffer 0 = shared mesh (positions + normals), buffer 1 = per-instance
+    // transform records (one per copy of the mesh, stepped PER_INSTANCE).
     layout.buffers[0] = sshape.vertexBufferLayoutState(builder);
     layout.buffers[1] = .{ .step_func = .PER_INSTANCE, .stride = @sizeOf(Instance) };
     layout.attrs[shd.ATTR_display_position] = sshape.positionVertexAttrState(builder);
@@ -306,6 +331,8 @@ fn initRenderer() void {
         .label = "character-capsule-debug-pipeline",
     });
 
+    // Depth-only 2048x2048 texture seen from the sun. Only depth is written,
+    // so the shadow pixel format is DEPTH (no color).
     const shadow_image = sg.makeImage(.{
         .usage = .{ .depth_stencil_attachment = true },
         .width = shadow_map_size,
@@ -347,6 +374,7 @@ fn initRenderer() void {
     });
 
     const light_position = Vec3{ .x = 20, .y = 32, .z = -24 };
+    // Directional light = orthographic projection centered on the world origin.
     const light_view = Mat4.lookAtRh(light_position, .{}, .{ .y = 1 });
     const light_projection = Mat4.orthoOffCenterRh(-38, 38, -38, 38, 1, 100);
     game.render.light_view_projection = Mat4.mul(light_view, light_projection);
@@ -354,6 +382,7 @@ fn initRenderer() void {
 }
 
 fn draw(position: b3.b3Pos) void {
+    // Rebuild the character's instance record from its interpolated position.
     const instance = makeInstance(
         .{ .x = position.x, .y = position.y, .z = position.z },
         character_half_extents,
@@ -363,6 +392,8 @@ fn draw(position: b3.b3Pos) void {
     sg.updateBuffer(game.render.character_instance, sg.asRange(&instance));
     if (game.debug.draw_physics) updateCapsuleInstances(position);
 
+    // Pass 1: render everything from the sun's viewpoint, depth-only, to the
+    // shadow map. The character draws as a second single-instance call.
     const shadow_params: shd.ShadowVsParams = .{ .light_view_projection = game.render.light_view_projection };
     sg.beginPass(game.render.shadow_pass);
     sg.applyPipeline(game.render.shadow_pipeline);
@@ -371,6 +402,8 @@ fn draw(position: b3.b3Pos) void {
     drawInstances(game.render.character_instance, game.render.box_range, 0, 1, false);
     sg.endPass();
 
+    // Pass 2: render the same instances to the window with full lighting, and
+    // sample the shadow map to darken surfaces the sun can't see.
     const vs_params: shd.DisplayVsParams = .{
         .view_projection = game.camera.view_projection,
         .light_view_projection = game.render.light_view_projection,
@@ -449,29 +482,31 @@ fn drawHud(position: b3.b3Pos) void {
     sdtx.draw();
 }
 
-fn drawInstances(
-    instance_buffer: sg.Buffer,
-    range: sshape.ElementRange,
-    instance_offset: usize,
-    count: usize,
-    with_shadow_texture: bool,
-) void {
-    var bindings: sg.Bindings = .{};
-    bindings.vertex_buffers[0] = game.render.vertex_buffer;
-    bindings.vertex_buffers[1] = instance_buffer;
-    bindings.vertex_buffer_offsets[1] = @intCast(instance_offset);
-    bindings.index_buffer = game.render.index_buffer;
-    if (with_shadow_texture) {
-        bindings.views[shd.VIEW_shadow_map] = game.render.shadow_view;
-        bindings.samplers[shd.SMP_shadow_sampler] = game.render.shadow_sampler;
+// Draw `count` instances of one mesh from the shared buffers. The debug
+    // capsule uses 3 records: cylinder + two spheres, offset through the buffer.
+    fn drawInstances(
+        instance_buffer: sg.Buffer,
+        range: sshape.ElementRange,
+        instance_offset: usize,
+        count: usize,
+        with_shadow_texture: bool,
+    ) void {
+        var bindings: sg.Bindings = .{};
+        bindings.vertex_buffers[0] = game.render.vertex_buffer;
+        bindings.vertex_buffers[1] = instance_buffer;
+        bindings.vertex_buffer_offsets[1] = @intCast(instance_offset);
+        bindings.index_buffer = game.render.index_buffer;
+        if (with_shadow_texture) {
+            bindings.views[shd.VIEW_shadow_map] = game.render.shadow_view;
+            bindings.samplers[shd.SMP_shadow_sampler] = game.render.shadow_sampler;
+        }
+        sg.applyBindings(bindings);
+        sg.draw(
+            @intCast(range.base_element),
+            @intCast(range.num_elements),
+            @intCast(count),
+        );
     }
-    sg.applyBindings(bindings);
-    sg.draw(
-        @intCast(range.base_element),
-        @intCast(range.num_elements),
-        @intCast(count),
-    );
-}
 
 fn noColorTargets() [8]sg.ColorTargetState {
     var colors: [8]sg.ColorTargetState = @splat(.{});
@@ -491,10 +526,13 @@ fn blendingTargets() [8]sg.ColorTargetState {
     return colors;
 }
 
+// Half-extents -> full scale (a unit box spans -1..1 before scaling).
 fn makeInstance(center: Vec3, half: Vec3, yaw: f32, color: Vec4) Instance {
     return makeScaledInstance(center, Vec3.scale(half, 2), yaw, color);
 }
 
+// Like makeScaledInstance, but pitched about the X axis (used by level boxes,
+// which the level data leans over rather than yawing).
 fn makePitchedInstance(center: Vec3, half: Vec3, pitch: f32, color: Vec4) Instance {
     const scale = Vec3.scale(half, 2);
     const c = @cos(pitch);
