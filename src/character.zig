@@ -282,7 +282,13 @@ fn frame() callconv(.c) void {
         if (ticks == max_ticks_per_frame and game.clock.accumulator >= fixed_dt) {
             game.clock.accumulator = @mod(game.clock.accumulator, fixed_dt);
         }
-        break :blk controller.interpolatedPosition(game.character, game.clock.alpha());
+        // The clock keeps consuming ticks while the map is open so no backlog
+        // accumulates. Render the exact paused pose instead of using its cycling
+        // interpolation alpha, which would replay the last movement every tick.
+        break :blk if (game.map.active)
+            game.character.position
+        else
+            controller.interpolatedPosition(game.character, game.clock.alpha());
     };
 
     if (game.map.active) {
@@ -650,9 +656,12 @@ fn draw(position: b3.b3Pos) void {
     sg.updateBuffer(game.render.character_instance, sg.asRange(&instance));
     if (game.debug.draw_physics) updateCapsuleInstances(position);
 
-    // The hunter renders from its own interpolated position so it moves just as
-    // smoothly as the character.
-    const hunter_render = hunter.interpolatedPosition(game.hunter, game.clock.alpha());
+    // Interpolate during gameplay, but use the authoritative pose while paused
+    // so the clock's cycling alpha cannot replay the hunter's last movement.
+    const hunter_render = if (game.map.active or game.game_over)
+        game.hunter.position
+    else
+        hunter.interpolatedPosition(game.hunter, game.clock.alpha());
     const hunter_instance = makeInstance(
         .{ .x = hunter_render.x, .y = hunter_render.y, .z = hunter_render.z },
         hunter_half_extents,
@@ -757,7 +766,7 @@ fn drawHud(position: b3.b3Pos) void {
     if (game.map.active) {
         sdtx.pos(1.0, 1.0);
         sdtx.color3b(255, 220, 120);
-        sdtx.print("MAP (WASD pans, M exits - hunter keeps hunting)", .{});
+        sdtx.print("MAP (WASD pans, M exits - simulation paused)", .{});
     } else if (game.debug.draw_physics and !game.game_over) {
         sdtx.pos(1.0, 1.0);
         sdtx.print("POS {d:.1} {d:.1} {d:.1}", .{ position.x, position.y, position.z });
