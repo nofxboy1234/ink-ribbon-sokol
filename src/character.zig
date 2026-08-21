@@ -705,6 +705,7 @@ fn initRenderer() void {
     route_layout.attrs[shd.ATTR_route_inst_x] = instanceAttr(0);
     route_layout.attrs[shd.ATTR_route_inst_y] = instanceAttr(16);
     route_layout.attrs[shd.ATTR_route_inst_z] = instanceAttr(32);
+    route_layout.attrs[shd.ATTR_route_inst_color] = instanceAttr(48);
     game.render.route_pipeline = sg.makePipeline(.{
         .shader = sg.makeShader(shd.routeShaderDesc(sg.queryBackend())),
         .layout = route_layout,
@@ -842,22 +843,22 @@ fn draw(position: b3.b3Pos) void {
     sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));
     sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
     drawInstances(game.render.level_instances, game.render.box_range, 0, level_instance_count, true);
-    if (game.map.active and game.map.route_segment_count > 0) {
+    if (game.map.active) {
         const route_params: shd.RouteVsParams = .{ .view_projection = game.camera.view_projection };
         sg.applyPipeline(game.render.route_pipeline);
         sg.applyUniforms(shd.UB_route_vs_params, sg.asRange(&route_params));
-        drawInstances(game.render.route_instances, game.render.box_range, 0, game.map.route_segment_count, false);
+        if (game.map.route_segment_count > 0) {
+            drawInstances(game.render.route_instances, game.render.box_range, 0, game.map.route_segment_count, false);
+        }
+        drawInstances(game.render.map_direction_instances, game.render.box_range, 0, map_direction_instance_count, false);
 
-        // Actors render after the elevated route so their map markers remain
-        // visible where the line begins or passes nearby.
+        // Actors render after the elevated map markings so their markers remain
+        // visible where the route begins or passes nearby.
         sg.applyPipeline(game.render.display_pipeline);
         sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));
         sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
     }
     drawInstances(game.render.character_instance, game.render.box_range, 0, 1, true);
-    if (game.map.active) {
-        drawInstances(game.render.map_direction_instances, game.render.box_range, 0, map_direction_instance_count, true);
-    }
     drawInstances(game.render.hunter_instance, game.render.box_range, 0, 1, true);
     if (!game.map.active) {
         drawInstances(game.render.roof_instance, game.render.box_range, 0, roof_instance_count, true);
@@ -1025,19 +1026,19 @@ fn makeMapDirectionInstances(position: b3.b3Pos, yaw: f32) [map_direction_instan
     const forward = Vec3{ .x = @sin(yaw), .z = @cos(yaw) };
     const arrow_y = position.y + character_half_extents.y + 0.12;
     const tip = Vec3{
-        .x = position.x + forward.x * 1.8,
+        .x = position.x + forward.x * 0.9,
         .y = arrow_y,
-        .z = position.z + forward.z * 1.8,
+        .z = position.z + forward.z * 0.9,
     };
     const shaft_center = Vec3{
-        .x = position.x + forward.x * 1.05,
+        .x = position.x + forward.x * 0.525,
         .y = arrow_y,
-        .z = position.z + forward.z * 1.05,
+        .z = position.z + forward.z * 0.525,
     };
-    const head_length: f32 = 0.72;
+    const head_length: f32 = 0.36;
     const head_angle: f32 = std.math.pi / 4.0;
     var result: [map_direction_instance_count]Instance = undefined;
-    result[0] = makeScaledInstance(shaft_center, .{ .x = 0.16, .y = 0.08, .z = 1.5 }, yaw, map_direction_color);
+    result[0] = makeScaledInstance(shaft_center, .{ .x = 0.08, .y = 0.04, .z = 0.75 }, yaw, map_direction_color);
     for ([_]f32{ -head_angle, head_angle }, 0..) |offset, index| {
         const branch_yaw = yaw + std.math.pi + offset;
         const branch_forward = Vec3{ .x = @sin(branch_yaw), .z = @cos(branch_yaw) };
@@ -1046,7 +1047,7 @@ fn makeMapDirectionInstances(position: b3.b3Pos, yaw: f32) [map_direction_instan
             .y = arrow_y,
             .z = tip.z + branch_forward.z * head_length * 0.5,
         };
-        result[index + 1] = makeScaledInstance(center, .{ .x = 0.16, .y = 0.08, .z = head_length }, branch_yaw, map_direction_color);
+        result[index + 1] = makeScaledInstance(center, .{ .x = 0.08, .y = 0.04, .z = head_length }, branch_yaw, map_direction_color);
     }
     return result;
 }
