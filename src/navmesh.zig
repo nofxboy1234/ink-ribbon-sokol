@@ -409,42 +409,68 @@ fn aabbXZ(cx: f32, cz: f32, half: f32, box: level.Box) bool {
         @abs(cz - box.center.z) <= box.half_extents.z + half;
 }
 
-// The shared level grid, baked once at startup. The clearance matches the
-// hunter's capsule radius so routes keep it clear of walls and furniture.
+// Shared fixed-size grids, rebuilt whenever the runtime level changes.
 pub var level_nav: Grid(level_cols, level_rows) = .{};
 pub var player_nav: Grid(level_cols, level_rows) = .{};
 
 pub fn buildLevel() void {
-    level_nav.buildFromBoxes(&level.boxes, 0.5);
-    player_nav.buildFromBoxesWithOptions(&level.boxes, .{
+    const boxes = level.current.boxSlice();
+    level_nav.buildFromBoxes(boxes, 0.5);
+    player_nav.buildFromBoxesWithOptions(boxes, .{
         .radius = 0.35,
         .include_hunter_block = false,
     });
 }
 
+// Full agent-level validation used before a generated layout becomes live.
+// The player must reach the target while the hunter must remain in a different
+// component behind the hunter-only save-room perimeter.
+pub fn validateLevel() bool {
+    const target = level.current.save_room_target;
+    if (!level.current.validate() or !level.current.isInSaveRoom(target.x, target.z)) return false;
+    var path: [level_cols * level_rows]b3.b3Pos = undefined;
+    if (player_nav.findPath(
+        level.current.player_spawn.x,
+        level.current.player_spawn.z,
+        target.x,
+        target.z,
+        path[0..],
+    ) == 0) return false;
+    return level_nav.findPath(
+        level.current.hunter_spawn.x,
+        level.current.hunter_spawn.z,
+        target.x,
+        target.z,
+        path[0..],
+    ) == 0;
+}
+
 test "grid marks walls and furniture but clears open floor" {
+    const generated = level.generate(0x1234);
     var grid: Grid(level_cols, level_rows) = .{};
-    grid.buildFromBoxes(&level.boxes, 0.5);
+    grid.buildFromBoxes(generated.boxSlice(), 0.5);
 
-    const hall = grid.cellAt(0, 0) orelse return error.TestUnexpectedResult;
-    try std.testing.expect(grid.isWalkable(hall));
+    const spawn = grid.cellAt(generated.hunter_spawn.x, generated.hunter_spawn.z) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(grid.isWalkable(spawn));
 
-    // South outer wall (z 18.84..19.16) plus the capsule clearance.
-    const near_wall = grid.cellAt(0, 18.7) orelse return error.TestUnexpectedResult;
-    try std.testing.expect(!grid.isWalkable(near_wall));
-
-    // A crate in the NW corner room (x -21..-19, z -12..-10).
-    const crate = grid.cellAt(-20, -11) orelse return error.TestUnexpectedResult;
-    try std.testing.expect(!grid.isWalkable(crate));
+    const wall = generated.boxes[2];
+    const wall_cell = grid.cellAt(wall.center.x, wall.center.z) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!grid.isWalkable(wall_cell));
 }
 
 test "navmesh routes across rooms through doorways" {
+    const generated = level.generate(0x5678);
     var grid: Grid(level_cols, level_rows) = .{};
-    grid.buildFromBoxes(&level.boxes, 0.5);
+    grid.buildFromBoxesWithOptions(generated.boxSlice(), .{ .radius = 0.35, .include_hunter_block = false });
 
-    var path: [512]b3.b3Pos = undefined;
-    // Main hall out the east door and north along the ring corridor.
-    const len = grid.findPath(0, 0, 11, -11, path[0..]);
+    var path: [level_cols * level_rows]b3.b3Pos = undefined;
+    const len = grid.findPath(
+        generated.player_spawn.x,
+        generated.player_spawn.z,
+        generated.save_room_target.x,
+        generated.save_room_target.z,
+        path[0..],
+    );
     try std.testing.expect(len > 1);
     for (path[0..len]) |waypoint| {
         const cell = grid.cellAt(waypoint.x, waypoint.z) orelse return error.TestUnexpectedResult;
@@ -452,20 +478,36 @@ test "navmesh routes across rooms through doorways" {
     }
 }
 
-test "player grid can enter W2 save room while hunter grid cannot" {
-    var hunter_grid: Grid(level_cols, level_rows) = .{};
-    var player_grid: Grid(level_cols, level_rows) = .{};
-    hunter_grid.buildFromBoxes(&level.boxes, 0.5);
-    player_grid.buildFromBoxesWithOptions(&level.boxes, .{
-        .radius = 0.35,
-        .include_hunter_block = false,
-    });
+test "procedural levels keep save reachable for player and excluded from hunter" {
+    var path: [level_cols * level_rows]b3.b3Pos = undefined;
+    for (1..65) |seed| {
+        const generated = level.generate(seed);
+        var hunter_grid: Grid(level_cols, level_rows) = .{};
+        var player_grid: Grid(level_cols, level_rows) = .{};
+        hunter_grid.buildFromBoxes(generated.boxSlice(), 0.5);
+        player_grid.buildFromBoxesWithOptions(generated.boxSlice(), .{
+            .radius = 0.35,
+            .include_hunter_block = false,
+        });
 
-    var path: [512]b3.b3Pos = undefined;
-    const target = level.save_room_target;
-    try std.testing.expect(level.isInSaveRoom(target.x, target.z));
-    try std.testing.expectEqual(@as(usize, 0), hunter_grid.findPath(-11, 0, target.x, target.z, path[0..]));
-    try std.testing.expect(player_grid.findPath(-11, 0, target.x, target.z, path[0..]) > 0);
+        const target = generated.save_room_target;
+        try std.testing.expect(generated.isInSaveRoom(target.x, target.z));
+        try std.testing.expectEqual(@as(usize, 0), hunter_grid.findPath(
+            generated.hunter_spawn.x,
+            generated.hunter_spawn.z,
+            target.x,
+            target.z,
+            path[0..],
+        ));
+        const player_path_len = player_grid.findPath(
+            generated.player_spawn.x,
+            generated.player_spawn.z,
+            target.x,
+            target.z,
+            path[0..],
+        );
+        try std.testing.expect(player_path_len > 0);
+    }
 }
 
 test "buildFromBoxes clears blocked state when rebuilt" {
@@ -629,8 +671,9 @@ test "navmesh routes through a door gap" {
 }
 
 test "nearest walkable snaps a blocked goal out of the wall" {
+    const generated = level.generate(99);
     var grid: Grid(level_cols, level_rows) = .{};
-    grid.buildFromBoxes(&level.boxes, 0.5);
+    grid.buildFromBoxes(generated.boxSlice(), 0.5);
 
     // Inside the south wall itself; snap to the nearest open cell just north.
     const cell = grid.nearestWalkable(0, 19.0, 10) orelse return error.TestUnexpectedResult;

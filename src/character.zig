@@ -39,16 +39,10 @@ const character_half_extents = Vec3{ .x = 0.32, .y = 0.9, .z = 0.22 };
 const hunter_half_extents = Vec3{ .x = 0.45, .y = 1.25, .z = 0.30 };
 const hunter_color = Vec4{ .x = 0.92, .y = 0.12, .z = 0.14, .w = 1 };
 
-// Spawn sampling lives inside the walkable floor area, clear of walls and
-// furniture. The capsule centre heights match each actor's capsule geometry
-// (half_segment + radius), so the capsule sits on the floor.
-const spawn_half_x: f32 = 24.0;
-const spawn_half_z: f32 = 17.0;
+// Capsule centre heights match each actor's capsule geometry, so they sit on
+// the floor at the room-derived spawn points.
 const player_spawn_y: f32 = 0.9;
 const hunter_spawn_y: f32 = 1.5;
-// Keep the hunter from starting on top of the player — and beyond his
-// perception radius, so he begins patrolling rather than instantly chasing.
-const min_spawn_separation: f32 = 24.0;
 
 // Top-down map view tuning.
 const map_pan_speed: f32 = 25.0; // metres/second the map pans with WASD
@@ -61,18 +55,6 @@ const map_route_danger_radius: f32 = 6.0;
 const map_route_danger_penalty: f32 = 4.0;
 const map_direction_color = rgb(0.741, 0.576, 0.976); // Dracula purple #BD93F9
 const map_direction_instance_count = 3;
-
-// The roof lives in its own instance buffer so it can be hidden in map view.
-const level_instance_count = count: {
-    var count: usize = 0;
-    for (level.boxes) |box| count += @intFromBool(box.visible and !box.is_roof);
-    break :count count;
-};
-const roof_instance_count = count: {
-    var count: usize = 0;
-    for (level.boxes) |box| count += @intFromBool(box.visible and box.is_roof);
-    break :count count;
-};
 
 const Instance = extern struct {
     // One GPU instance record: 3 transform axes (xyz) + origin (w), then color.
@@ -177,6 +159,8 @@ const RenderState = struct {
     hunter_instance: sg.Buffer = .{},
     route_instances: sg.Buffer = .{},
     capsule_instances: sg.Buffer = .{},
+    level_instance_count: usize = 0,
+    roof_instance_count: usize = 0,
     display_pipeline: sg.Pipeline = .{},
     route_pipeline: sg.Pipeline = .{},
     map_actor_pipeline: sg.Pipeline = .{},
@@ -212,6 +196,7 @@ const GameState = struct {
 };
 
 var game: GameState = .{};
+var level_seed_state: u64 = 0x9e3779b97f4a7c15;
 
 fn initialCharacter() controller.State {
     var character = controller.State.init(.{ .x = 0, .y = 0.9, .z = 17 });
@@ -235,14 +220,10 @@ fn init() callconv(.c) void {
         },
         .logger = .{ .func = slog.func },
     });
-    initPhysics();
-    navmesh.buildLevel();
-    initRenderer();
-    // Randomize the spawn PRNG per launch so each run starts at fresh random
-    // positions. Entropy comes from ASLR (a stack address plus the data
-    // segment address both differ between processes). Restarts then continue
-    // the PRNG sequence rather than re-seeding.
     seedSpawnRandomness();
+    generateValidatedLevel();
+    initPhysics();
+    initRenderer();
     spawnPlayerAndHunter();
     sapp.lockMouse(true);
 }
@@ -285,7 +266,7 @@ fn frame() callconv(.c) void {
                     @floatCast(fixed_dt),
                 );
                 updateQuickTurn(@floatCast(fixed_dt));
-                if (level.isInSaveRoom(game.character.position.x, game.character.position.z)) {
+                if (level.current.isInSaveRoom(game.character.position.x, game.character.position.z)) {
                     game.outcome = .escaped;
                     break;
                 }
@@ -373,7 +354,7 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     game.input = .{};
                 },
                 .R => if (down and !value.key_repeat and game.outcome != .playing) {
-                    spawnPlayerAndHunter();
+                    restartWithNewLevel();
                 },
                 .E => if (down and !value.key_repeat) {
                     // RE2R quick-turn: while walking backward, swing the
@@ -410,7 +391,7 @@ fn initPhysics() void {
     // the character and camera can collide against them.
     var world_def = b3.b3DefaultWorldDef();
     game.world = b3.b3CreateWorld(&world_def);
-    for (level.boxes) |box| if (box.collidable) addStaticBox(box);
+    for (level.current.boxSlice()) |box| if (box.collidable) addStaticBox(box);
 }
 
 fn addStaticBox(box: level.Box) void {
@@ -441,37 +422,38 @@ fn seedSpawnRandomness() void {
     var stack_marker: u32 = 0;
     const entropy = @as(u64, @bitCast(@intFromPtr(&stack_marker))) ^ @as(u64, @bitCast(@intFromPtr(&game)));
     hunter.seedRandom(@truncate(entropy));
+    level_seed_state = if (entropy == 0) 0x9e3779b97f4a7c15 else entropy;
 }
 
-// Place the player and hunter at collision-free random positions, then reset
-// the whole round (clock, camera, map, outcome).
-fn spawnPlayerAndHunter() void {
-    const player_spawn = randomValidSpawn(
-        player_spawn_y,
-        game.character_config.capsule_half_segment,
-        game.character_config.capsule_radius,
-        false,
-    );
-    var hunter_spawn = randomValidSpawn(
-        hunter_spawn_y,
-        game.hunter_config.capsule_half_segment,
-        game.hunter_config.capsule_radius,
-        true,
-    );
-    // Resample the hunter until it starts far enough from the player to give a
-    // fair opening, but fall back to the first sample if the level is crowded.
-    var attempts: usize = 0;
-    while (attempts < 64) : (attempts += 1) {
-        const dx = hunter_spawn.x - player_spawn.x;
-        const dz = hunter_spawn.z - player_spawn.z;
-        if (dx * dx + dz * dz >= min_spawn_separation * min_spawn_separation) break;
-        hunter_spawn = randomValidSpawn(
-            hunter_spawn_y,
-            game.hunter_config.capsule_half_segment,
-            game.hunter_config.capsule_radius,
-            true,
-        );
+fn nextLevelSeed() u64 {
+    level_seed_state ^= level_seed_state >> 12;
+    level_seed_state ^= level_seed_state << 25;
+    level_seed_state ^= level_seed_state >> 27;
+    return level_seed_state *% 2685821657736338717;
+}
+
+fn generateValidatedLevel() void {
+    for (0..64) |_| {
+        level.regenerate(nextLevelSeed());
+        navmesh.buildLevel();
+        if (navmesh.validateLevel()) return;
     }
+    @panic("procedural level generator failed validation");
+}
+
+fn restartWithNewLevel() void {
+    b3.b3DestroyWorld(game.world);
+    game.world = b3.b3_nullWorldId;
+    generateValidatedLevel();
+    initPhysics();
+    uploadLevelInstances();
+    spawnPlayerAndHunter();
+}
+
+// Place both actors at generated room centres, then reset the round.
+fn spawnPlayerAndHunter() void {
+    const player_spawn = b3.b3Pos{ .x = level.current.player_spawn.x, .y = player_spawn_y, .z = level.current.player_spawn.z };
+    const hunter_spawn = b3.b3Pos{ .x = level.current.hunter_spawn.x, .y = hunter_spawn_y, .z = level.current.hunter_spawn.z };
 
     game.character = controller.State.init(player_spawn);
     game.character.yaw = std.math.pi; // face -Z, matching the initial camera
@@ -490,48 +472,6 @@ fn spawnPlayerAndHunter() void {
     game.input = .{};
 }
 
-// Rejection-sample a capsule-sized clear spot inside the walkable floor area.
-fn randomValidSpawn(y: f32, half_segment: f32, radius: f32, include_hunter_blocks: bool) b3.b3Pos {
-    var attempts: usize = 0;
-    while (attempts < 256) : (attempts += 1) {
-        const position = b3.b3Pos{
-            .x = hunter.randomRange(-spawn_half_x, spawn_half_x),
-            .y = y,
-            .z = hunter.randomRange(-spawn_half_z, spawn_half_z),
-        };
-        if (!level.isInSaveRoom(position.x, position.z) and capsuleClear(position, half_segment, radius, include_hunter_blocks)) return position;
-    }
-    // Fallback: the middle of the Main Hall is always open.
-    return .{ .x = 0, .y = y, .z = 0 };
-}
-
-const SpawnCheck = struct { hit: bool = false };
-
-fn overlapHit(_: b3.b3ShapeId, context: ?*anyopaque) callconv(.c) bool {
-    const check: *SpawnCheck = @ptrCast(@alignCast(context.?));
-    check.hit = true;
-    return false; // stop at the first overlap
-}
-
-// True when no level geometry intersects the capsule at `position`. The two
-// probe points (mid height and top) sit well above the floor slab so the floor
-// itself never counts as a blocker; walls and furniture span that height range,
-// so anything the capsule would collide with still overlaps one of them.
-fn capsuleClear(position: b3.b3Pos, half_segment: f32, radius: f32, include_hunter_blocks: bool) bool {
-    var check: SpawnCheck = .{};
-    const points = [_]b3.b3Vec3{
-        .{},
-        .{ .y = half_segment },
-    };
-    var proxy: b3.b3ShapeProxy = .{ .points = &points, .count = 2, .radius = radius };
-    var filter = b3.b3DefaultQueryFilter();
-    filter.categoryBits = if (include_hunter_blocks) controller.hunter_query_category else controller.player_query_category;
-    filter.maskBits = controller.level_category;
-    if (include_hunter_blocks) filter.maskBits |= controller.hunter_block_category;
-    _ = b3.b3World_OverlapShape(game.world, position, &proxy, filter, overlapHit, &check);
-    return !check.hit;
-}
-
 // The hunter catches the player when their capsules touch horizontally.
 fn hunterContacted() bool {
     const dx = game.hunter.position.x - game.character.position.x;
@@ -544,12 +484,12 @@ fn rebuildMapRoute() void {
     game.map.route_len = 0;
     game.map.route_segment_count = 0;
     game.map.route_upload_pending = true;
-    if (level.isInSaveRoom(game.character.position.x, game.character.position.z)) {
+    if (level.current.isInSaveRoom(game.character.position.x, game.character.position.z)) {
         game.map.route_status = .arrived;
         return;
     }
 
-    const target = level.save_room_target;
+    const target = level.current.save_room_target;
     const influence = navmesh.HunterInfluence{
         .x = game.hunter.position.x,
         .z = game.hunter.position.z,
@@ -617,6 +557,28 @@ fn uploadMapRoute() void {
     game.map.route_upload_pending = false;
 }
 
+fn uploadLevelInstances() void {
+    var level_instances: [level.max_boxes]Instance = undefined;
+    var roof_instances: [level.max_boxes]Instance = undefined;
+    var level_count: usize = 0;
+    var roof_count: usize = 0;
+    for (level.current.boxSlice()) |box| {
+        if (!box.visible) continue;
+        const instance = makePitchedInstance(box.center, box.half_extents, box.pitch, box.color);
+        if (box.is_roof) {
+            roof_instances[roof_count] = instance;
+            roof_count += 1;
+        } else {
+            level_instances[level_count] = instance;
+            level_count += 1;
+        }
+    }
+    if (level_count > 0) sg.updateBuffer(game.render.level_instances, sg.asRange(level_instances[0..level_count]));
+    if (roof_count > 0) sg.updateBuffer(game.render.roof_instance, sg.asRange(roof_instances[0..roof_count]));
+    game.render.level_instance_count = level_count;
+    game.render.roof_instance_count = roof_count;
+}
+
 fn initRenderer() void {
     var vertices: [sshape.max_vertex_size * 4096]u8 = undefined;
     var indices: [4096]u16 = undefined;
@@ -636,27 +598,19 @@ fn initRenderer() void {
     game.render.vertex_buffer = sg.makeBuffer(sshape.vertexBufferDesc(builder));
     game.render.index_buffer = sg.makeBuffer(sshape.indexBufferDesc(builder));
 
-    // Bake every visible level box into one static instance array, keeping the
-    // roof separate so the map view can hide it.
-    var level_instances: [level_instance_count]Instance = undefined;
-    var roof_instances: [roof_instance_count]Instance = undefined;
-    var level_count: usize = 0;
-    var roof_count: usize = 0;
-    for (level.boxes) |box| {
-        if (!box.visible) continue;
-        const instance = makePitchedInstance(box.center, box.half_extents, box.pitch, box.color);
-        if (box.is_roof) {
-            roof_instances[roof_count] = instance;
-            roof_count += 1;
-        } else {
-            level_instances[level_count] = instance;
-            level_count += 1;
-        }
-    }
-    std.debug.assert(level_count == level_instance_count);
-    std.debug.assert(roof_count == roof_instance_count);
-    game.render.level_instances = sg.makeBuffer(.{ .data = sg.asRange(&level_instances), .label = "character-level-instances" });
-    game.render.roof_instance = sg.makeBuffer(.{ .data = sg.asRange(&roof_instances), .label = "character-roof-instance" });
+    // Runtime-sized instance counts are uploaded into capacity buffers whenever
+    // a new procedural level is generated. The roof remains separate for map mode.
+    game.render.level_instances = sg.makeBuffer(.{
+        .size = level.max_boxes * @sizeOf(Instance),
+        .usage = .{ .stream_update = true },
+        .label = "character-level-instances",
+    });
+    game.render.roof_instance = sg.makeBuffer(.{
+        .size = level.max_boxes * @sizeOf(Instance),
+        .usage = .{ .stream_update = true },
+        .label = "character-roof-instance",
+    });
+    uploadLevelInstances();
     // The character's instance is uploaded fresh every frame (stream_update).
     game.render.character_instance = sg.makeBuffer(.{
         .size = @sizeOf(Instance),
@@ -825,11 +779,11 @@ fn draw(position: b3.b3Pos) void {
     sg.beginPass(game.render.shadow_pass);
     sg.applyPipeline(game.render.shadow_pipeline);
     sg.applyUniforms(shd.UB_shadow_vs_params, sg.asRange(&shadow_params));
-    drawInstances(game.render.level_instances, game.render.box_range, 0, level_instance_count, false);
+    drawInstances(game.render.level_instances, game.render.box_range, 0, game.render.level_instance_count, false);
     drawInstances(game.render.character_instance, game.render.box_range, 0, 1, false);
     drawInstances(game.render.hunter_instance, game.render.box_range, 0, 1, false);
     if (!game.map.active) {
-        drawInstances(game.render.roof_instance, game.render.box_range, 0, roof_instance_count, false);
+        drawInstances(game.render.roof_instance, game.render.box_range, 0, game.render.roof_instance_count, false);
     }
     sg.endPass();
 
@@ -842,23 +796,22 @@ fn draw(position: b3.b3Pos) void {
     const fs_params: shd.DisplayFsParams = .{
         .light_direction = Vec3.normalized(.{ .x = 20, .y = 32, .z = -24 }),
         .eye_position = game.camera.eye,
-        // xyz is fixture position; w is its attenuation radius. Fixtures sit
-        // just under the 5.5m roof, one per room cluster.
-        .indoor_light_0 = .{ .x = 0, .y = 4.2, .z = 0, .w = 10 }, // Main Hall
-        .indoor_light_1 = .{ .x = -20, .y = 4.0, .z = 0, .w = 9 }, // W2 office
-        .indoor_light_2 = .{ .x = 20, .y = 4.0, .z = 0, .w = 9 }, // E2 office
-        .indoor_light_3 = .{ .x = -20, .y = 4.0, .z = -8, .w = 9 }, // W1 storage
-        .indoor_light_4 = .{ .x = 20, .y = 4.0, .z = -8, .w = 9 }, // E1
-        .indoor_light_5 = .{ .x = -6, .y = 4.0, .z = -16, .w = 9 }, // NW2/NW corner
-        .indoor_light_6 = .{ .x = -6, .y = 4.0, .z = 16, .w = 9 }, // SW2
-        .indoor_light_7 = .{ .x = 20, .y = 4.0, .z = 8, .w = 9 }, // E3
+        // Fixture positions and radii are derived from generated room bounds.
+        .indoor_light_0 = level.current.lights[0],
+        .indoor_light_1 = level.current.lights[1],
+        .indoor_light_2 = level.current.lights[2],
+        .indoor_light_3 = level.current.lights[3],
+        .indoor_light_4 = level.current.lights[4],
+        .indoor_light_5 = level.current.lights[5],
+        .indoor_light_6 = level.current.lights[6],
+        .indoor_light_7 = level.current.lights[7],
     };
 
     sg.beginPass(.{ .action = game.render.pass_action, .swapchain = sglue.swapchain() });
     sg.applyPipeline(game.render.display_pipeline);
     sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));
     sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
-    drawInstances(game.render.level_instances, game.render.box_range, 0, level_instance_count, true);
+    drawInstances(game.render.level_instances, game.render.box_range, 0, game.render.level_instance_count, true);
     if (game.map.active) {
         const route_params: shd.RouteVsParams = .{ .view_projection = game.camera.view_projection };
         sg.applyPipeline(game.render.route_pipeline);
@@ -878,7 +831,7 @@ fn draw(position: b3.b3Pos) void {
         drawInstances(game.render.hunter_instance, game.render.box_range, 0, 1, true);
     }
     if (!game.map.active) {
-        drawInstances(game.render.roof_instance, game.render.box_range, 0, roof_instance_count, true);
+        drawInstances(game.render.roof_instance, game.render.box_range, 0, game.render.roof_instance_count, true);
     }
     sg.applyPipeline(game.render.debug_pipeline);
     sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));

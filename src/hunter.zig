@@ -25,9 +25,9 @@ const b3 = @import("box3d");
 const controller = @import("character_controller.zig");
 const navmesh = @import("navmesh.zig");
 
-// A* routes on this level never exceed a few hundred waypoints; this bound is
-// well beyond the grid diagonal so routes always fit.
-const path_capacity = 512;
+// Procedural corridors can meander. Capacity matches the complete fixed nav
+// grid, so reconstruction can never reject an otherwise valid simple route.
+const path_capacity = navmesh.level_cols * navmesh.level_rows;
 
 pub const Config = struct {
     capsule_half_segment: f32 = 1.0,
