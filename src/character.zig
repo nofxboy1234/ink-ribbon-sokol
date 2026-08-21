@@ -137,6 +137,7 @@ const DebugState = struct {
 };
 
 const MapRouteStatus = enum { none, found, arrived, no_path };
+const RoundOutcome = enum { playing, caught, escaped };
 
 // Top-down map overlay state. The route is rebuilt from the current actor poses
 // whenever the map opens, then remains fixed while the simulation is paused.
@@ -202,7 +203,7 @@ const GameState = struct {
     character: controller.State = initialCharacter(),
     hunter_config: hunter.Config = .{},
     hunter: hunter.State = initialHunter(),
-    game_over: bool = false,
+    outcome: RoundOutcome = .playing,
     quick_turn: QuickTurn = .{},
     mover_scratch: controller.MoverScratch = .{},
     camera_config: camera.Config = .{},
@@ -263,8 +264,8 @@ fn frame() callconv(.c) void {
     const frame_time: f32 = @floatCast(@min(sapp.frameDuration(), max_frame_dt));
     game.clock.addFrame(frame_time);
 
-    const render_position = if (game.game_over) blk: {
-        // Game over: everything freezes behind the overlay. Drain pending
+    const render_position = if (game.outcome != .playing) blk: {
+        // Finished round: everything freezes behind the overlay. Drain pending
         // physics ticks so restarting doesn't burst-catch-up the simulation.
         while (game.clock.consumeTick()) {}
         break :blk game.character.position;
@@ -284,6 +285,10 @@ fn frame() callconv(.c) void {
                     @floatCast(fixed_dt),
                 );
                 updateQuickTurn(@floatCast(fixed_dt));
+                if (level.isInSaveRoom(game.character.position.x, game.character.position.z)) {
+                    game.outcome = .escaped;
+                    break;
+                }
                 hunter.update(
                     game.hunter_config,
                     &game.hunter,
@@ -293,7 +298,7 @@ fn frame() callconv(.c) void {
                     @floatCast(fixed_dt),
                 );
                 if (hunterContacted()) {
-                    game.game_over = true;
+                    game.outcome = .caught;
                     break;
                 }
             }
@@ -319,7 +324,7 @@ fn frame() callconv(.c) void {
         game.map.pan.x = std.math.clamp(game.map.pan.x, -map_pan_x_max, map_pan_x_max);
         game.map.pan.z = std.math.clamp(game.map.pan.z, -map_pan_z_max, map_pan_z_max);
         game.camera.view_projection = mapViewProjection();
-    } else if (!game.game_over) {
+    } else if (game.outcome == .playing) {
         camera.update(
             game.camera_config,
             &game.camera,
@@ -367,13 +372,13 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     // gameplay doesn't resume with the character moving.
                     game.input = .{};
                 },
-                .R => if (down and !value.key_repeat and game.game_over) {
+                .R => if (down and !value.key_repeat and game.outcome != .playing) {
                     spawnPlayerAndHunter();
                 },
                 .E => if (down and !value.key_repeat) {
                     // RE2R quick-turn: while walking backward, swing the
                     // character and camera 180 degrees over a short animation.
-                    if (!game.game_over and game.input.back and !game.quick_turn.active) {
+                    if (game.outcome == .playing and game.input.back and !game.quick_turn.active) {
                         game.quick_turn = .{
                             .active = true,
                             .character_start = game.character.yaw,
@@ -439,7 +444,7 @@ fn seedSpawnRandomness() void {
 }
 
 // Place the player and hunter at collision-free random positions, then reset
-// the whole round (clock, camera, map, game-over flag).
+// the whole round (clock, camera, map, outcome).
 fn spawnPlayerAndHunter() void {
     const player_spawn = randomValidSpawn(
         player_spawn_y,
@@ -480,7 +485,8 @@ fn spawnPlayerAndHunter() void {
     game.camera = .{};
     game.clock = .{};
     game.map = .{};
-    game.game_over = false;
+    game.outcome = .playing;
+    game.quick_turn = .{};
     game.input = .{};
 }
 
@@ -800,7 +806,7 @@ fn draw(position: b3.b3Pos) void {
 
     // Interpolate during gameplay, but use the authoritative pose while paused
     // so the clock's cycling alpha cannot replay the hunter's last movement.
-    const hunter_render = if (game.map.active or game.game_over)
+    const hunter_render = if (game.map.active or game.outcome != .playing)
         game.hunter.position
     else
         hunter.interpolatedPosition(game.hunter, game.clock.alpha());
@@ -938,18 +944,24 @@ fn drawHud(position: b3.b3Pos) void {
             },
             else => {},
         }
-    } else if (game.debug.draw_physics and !game.game_over) {
+    } else if (game.debug.draw_physics and game.outcome == .playing) {
         sdtx.pos(1.0, 1.0);
         sdtx.print("POS {d:.1} {d:.1} {d:.1}", .{ position.x, position.y, position.z });
     }
-    if (game.game_over) {
-        const title = "YOU WERE CAUGHT BY THE HUNTER";
-        const prompt = "PRESS R TO PLAY AGAIN";
+    if (game.outcome != .playing) {
+        const escaped = game.outcome == .escaped;
+        const title = if (escaped) "YOU REACHED THE SAVE ROOM" else "YOU WERE CAUGHT BY THE HUNTER";
+        const prompt = "PRESS R TO START A NEW PLAYTHROUGH";
         // The 8x8 font renders in text units of 8 px, so dividing the pixel
         // canvas by 8 centres a line of `len` characters.
         sdtx.pos(sapp.widthf() / 8.0 / 2.0 - @as(f32, @floatFromInt(title.len)) / 2.0, sapp.heightf() / 8.0 / 2.0 - 1.0);
-        sdtx.color3b(255, 60, 60);
-        sdtx.print(title, .{});
+        if (escaped) {
+            sdtx.color3b(80, 250, 123);
+            sdtx.print("YOU REACHED THE SAVE ROOM", .{});
+        } else {
+            sdtx.color3b(255, 60, 60);
+            sdtx.print("YOU WERE CAUGHT BY THE HUNTER", .{});
+        }
         sdtx.pos(sapp.widthf() / 8.0 / 2.0 - @as(f32, @floatFromInt(prompt.len)) / 2.0, sapp.heightf() / 8.0 / 2.0 + 1.0);
         sdtx.color3b(255, 255, 255);
         sdtx.print(prompt, .{});
