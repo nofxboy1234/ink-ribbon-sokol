@@ -178,6 +178,7 @@ const RenderState = struct {
     capsule_instances: sg.Buffer = .{},
     display_pipeline: sg.Pipeline = .{},
     route_pipeline: sg.Pipeline = .{},
+    map_actor_pipeline: sg.Pipeline = .{},
     debug_pipeline: sg.Pipeline = .{},
     shadow_pipeline: sg.Pipeline = .{},
     shadow_pass: sg.Pass = .{},
@@ -706,13 +707,22 @@ fn initRenderer() void {
     route_layout.attrs[shd.ATTR_route_inst_y] = instanceAttr(16);
     route_layout.attrs[shd.ATTR_route_inst_z] = instanceAttr(32);
     route_layout.attrs[shd.ATTR_route_inst_color] = instanceAttr(48);
+    const route_shader = sg.makeShader(shd.routeShaderDesc(sg.queryBackend()));
     game.render.route_pipeline = sg.makePipeline(.{
-        .shader = sg.makeShader(shd.routeShaderDesc(sg.queryBackend())),
+        .shader = route_shader,
         .layout = route_layout,
         .depth = .{ .write_enabled = false, .compare = .LESS_EQUAL },
         .index_type = .UINT16,
         .cull_mode = .BACK,
         .label = "character-map-route-pipeline",
+    });
+    game.render.map_actor_pipeline = sg.makePipeline(.{
+        .shader = route_shader,
+        .layout = route_layout,
+        .depth = .{ .write_enabled = true, .compare = .LESS_EQUAL },
+        .index_type = .UINT16,
+        .cull_mode = .BACK,
+        .label = "character-map-actor-pipeline",
     });
 
     game.render.debug_pipeline = sg.makePipeline(.{
@@ -852,14 +862,15 @@ fn draw(position: b3.b3Pos) void {
         }
         drawInstances(game.render.map_direction_instances, game.render.box_range, 0, map_direction_instance_count, false);
 
-        // Actors render after the elevated map markings so their markers remain
-        // visible where the route begins or passes nearby.
-        sg.applyPipeline(game.render.display_pipeline);
-        sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));
-        sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
+        // Map actors use flat instance colors while still writing depth.
+        sg.applyPipeline(game.render.map_actor_pipeline);
+        sg.applyUniforms(shd.UB_route_vs_params, sg.asRange(&route_params));
+        drawInstances(game.render.character_instance, game.render.box_range, 0, 1, false);
+        drawInstances(game.render.hunter_instance, game.render.box_range, 0, 1, false);
+    } else {
+        drawInstances(game.render.character_instance, game.render.box_range, 0, 1, true);
+        drawInstances(game.render.hunter_instance, game.render.box_range, 0, 1, true);
     }
-    drawInstances(game.render.character_instance, game.render.box_range, 0, 1, true);
-    drawInstances(game.render.hunter_instance, game.render.box_range, 0, 1, true);
     if (!game.map.active) {
         drawInstances(game.render.roof_instance, game.render.box_range, 0, roof_instance_count, true);
     }
