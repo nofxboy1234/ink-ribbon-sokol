@@ -122,9 +122,10 @@ const MapRouteStatus = enum { none, found, arrived, no_path };
 const RoundOutcome = enum { playing, caught, escaped };
 
 // Top-down map overlay state. The route is rebuilt from the current actor poses
-// whenever the map opens, then remains fixed while the simulation is paused.
+// whenever the map opens, then remains fixed while the player is paused.
 const MapState = struct {
     active: bool = false,
+    hunter_paused: bool = true,
     pan: Vec3 = .{},
     route: [map_route_capacity]b3.b3Pos = undefined,
     route_instances: [map_route_capacity]Instance = undefined,
@@ -253,8 +254,8 @@ fn frame() callconv(.c) void {
     } else blk: {
         var ticks: usize = 0;
         while (ticks < max_ticks_per_frame and game.clock.consumeTick()) : (ticks += 1) {
-            // Map mode pauses the whole simulation: the player character and
-            // the hunter both freeze so the map can be studied without risk.
+            // Map mode always freezes the player. The hunter is independently
+            // paused by default and can be resumed with P.
             if (!game.map.active) {
                 controller.update(
                     game.character_config,
@@ -270,6 +271,8 @@ fn frame() callconv(.c) void {
                     game.outcome = .escaped;
                     break;
                 }
+            }
+            if (!game.map.active or !game.map.hunter_paused) {
                 hunter.update(
                     game.hunter_config,
                     &game.hunter,
@@ -348,10 +351,16 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 },
                 .M => if (down and !value.key_repeat) {
                     game.map.active = !game.map.active;
-                    if (game.map.active) rebuildMapRoute();
+                    if (game.map.active) {
+                        game.map.hunter_paused = true;
+                        rebuildMapRoute();
+                    }
                     // Drop held keys so the map doesn't immediately pan and
                     // gameplay doesn't resume with the character moving.
                     game.input = .{};
+                },
+                .P => if (down and !value.key_repeat and game.map.active) {
+                    game.map.hunter_paused = !game.map.hunter_paused;
                 },
                 .R => if (down and !value.key_repeat and game.outcome != .playing) {
                     restartWithNewLevel();
@@ -760,7 +769,7 @@ fn draw(position: b3.b3Pos) void {
 
     // Interpolate during gameplay, but use the authoritative pose while paused
     // so the clock's cycling alpha cannot replay the hunter's last movement.
-    const hunter_render = if (game.map.active or game.outcome != .playing)
+    const hunter_render = if ((game.map.active and game.map.hunter_paused) or game.outcome != .playing)
         game.hunter.position
     else
         hunter.interpolatedPosition(game.hunter, game.clock.alpha());
@@ -883,15 +892,17 @@ fn drawHud(position: b3.b3Pos) void {
     if (game.map.active) {
         sdtx.pos(1.0, 1.0);
         sdtx.color3b(255, 220, 120);
-        sdtx.print("MAP (WASD pans, M exits - simulation paused)", .{});
+        sdtx.print("MAP (WASD pans, P toggles hunter, M exits)", .{});
+        sdtx.pos(1.0, 2.2);
+        sdtx.print("HUNTER: {s}", .{if (game.map.hunter_paused) "PAUSED" else "MOVING"});
         switch (game.map.route_status) {
             .arrived => {
-                sdtx.pos(1.0, 2.2);
+                sdtx.pos(1.0, 3.4);
                 sdtx.color3b(80, 250, 123);
                 sdtx.print("SAVE ROOM REACHED", .{});
             },
             .no_path => {
-                sdtx.pos(1.0, 2.2);
+                sdtx.pos(1.0, 3.4);
                 sdtx.color3b(255, 85, 85);
                 sdtx.print("NO SAFE ROUTE", .{});
             },
