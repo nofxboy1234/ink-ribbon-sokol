@@ -54,6 +54,11 @@ const min_spawn_separation: f32 = 24.0;
 const map_pan_speed: f32 = 25.0; // metres/second the map pans with WASD
 const map_pan_x_max: f32 = 40.0; // keep the pan center near the level
 const map_pan_z_max: f32 = 30.0;
+const map_route_capacity = navmesh.level_cols * navmesh.level_rows;
+const map_route_width: f32 = 0.16;
+const map_route_height: f32 = 0.04;
+const map_route_danger_radius: f32 = 6.0;
+const map_route_danger_penalty: f32 = 4.0;
 
 // The roof lives in its own instance buffer so it can be hidden in map view.
 const level_instance_count = count: {
@@ -129,11 +134,20 @@ const DebugState = struct {
     draw_physics: bool = true,
 };
 
-// Top-down map overlay state. `active` toggles with M; `pan` is the world
-// position the map camera is centred on (WASD pans it while in the map).
+const MapRouteStatus = enum { none, found, arrived, no_path };
+
+// Top-down map overlay state. The route is rebuilt from the current actor poses
+// whenever the map opens, then remains fixed while the simulation is paused.
 const MapState = struct {
     active: bool = false,
     pan: Vec3 = .{},
+    route: [map_route_capacity]b3.b3Pos = undefined,
+    route_instances: [map_route_capacity]Instance = undefined,
+    route_start: b3.b3Pos = .{},
+    route_len: usize = 0,
+    route_segment_count: usize = 0,
+    route_upload_pending: bool = false,
+    route_status: MapRouteStatus = .none,
 };
 
 // Smooth 180-degree quick-turn (RE2R): the character and camera swing around
@@ -157,8 +171,10 @@ const RenderState = struct {
     roof_instance: sg.Buffer = .{},
     character_instance: sg.Buffer = .{},
     hunter_instance: sg.Buffer = .{},
+    route_instances: sg.Buffer = .{},
     capsule_instances: sg.Buffer = .{},
     display_pipeline: sg.Pipeline = .{},
+    route_pipeline: sg.Pipeline = .{},
     debug_pipeline: sg.Pipeline = .{},
     shadow_pipeline: sg.Pipeline = .{},
     shadow_pass: sg.Pass = .{},
@@ -311,6 +327,7 @@ fn frame() callconv(.c) void {
         );
         game.input.mouse_delta = .{};
     }
+    uploadMapRoute();
     draw(render_position);
 }
 
@@ -341,6 +358,7 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 },
                 .M => if (down and !value.key_repeat) {
                     game.map.active = !game.map.active;
+                    if (game.map.active) rebuildMapRoute();
                     // Drop held keys so the map doesn't immediately pan and
                     // gameplay doesn't resume with the character moving.
                     game.input = .{};
@@ -423,11 +441,13 @@ fn spawnPlayerAndHunter() void {
         player_spawn_y,
         game.character_config.capsule_half_segment,
         game.character_config.capsule_radius,
+        false,
     );
     var hunter_spawn = randomValidSpawn(
         hunter_spawn_y,
         game.hunter_config.capsule_half_segment,
         game.hunter_config.capsule_radius,
+        true,
     );
     // Resample the hunter until it starts far enough from the player to give a
     // fair opening, but fall back to the first sample if the level is crowded.
@@ -440,6 +460,7 @@ fn spawnPlayerAndHunter() void {
             hunter_spawn_y,
             game.hunter_config.capsule_half_segment,
             game.hunter_config.capsule_radius,
+            true,
         );
     }
 
@@ -460,7 +481,7 @@ fn spawnPlayerAndHunter() void {
 }
 
 // Rejection-sample a capsule-sized clear spot inside the walkable floor area.
-fn randomValidSpawn(y: f32, half_segment: f32, radius: f32) b3.b3Pos {
+fn randomValidSpawn(y: f32, half_segment: f32, radius: f32, include_hunter_blocks: bool) b3.b3Pos {
     var attempts: usize = 0;
     while (attempts < 256) : (attempts += 1) {
         const position = b3.b3Pos{
@@ -468,7 +489,7 @@ fn randomValidSpawn(y: f32, half_segment: f32, radius: f32) b3.b3Pos {
             .y = y,
             .z = hunter.randomRange(-spawn_half_z, spawn_half_z),
         };
-        if (capsuleClear(position, half_segment, radius)) return position;
+        if (!level.isInSaveRoom(position.x, position.z) and capsuleClear(position, half_segment, radius, include_hunter_blocks)) return position;
     }
     // Fallback: the middle of the Main Hall is always open.
     return .{ .x = 0, .y = y, .z = 0 };
@@ -486,16 +507,17 @@ fn overlapHit(_: b3.b3ShapeId, context: ?*anyopaque) callconv(.c) bool {
 // probe points (mid height and top) sit well above the floor slab so the floor
 // itself never counts as a blocker; walls and furniture span that height range,
 // so anything the capsule would collide with still overlaps one of them.
-fn capsuleClear(position: b3.b3Pos, half_segment: f32, radius: f32) bool {
+fn capsuleClear(position: b3.b3Pos, half_segment: f32, radius: f32, include_hunter_blocks: bool) bool {
     var check: SpawnCheck = .{};
     const points = [_]b3.b3Vec3{
-        .{ .x = position.x, .y = position.y, .z = position.z },
-        .{ .x = position.x, .y = position.y + half_segment, .z = position.z },
+        .{},
+        .{ .y = half_segment },
     };
     var proxy: b3.b3ShapeProxy = .{ .points = &points, .count = 2, .radius = radius };
     var filter = b3.b3DefaultQueryFilter();
-    filter.categoryBits = controller.player_query_category;
+    filter.categoryBits = if (include_hunter_blocks) controller.hunter_query_category else controller.player_query_category;
     filter.maskBits = controller.level_category;
+    if (include_hunter_blocks) filter.maskBits |= controller.hunter_block_category;
     _ = b3.b3World_OverlapShape(game.world, position, &proxy, filter, overlapHit, &check);
     return !check.hit;
 }
@@ -506,6 +528,83 @@ fn hunterContacted() bool {
     const dz = game.hunter.position.z - game.character.position.z;
     const radius = game.hunter_config.contact_radius;
     return dx * dx + dz * dz < radius * radius;
+}
+
+fn rebuildMapRoute() void {
+    game.map.route_len = 0;
+    game.map.route_segment_count = 0;
+    game.map.route_upload_pending = true;
+    if (level.isInSaveRoom(game.character.position.x, game.character.position.z)) {
+        game.map.route_status = .arrived;
+        return;
+    }
+
+    const target = level.save_room_target;
+    const influence = navmesh.HunterInfluence{
+        .x = game.hunter.position.x,
+        .z = game.hunter.position.z,
+        .hard_radius = game.hunter_config.contact_radius,
+        .danger_radius = map_route_danger_radius,
+        .danger_penalty = map_route_danger_penalty,
+    };
+    const route_start_cell = navmesh.player_nav.nearestWalkableWithInfluence(
+        game.character.position.x,
+        game.character.position.z,
+        influence,
+    ) orelse {
+        game.map.route_status = .no_path;
+        return;
+    };
+    const player_cell = navmesh.player_nav.cellAt(game.character.position.x, game.character.position.z);
+    game.map.route_start = if (player_cell != null and player_cell.? == route_start_cell)
+        game.character.position
+    else
+        navmesh.player_nav.worldAt(route_start_cell);
+    game.map.route_len = navmesh.player_nav.findPathWithInfluence(
+        game.character.position.x,
+        game.character.position.z,
+        target.x,
+        target.z,
+        game.map.route[0..],
+        influence,
+    );
+    if (game.map.route_len == 0) {
+        game.map.route_status = .no_path;
+        return;
+    }
+
+    var from = game.map.route_start;
+    for (game.map.route[0..game.map.route_len]) |waypoint| {
+        const dx = waypoint.x - from.x;
+        const dz = waypoint.z - from.z;
+        const segment_length = @sqrt(dx * dx + dz * dz);
+        if (segment_length > 0.0001) {
+            game.map.route_instances[game.map.route_segment_count] = makeScaledInstance(
+                .{
+                    .x = (from.x + waypoint.x) * 0.5,
+                    .y = level.floor_height + 0.1,
+                    .z = (from.z + waypoint.z) * 0.5,
+                },
+                .{ .x = map_route_width, .y = map_route_height, .z = segment_length },
+                std.math.atan2(dx, dz),
+                rgb(0.3137255, 0.9803922, 0.4823529),
+            );
+            game.map.route_segment_count += 1;
+        }
+        from = waypoint;
+    }
+    game.map.route_status = .found;
+}
+
+fn uploadMapRoute() void {
+    if (!game.map.route_upload_pending) return;
+    if (game.map.active and game.map.route_segment_count > 0) {
+        sg.updateBuffer(
+            game.render.route_instances,
+            sg.asRange(game.map.route_instances[0..game.map.route_segment_count]),
+        );
+    }
+    game.map.route_upload_pending = false;
 }
 
 fn initRenderer() void {
@@ -560,6 +659,11 @@ fn initRenderer() void {
         .usage = .{ .stream_update = true },
         .label = "character-hunter-instance",
     });
+    game.render.route_instances = sg.makeBuffer(.{
+        .size = map_route_capacity * @sizeOf(Instance),
+        .usage = .{ .stream_update = true },
+        .label = "character-map-route-instances",
+    });
     game.render.capsule_instances = sg.makeBuffer(.{
         .size = 3 * @sizeOf(Instance),
         .usage = .{ .stream_update = true },
@@ -585,6 +689,23 @@ fn initRenderer() void {
         .cull_mode = .BACK,
         .label = "character-scene-pipeline",
     });
+
+    var route_layout: sg.VertexLayoutState = .{};
+    route_layout.buffers[0] = sshape.vertexBufferLayoutState(builder);
+    route_layout.buffers[1] = .{ .step_func = .PER_INSTANCE, .stride = @sizeOf(Instance) };
+    route_layout.attrs[shd.ATTR_route_position] = sshape.positionVertexAttrState(builder);
+    route_layout.attrs[shd.ATTR_route_inst_x] = instanceAttr(0);
+    route_layout.attrs[shd.ATTR_route_inst_y] = instanceAttr(16);
+    route_layout.attrs[shd.ATTR_route_inst_z] = instanceAttr(32);
+    game.render.route_pipeline = sg.makePipeline(.{
+        .shader = sg.makeShader(shd.routeShaderDesc(sg.queryBackend())),
+        .layout = route_layout,
+        .depth = .{ .write_enabled = false, .compare = .LESS_EQUAL },
+        .index_type = .UINT16,
+        .cull_mode = .BACK,
+        .label = "character-map-route-pipeline",
+    });
+
     game.render.debug_pipeline = sg.makePipeline(.{
         .shader = sg.makeShader(shd.displayShaderDesc(sg.queryBackend())),
         .layout = layout,
@@ -711,6 +832,18 @@ fn draw(position: b3.b3Pos) void {
     sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));
     sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
     drawInstances(game.render.level_instances, game.render.box_range, 0, level_instance_count, true);
+    if (game.map.active and game.map.route_segment_count > 0) {
+        const route_params: shd.RouteVsParams = .{ .view_projection = game.camera.view_projection };
+        sg.applyPipeline(game.render.route_pipeline);
+        sg.applyUniforms(shd.UB_route_vs_params, sg.asRange(&route_params));
+        drawInstances(game.render.route_instances, game.render.box_range, 0, game.map.route_segment_count, false);
+
+        // Actors render after the elevated route so their map markers remain
+        // visible where the line begins or passes nearby.
+        sg.applyPipeline(game.render.display_pipeline);
+        sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));
+        sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
+    }
     drawInstances(game.render.character_instance, game.render.box_range, 0, 1, true);
     drawInstances(game.render.hunter_instance, game.render.box_range, 0, 1, true);
     if (!game.map.active) {
@@ -767,6 +900,19 @@ fn drawHud(position: b3.b3Pos) void {
         sdtx.pos(1.0, 1.0);
         sdtx.color3b(255, 220, 120);
         sdtx.print("MAP (WASD pans, M exits - simulation paused)", .{});
+        switch (game.map.route_status) {
+            .arrived => {
+                sdtx.pos(1.0, 2.2);
+                sdtx.color3b(80, 250, 123);
+                sdtx.print("SAVE ROOM REACHED", .{});
+            },
+            .no_path => {
+                sdtx.pos(1.0, 2.2);
+                sdtx.color3b(255, 85, 85);
+                sdtx.print("NO SAFE ROUTE", .{});
+            },
+            else => {},
+        }
     } else if (game.debug.draw_physics and !game.game_over) {
         sdtx.pos(1.0, 1.0);
         sdtx.print("POS {d:.1} {d:.1} {d:.1}", .{ position.x, position.y, position.z });

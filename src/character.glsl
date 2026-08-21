@@ -156,3 +156,29 @@ void main() {
 @end
 
 @program display display_vs display_fs
+
+@vs route_vs
+layout(binding = 0) uniform route_vs_params {
+    mat4 view_projection;
+};
+
+layout(location = 0) in vec4 position;
+layout(location = 1) in vec4 inst_x;
+layout(location = 2) in vec4 inst_y;
+layout(location = 3) in vec4 inst_z;
+
+void main() {
+    vec4 world_position = vec4(dot(position, inst_x), dot(position, inst_y), dot(position, inst_z), 1.0);
+    gl_Position = view_projection * world_position;
+}
+@end
+
+@fs route_fs
+out vec4 frag_color;
+
+void main() {
+    frag_color = vec4(0.3137255, 0.9803922, 0.4823529, 1.0); // Dracula green #50FA7B
+}
+@end
+
+@program route route_vs route_fs

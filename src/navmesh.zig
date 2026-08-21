@@ -22,6 +22,19 @@ pub const level_rows = 76;
 // blocked (e.g. a patrol point inside a wall) or outside the grid.
 const snap_ring: usize = 10;
 
+pub const BuildOptions = struct {
+    radius: f32,
+    include_hunter_block: bool = true,
+};
+
+pub const HunterInfluence = struct {
+    x: f32,
+    z: f32,
+    hard_radius: f32,
+    danger_radius: f32,
+    danger_penalty: f32,
+};
+
 pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
     return struct {
         const Self = @This();
@@ -93,13 +106,19 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
         // Only collidable, non-roof boxes whose top rises above the walk
         // surface block navigation; the floor slab and roof are ignored.
         pub fn buildFromBoxes(self: *Self, boxes: []const level.Box, radius: f32) void {
+            self.buildFromBoxesWithOptions(boxes, .{ .radius = radius });
+        }
+
+        pub fn buildFromBoxesWithOptions(self: *Self, boxes: []const level.Box, options: BuildOptions) void {
             self.components_valid = false;
+            @memset(self.blocked[0..], false);
             for (0..N) |cell| {
                 const cx = self.worldX(cell % cols);
                 const cz = self.worldZ(cell / cols);
-                const half = cell_size * 0.5 + radius;
+                const half = cell_size * 0.5 + options.radius;
                 for (boxes) |box| {
                     if (!box.collidable or box.is_roof) continue;
+                    if (!options.include_hunter_block and box.hunter_block) continue;
                     if (box.center.y + box.half_extents.y <= 0.05) continue;
                     if (aabbXZ(cx, cz, half, box)) {
                         self.blocked[cell] = true;
@@ -151,6 +170,17 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
 
         // The nearest walkable cell to (x, z), scanning outward in square rings.
         pub fn nearestWalkable(self: *Self, x: f32, z: f32, max_ring: usize) ?usize {
+            return self.nearestWalkableInner(x, z, max_ring, null);
+        }
+
+        // The same snapped start cell used by an influenced path query. Map
+        // rendering uses this to avoid drawing an unchecked connector from a
+        // conservatively blocked player cell into the returned route.
+        pub fn nearestWalkableWithInfluence(self: *Self, x: f32, z: f32, influence: HunterInfluence) ?usize {
+            return self.nearestWalkableInner(x, z, snap_ring, influence);
+        }
+
+        fn nearestWalkableInner(self: *Self, x: f32, z: f32, max_ring: usize, influence: ?HunterInfluence) ?usize {
             @setRuntimeSafety(false);
             const cx = std.math.clamp(x, min_x, max_x);
             const cz = std.math.clamp(z, min_z, max_z);
@@ -174,7 +204,7 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
                     for (candidates) |pair| {
                         if (pair[0] < 0 or pair[0] >= cols or pair[1] < 0 or pair[1] >= rows) continue;
                         const cell: usize = @intCast(@as(i32, pair[1]) * cols + pair[0]);
-                        if (!self.blocked[cell]) return cell;
+                        if (!self.blocked[cell] and !self.isHardBlocked(cell, influence)) return cell;
                     }
                 }
             }
@@ -186,13 +216,21 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
         // waypoints (start cell excluded, goal included) into `out` and returns
         // the count; 0 when unreachable or both ends snap to the same cell.
         pub fn findPath(self: *Self, start_x: f32, start_z: f32, goal_x: f32, goal_z: f32, out: []b3.b3Pos) usize {
-            return self.findPathInner(start_x, start_z, goal_x, goal_z, out);
+            return self.findPathInner(start_x, start_z, goal_x, goal_z, out, null);
         }
 
-        fn findPathInner(self: *Self, start_x: f32, start_z: f32, goal_x: f32, goal_z: f32, out: []b3.b3Pos) usize {
+        // A* with one circular hunter influence. The hard radius excludes every
+        // cell whose square footprint touches it. The nonnegative danger cost
+        // is added to base edge costs and falls linearly to zero at the danger
+        // radius, leaving the octile heuristic admissible.
+        pub fn findPathWithInfluence(self: *Self, start_x: f32, start_z: f32, goal_x: f32, goal_z: f32, out: []b3.b3Pos, influence: HunterInfluence) usize {
+            return self.findPathInner(start_x, start_z, goal_x, goal_z, out, influence);
+        }
+
+        fn findPathInner(self: *Self, start_x: f32, start_z: f32, goal_x: f32, goal_z: f32, out: []b3.b3Pos, influence: ?HunterInfluence) usize {
             @setRuntimeSafety(false);
-            const start = self.nearestWalkable(start_x, start_z, snap_ring) orelse return 0;
-            const goal = self.nearestWalkable(goal_x, goal_z, snap_ring) orelse return 0;
+            const start = self.nearestWalkableInner(start_x, start_z, snap_ring, influence) orelse return 0;
+            const goal = self.nearestWalkableInner(goal_x, goal_z, snap_ring, influence) orelse return 0;
             if (start == goal) return 0;
             if (!self.components_valid) self.computeComponents();
             // Unreachable goal: reject it without searching.
@@ -224,18 +262,21 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
                         const nr = cur_row + dr;
                         if (nc < 0 or nc >= cols or nr < 0 or nr >= rows) continue;
                         const neighbor: usize = @intCast(@as(i32, nr) * cols + nc);
-                        if (self.blocked[neighbor] or self.closed[neighbor]) continue;
+                        if (self.blocked[neighbor] or self.isHardBlocked(neighbor, influence) or self.closed[neighbor]) continue;
                         // Corner-cut prevention: a diagonal step needs both
-                        // orthogonal neighbours open so paths don't clip walls.
+                        // orthogonal neighbours open under both baked and
+                        // dynamic blocking so paths don't clip walls or danger.
                         if (dc != 0 and dr != 0) {
                             const beside_col: usize = @intCast(cur_col + dc);
                             const beside_row: usize = @intCast(cur_row + dr);
                             const this_row: usize = @intCast(cur_row);
-                            if (self.blocked[this_row * cols + beside_col] or
-                                self.blocked[beside_row * cols + @as(usize, @intCast(cur_col))]) continue;
+                            const horizontal = this_row * cols + beside_col;
+                            const vertical = beside_row * cols + @as(usize, @intCast(cur_col));
+                            if (self.blocked[horizontal] or self.isHardBlocked(horizontal, influence) or
+                                self.blocked[vertical] or self.isHardBlocked(vertical, influence)) continue;
                         }
                         const step_cost: f32 = if (dc != 0 and dr != 0) 1.41421356 else 1.0;
-                        const tentative = self.g_cost[current] + step_cost;
+                        const tentative = self.g_cost[current] + step_cost + self.dangerCost(neighbor, influence);
                         if (tentative >= self.g_cost[neighbor]) continue;
                         self.g_cost[neighbor] = tentative;
                         self.came_from[neighbor] = @intCast(current);
@@ -249,6 +290,27 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
                 }
             }
             return 0;
+        }
+
+        fn isHardBlocked(self: *Self, cell: usize, influence: ?HunterInfluence) bool {
+            const hunter = influence orelse return false;
+            if (hunter.hard_radius <= 0) return false;
+            return self.distanceSquaredToCell(cell, hunter.x, hunter.z) <= hunter.hard_radius * hunter.hard_radius;
+        }
+
+        fn dangerCost(self: *Self, cell: usize, influence: ?HunterInfluence) f32 {
+            const hunter = influence orelse return 0;
+            if (hunter.danger_radius <= 0 or hunter.danger_penalty <= 0) return 0;
+            const distance = @sqrt(self.distanceSquaredToCell(cell, hunter.x, hunter.z));
+            if (distance >= hunter.danger_radius) return 0;
+            return hunter.danger_penalty * (1.0 - distance / hunter.danger_radius);
+        }
+
+        fn distanceSquaredToCell(self: *Self, cell: usize, x: f32, z: f32) f32 {
+            const half = cell_size * 0.5;
+            const dx = @max(@abs(x - self.worldX(cell % cols)) - half, 0);
+            const dz = @max(@abs(z - self.worldZ(cell / cols)) - half, 0);
+            return dx * dx + dz * dz;
         }
 
         fn reconstruct(self: *Self, start: usize, goal: usize, out: []b3.b3Pos) usize {
@@ -350,9 +412,14 @@ fn aabbXZ(cx: f32, cz: f32, half: f32, box: level.Box) bool {
 // The shared level grid, baked once at startup. The clearance matches the
 // hunter's capsule radius so routes keep it clear of walls and furniture.
 pub var level_nav: Grid(level_cols, level_rows) = .{};
+pub var player_nav: Grid(level_cols, level_rows) = .{};
 
 pub fn buildLevel() void {
     level_nav.buildFromBoxes(&level.boxes, 0.5);
+    player_nav.buildFromBoxesWithOptions(&level.boxes, .{
+        .radius = 0.35,
+        .include_hunter_block = false,
+    });
 }
 
 test "grid marks walls and furniture but clears open floor" {
@@ -382,6 +449,152 @@ test "navmesh routes across rooms through doorways" {
     for (path[0..len]) |waypoint| {
         const cell = grid.cellAt(waypoint.x, waypoint.z) orelse return error.TestUnexpectedResult;
         try std.testing.expect(grid.isWalkable(cell));
+    }
+}
+
+test "player grid can enter W2 save room while hunter grid cannot" {
+    var hunter_grid: Grid(level_cols, level_rows) = .{};
+    var player_grid: Grid(level_cols, level_rows) = .{};
+    hunter_grid.buildFromBoxes(&level.boxes, 0.5);
+    player_grid.buildFromBoxesWithOptions(&level.boxes, .{
+        .radius = 0.35,
+        .include_hunter_block = false,
+    });
+
+    var path: [512]b3.b3Pos = undefined;
+    const target = level.save_room_target;
+    try std.testing.expect(level.isInSaveRoom(target.x, target.z));
+    try std.testing.expectEqual(@as(usize, 0), hunter_grid.findPath(-11, 0, target.x, target.z, path[0..]));
+    try std.testing.expect(player_grid.findPath(-11, 0, target.x, target.z, path[0..]) > 0);
+}
+
+test "buildFromBoxes clears blocked state when rebuilt" {
+    var grid: Grid(4, 4) = .{};
+    grid.blocked[0] = true;
+    grid.buildFromBoxes(&.{}, 0.5);
+    for (grid.blocked) |blocked| try std.testing.expect(!blocked);
+}
+
+test "hard hunter influence forces a footprint-safe detour" {
+    var grid: Grid(12, 12) = .{};
+    const start = grid.worldAt(6 * 12 + 1);
+    const goal = grid.worldAt(6 * 12 + 10);
+    const hunter = grid.worldAt(6 * 12 + 6);
+    const influence: HunterInfluence = .{
+        .x = hunter.x,
+        .z = hunter.z,
+        .hard_radius = 0.3,
+        .danger_radius = 0,
+        .danger_penalty = 0,
+    };
+
+    var direct: [64]b3.b3Pos = undefined;
+    var detour: [64]b3.b3Pos = undefined;
+    const direct_len = grid.findPath(start.x, start.z, goal.x, goal.z, direct[0..]);
+    const detour_len = grid.findPathWithInfluence(start.x, start.z, goal.x, goal.z, detour[0..], influence);
+    try std.testing.expect(direct_len > 0 and detour_len > 0);
+    var left_direct_row = false;
+    for (detour[0..detour_len]) |waypoint| {
+        left_direct_row = left_direct_row or waypoint.z != start.z;
+        const cell = grid.cellAt(waypoint.x, waypoint.z) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(!grid.isHardBlocked(cell, influence));
+    }
+    try std.testing.expect(left_direct_row);
+}
+
+test "soft hunter danger chooses a more distant route" {
+    var grid: Grid(12, 12) = .{};
+    const start = grid.worldAt(6 * 12 + 1);
+    const goal = grid.worldAt(6 * 12 + 10);
+    const hunter = grid.worldAt(6 * 12 + 6);
+    const influence: HunterInfluence = .{
+        .x = hunter.x,
+        .z = hunter.z,
+        .hard_radius = 0,
+        .danger_radius = 2.0,
+        .danger_penalty = 8.0,
+    };
+
+    var direct: [64]b3.b3Pos = undefined;
+    var safer: [64]b3.b3Pos = undefined;
+    const direct_len = grid.findPath(start.x, start.z, goal.x, goal.z, direct[0..]);
+    const safer_len = grid.findPathWithInfluence(start.x, start.z, goal.x, goal.z, safer[0..], influence);
+    try std.testing.expect(direct_len > 0 and safer_len > 0);
+
+    var direct_nearest = std.math.floatMax(f32);
+    for (direct[0..direct_len]) |waypoint| {
+        direct_nearest = @min(direct_nearest, std.math.hypot(waypoint.x - hunter.x, waypoint.z - hunter.z));
+    }
+    var safer_nearest = std.math.floatMax(f32);
+    for (safer[0..safer_len]) |waypoint| {
+        safer_nearest = @min(safer_nearest, std.math.hypot(waypoint.x - hunter.x, waypoint.z - hunter.z));
+    }
+    try std.testing.expect(safer_nearest > direct_nearest);
+}
+
+test "dynamic hard blocker prevents diagonal corner cutting" {
+    var grid: Grid(10, 10) = .{};
+    const start_cell = 4 * 10 + 4;
+    const goal_cell = 5 * 10 + 5;
+    const start = grid.worldAt(start_cell);
+    const goal = grid.worldAt(goal_cell);
+    const right = grid.worldAt(4 * 10 + 5);
+    const influence: HunterInfluence = .{
+        .x = right.x + 0.24,
+        .z = right.z - 0.24,
+        .hard_radius = 0.05,
+        .danger_radius = 0,
+        .danger_penalty = 0,
+    };
+
+    try std.testing.expect(grid.isHardBlocked(4 * 10 + 5, influence));
+    try std.testing.expect(!grid.isHardBlocked(start_cell, influence));
+    try std.testing.expect(!grid.isHardBlocked(goal_cell, influence));
+
+    var path: [32]b3.b3Pos = undefined;
+    try std.testing.expectEqual(@as(usize, 1), grid.findPath(start.x, start.z, goal.x, goal.z, path[0..]));
+    const len = grid.findPathWithInfluence(start.x, start.z, goal.x, goal.z, path[0..], influence);
+    try std.testing.expect(len > 1);
+}
+
+test "dynamic hard blocker reports no route through a sealed corridor" {
+    var grid: Grid(12, 12) = .{};
+    @memset(grid.blocked[0..], true);
+    for (0..12) |col| grid.blocked[6 * 12 + col] = false;
+
+    const start = grid.worldAt(6 * 12 + 1);
+    const goal = grid.worldAt(6 * 12 + 10);
+    const hunter = grid.worldAt(6 * 12 + 6);
+    var path: [32]b3.b3Pos = undefined;
+    const len = grid.findPathWithInfluence(start.x, start.z, goal.x, goal.z, path[0..], .{
+        .x = hunter.x,
+        .z = hunter.z,
+        .hard_radius = 0.1,
+        .danger_radius = 2.0,
+        .danger_penalty = 4.0,
+    });
+    try std.testing.expectEqual(@as(usize, 0), len);
+}
+
+test "default findPath matches a zero influence query" {
+    var grid: Grid(8, 8) = .{};
+    const start = grid.worldAt(0);
+    const goal = grid.worldAt(8 * 8 - 1);
+    const zero: HunterInfluence = .{
+        .x = 0,
+        .z = 0,
+        .hard_radius = 0,
+        .danger_radius = 0,
+        .danger_penalty = 0,
+    };
+    var default_path: [32]b3.b3Pos = undefined;
+    var influenced_path: [32]b3.b3Pos = undefined;
+    const default_len = grid.findPath(start.x, start.z, goal.x, goal.z, default_path[0..]);
+    const influenced_len = grid.findPathWithInfluence(start.x, start.z, goal.x, goal.z, influenced_path[0..], zero);
+    try std.testing.expectEqual(default_len, influenced_len);
+    for (default_path[0..default_len], influenced_path[0..influenced_len]) |expected, actual| {
+        try std.testing.expectEqual(expected.x, actual.x);
+        try std.testing.expectEqual(expected.z, actual.z);
     }
 }
 

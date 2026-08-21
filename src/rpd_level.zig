@@ -31,6 +31,14 @@ const wall_half_height: f32 = 2.65;
 const wall_half_width: f32 = 0.16;
 const slab_half_height: f32 = 0.20;
 
+// W2 is the save room. The route ends on open floor beside the pink desk
+// rather than at the typewriter itself, which sits on collidable furniture.
+pub const save_room_target = Vec3{ .x = -17.5, .y = 0, .z = -2.25 };
+
+pub fn isInSaveRoom(x: f32, z: f32) bool {
+    return x > -26 and x < -13 and z > -4 and z < 4;
+}
+
 const floor_color = rgba(0.18, 0.21, 0.23, 1);
 const wall_color = rgba(0.43, 0.44, 0.46, 1);
 const hall_color = rgba(0.51, 0.50, 0.48, 1);
