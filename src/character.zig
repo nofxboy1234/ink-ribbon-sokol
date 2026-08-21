@@ -59,6 +59,8 @@ const map_route_width: f32 = 0.16;
 const map_route_height: f32 = 0.04;
 const map_route_danger_radius: f32 = 6.0;
 const map_route_danger_penalty: f32 = 4.0;
+const map_direction_color = rgb(0.741, 0.576, 0.976); // Dracula purple #BD93F9
+const map_direction_instance_count = 3;
 
 // The roof lives in its own instance buffer so it can be hidden in map view.
 const level_instance_count = count: {
@@ -170,6 +172,7 @@ const RenderState = struct {
     level_instances: sg.Buffer = .{},
     roof_instance: sg.Buffer = .{},
     character_instance: sg.Buffer = .{},
+    map_direction_instances: sg.Buffer = .{},
     hunter_instance: sg.Buffer = .{},
     route_instances: sg.Buffer = .{},
     capsule_instances: sg.Buffer = .{},
@@ -653,6 +656,11 @@ fn initRenderer() void {
         .usage = .{ .stream_update = true },
         .label = "character-dynamic-instance",
     });
+    game.render.map_direction_instances = sg.makeBuffer(.{
+        .size = map_direction_instance_count * @sizeOf(Instance),
+        .usage = .{ .stream_update = true },
+        .label = "character-map-direction-instances",
+    });
     // The hunter is a second dynamic single-instance buffer, drawn in red.
     game.render.hunter_instance = sg.makeBuffer(.{
         .size = @sizeOf(Instance),
@@ -775,6 +783,8 @@ fn draw(position: b3.b3Pos) void {
         rgb(0.20, 0.694, 1.0), // Oxocarbon blue: #33B1FF
     );
     sg.updateBuffer(game.render.character_instance, sg.asRange(&instance));
+    const direction_instances = makeMapDirectionInstances(position, game.character.yaw);
+    sg.updateBuffer(game.render.map_direction_instances, sg.asRange(&direction_instances));
     if (game.debug.draw_physics) updateCapsuleInstances(position);
 
     // Interpolate during gameplay, but use the authoritative pose while paused
@@ -845,6 +855,9 @@ fn draw(position: b3.b3Pos) void {
         sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
     }
     drawInstances(game.render.character_instance, game.render.box_range, 0, 1, true);
+    if (game.map.active) {
+        drawInstances(game.render.map_direction_instances, game.render.box_range, 0, map_direction_instance_count, true);
+    }
     drawInstances(game.render.hunter_instance, game.render.box_range, 0, 1, true);
     if (!game.map.active) {
         drawInstances(game.render.roof_instance, game.render.box_range, 0, roof_instance_count, true);
@@ -933,30 +946,30 @@ fn drawHud(position: b3.b3Pos) void {
 }
 
 // Draw `count` instances of one mesh from the shared buffers. The debug
-    // capsule uses 3 records: cylinder + two spheres, offset through the buffer.
-    fn drawInstances(
-        instance_buffer: sg.Buffer,
-        range: sshape.ElementRange,
-        instance_offset: usize,
-        count: usize,
-        with_shadow_texture: bool,
-    ) void {
-        var bindings: sg.Bindings = .{};
-        bindings.vertex_buffers[0] = game.render.vertex_buffer;
-        bindings.vertex_buffers[1] = instance_buffer;
-        bindings.vertex_buffer_offsets[1] = @intCast(instance_offset);
-        bindings.index_buffer = game.render.index_buffer;
-        if (with_shadow_texture) {
-            bindings.views[shd.VIEW_shadow_map] = game.render.shadow_view;
-            bindings.samplers[shd.SMP_shadow_sampler] = game.render.shadow_sampler;
-        }
-        sg.applyBindings(bindings);
-        sg.draw(
-            @intCast(range.base_element),
-            @intCast(range.num_elements),
-            @intCast(count),
-        );
+// capsule uses 3 records: cylinder + two spheres, offset through the buffer.
+fn drawInstances(
+    instance_buffer: sg.Buffer,
+    range: sshape.ElementRange,
+    instance_offset: usize,
+    count: usize,
+    with_shadow_texture: bool,
+) void {
+    var bindings: sg.Bindings = .{};
+    bindings.vertex_buffers[0] = game.render.vertex_buffer;
+    bindings.vertex_buffers[1] = instance_buffer;
+    bindings.vertex_buffer_offsets[1] = @intCast(instance_offset);
+    bindings.index_buffer = game.render.index_buffer;
+    if (with_shadow_texture) {
+        bindings.views[shd.VIEW_shadow_map] = game.render.shadow_view;
+        bindings.samplers[shd.SMP_shadow_sampler] = game.render.shadow_sampler;
     }
+    sg.applyBindings(bindings);
+    sg.draw(
+        @intCast(range.base_element),
+        @intCast(range.num_elements),
+        @intCast(count),
+    );
+}
 
 fn noColorTargets() [8]sg.ColorTargetState {
     var colors: [8]sg.ColorTargetState = @splat(.{});
@@ -1006,6 +1019,36 @@ fn makeScaledInstance(center: Vec3, scale: Vec3, yaw: f32, color: Vec4) Instance
         .z = .{ .x = -scale.x * s, .y = 0, .z = scale.z * c, .w = center.z },
         .color = color,
     };
+}
+
+fn makeMapDirectionInstances(position: b3.b3Pos, yaw: f32) [map_direction_instance_count]Instance {
+    const forward = Vec3{ .x = @sin(yaw), .z = @cos(yaw) };
+    const arrow_y = position.y + character_half_extents.y + 0.12;
+    const tip = Vec3{
+        .x = position.x + forward.x * 1.8,
+        .y = arrow_y,
+        .z = position.z + forward.z * 1.8,
+    };
+    const shaft_center = Vec3{
+        .x = position.x + forward.x * 1.05,
+        .y = arrow_y,
+        .z = position.z + forward.z * 1.05,
+    };
+    const head_length: f32 = 0.72;
+    const head_angle: f32 = std.math.pi / 4.0;
+    var result: [map_direction_instance_count]Instance = undefined;
+    result[0] = makeScaledInstance(shaft_center, .{ .x = 0.16, .y = 0.08, .z = 1.5 }, yaw, map_direction_color);
+    for ([_]f32{ -head_angle, head_angle }, 0..) |offset, index| {
+        const branch_yaw = yaw + std.math.pi + offset;
+        const branch_forward = Vec3{ .x = @sin(branch_yaw), .z = @cos(branch_yaw) };
+        const center = Vec3{
+            .x = tip.x + branch_forward.x * head_length * 0.5,
+            .y = arrow_y,
+            .z = tip.z + branch_forward.z * head_length * 0.5,
+        };
+        result[index + 1] = makeScaledInstance(center, .{ .x = 0.16, .y = 0.08, .z = head_length }, branch_yaw, map_direction_color);
+    }
+    return result;
 }
 
 fn instanceAttr(offset: i32) sg.VertexAttrState {
