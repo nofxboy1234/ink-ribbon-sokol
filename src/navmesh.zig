@@ -429,16 +429,18 @@ pub fn buildLevel() void {
 // The player must reach the target while the hunter must remain in a different
 // component behind the hunter-only save-room perimeter.
 pub fn validateLevel() bool {
-    const target = level.current.save_room_target;
-    if (!level.current.validate() or !level.current.isInSaveRoom(target.x, target.z)) return false;
+    if (!level.current.validate()) return false;
     var path: [level_cols * level_rows]b3.b3Pos = undefined;
-    if (player_nav.findPath(
-        level.current.player_spawn.x,
-        level.current.player_spawn.z,
-        target.x,
-        target.z,
-        path[0..],
-    ) == 0) return false;
+    for (level.current.save_targets[0..level.current.save_target_count], 0..) |target, index| {
+        if (!level.current.isInSaveRoomIndex(index, target.x, target.z)) return false;
+        if (player_nav.findPath(
+            level.current.player_spawn.x,
+            level.current.player_spawn.z,
+            target.x,
+            target.z,
+            path[0..],
+        ) == 0) return false;
+    }
     if (level_nav.findPath(
         level.current.hunter_spawn.x,
         level.current.hunter_spawn.z,
@@ -446,13 +448,16 @@ pub fn validateLevel() bool {
         level.current.player_spawn.z,
         path[0..],
     ) == 0) return false;
-    return level_nav.findPath(
-        level.current.hunter_spawn.x,
-        level.current.hunter_spawn.z,
-        target.x,
-        target.z,
-        path[0..],
-    ) == 0;
+    for (level.current.save_targets[0..level.current.save_target_count]) |target| {
+        if (level_nav.findPath(
+            level.current.hunter_spawn.x,
+            level.current.hunter_spawn.z,
+            target.x,
+            target.z,
+            path[0..],
+        ) != 0) return false;
+    }
+    return true;
 }
 
 test "runtime level validation accepts the authored floor" {

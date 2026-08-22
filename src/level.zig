@@ -141,13 +141,12 @@ const interior_walls = [_]Wall{
     .{ .horizontal = false, .fixed = -12.6, .from = -1.1, .to = 5.4 },
     .{ .horizontal = false, .fixed = -11.0, .from = 5.4, .to = 9.7 },
     .{ .horizontal = false, .fixed = -8.2, .from = -13.8, .to = -10.5 },
-    .{ .horizontal = false, .fixed = -8.2, .from = -9.0, .to = -3.0 },
+    .{ .horizontal = false, .fixed = -8.2, .from = -8.5, .to = -3.0 },
 
     // West typewriter room, in the upper-right corner of the west wing.
     .{ .horizontal = true, .fixed = -10.5, .from = -12.0, .to = -8.2 },
     .{ .horizontal = true, .fixed = -3.0, .from = -12.0, .to = -8.2 },
-    .{ .horizontal = false, .fixed = -12.0, .from = -10.5, .to = -8.7 },
-    .{ .horizontal = false, .fixed = -12.0, .from = -7.3, .to = -3.0 },
+    .{ .horizontal = false, .fixed = -12.0, .from = -10.5, .to = -3.0 },
 
     // Main hall side rooms and the north cross-corridor.
     .{ .horizontal = true, .fixed = -9.2, .from = -5.8, .to = -2.2 },
@@ -246,6 +245,8 @@ pub const Level = struct {
     save_room_target: Vec3 = .{},
     save_fixtures: [2]Vec3 = @splat(.{}),
     save_fixture_count: usize = 0,
+    save_targets: [2]Vec3 = @splat(.{}),
+    save_target_count: usize = 0,
     save_bounds: [2]SaveBounds = @splat(.{ .min_x = 0, .max_x = 0, .min_z = 0, .max_z = 0 }),
     // Retained for the map/game API; these describe the primary main-hall save.
     save_min_x: f32 = 0,
@@ -260,10 +261,23 @@ pub const Level = struct {
     }
 
     pub fn isInSaveRoom(self: *const Level, x: f32, z: f32) bool {
-        for (self.save_bounds) |bounds| {
-            if (x > bounds.min_x and x < bounds.max_x and z > bounds.min_z and z < bounds.max_z) return true;
+        for (0..self.save_target_count) |index| {
+            if (self.isInSaveRoomIndex(index, x, z)) return true;
         }
         return false;
+    }
+
+    pub fn isInSaveRoomIndex(self: *const Level, index: usize, x: f32, z: f32) bool {
+        if (index >= self.save_target_count) return false;
+        const bounds = self.save_bounds[index];
+        return x > bounds.min_x and x < bounds.max_x and z > bounds.min_z and z < bounds.max_z;
+    }
+
+    pub fn saveRoomAt(self: *const Level, x: f32, z: f32) ?usize {
+        for (0..self.save_target_count) |index| {
+            if (self.isInSaveRoomIndex(index, x, z)) return index;
+        }
+        return null;
     }
 
     pub fn graphDistance(self: *const Level, from: usize, to: usize) ?usize {
@@ -297,7 +311,7 @@ pub const Level = struct {
         if (!self.walkable[spawn_row * tile_cols + spawn_col]) return false;
         var barriers: usize = 0;
         for (self.boxSlice()) |box| barriers += @intFromBool(box.hunter_block);
-        return barriers == 2 and self.save_fixture_count == 2;
+        return barriers == 2 and self.save_fixture_count == 2 and self.save_target_count == 2;
     }
 
     fn addBox(self: *Level, box: Box) void {
@@ -371,7 +385,10 @@ fn chooseObjectives(result: *Level) void {
     result.save_max_x = result.save_bounds[0].max_x;
     result.save_min_z = result.save_bounds[0].min_z;
     result.save_max_z = result.save_bounds[0].max_z;
-    result.save_room_target = .{ .x = -0.5, .z = 4.2 };
+    result.save_targets[0] = .{ .x = -0.5, .z = 4.2 };
+    result.save_targets[1] = .{ .x = -10.5, .z = -9.3 };
+    result.save_target_count = 2;
+    result.save_room_target = result.save_targets[0];
 }
 
 fn buildGeometry(result: *Level) void {
@@ -409,7 +426,7 @@ fn buildGeometry(result: *Level) void {
     addTypewriter(result, -2.3, 3.3);
 
     // West save room has one doorway in its west wall.
-    result.addBox(hunterDoorZ(-12.0, -8.0, 0.7));
+    result.addBox(hunterDoorZ(-8.2, -9.5, 1.0));
     addTypewriter(result, -9.5, -7.7);
 
     // First-floor-only stair treatment. Each ramp rises into an existing solid
@@ -463,7 +480,7 @@ fn buildSurfaces(result: *Level) void {
 fn addTypewriter(result: *Level, x: f32, z: f32) void {
     result.save_fixtures[result.save_fixture_count] = .{ .x = x, .z = z };
     result.save_fixture_count += 1;
-    result.addBox(solid(x, 0.55, z, 1.0, 0.55, 0.62, oxocarbon_pink));
+    result.addBox(solid(x, 0.55, z, 0.8, 0.55, 0.62, oxocarbon_pink));
     result.addBox(visual(x, 1.16, z, 0.28, 0.06, 0.18, typewriter_color));
 }
 
@@ -609,6 +626,7 @@ test "RPD first floor validates structurally" {
     try std.testing.expectEqual(room_capacity, current.room_count);
     try std.testing.expectEqual(@as(usize, 17), current.edge_count);
     try std.testing.expectEqual(@as(usize, 2), current.save_fixture_count);
+    try std.testing.expectEqual(@as(usize, 2), current.save_target_count);
 }
 
 test "player starts in south entrance and hunter starts east" {
@@ -625,6 +643,9 @@ test "both save locations have hunter barriers" {
     try std.testing.expectEqual(@as(usize, 2), barriers);
     try std.testing.expect(current.isInSaveRoom(-1.0, 4.1));
     try std.testing.expect(current.isInSaveRoom(-9.5, -7.7));
+    try std.testing.expectEqual(@as(?usize, 0), current.saveRoomAt(-1.0, 4.1));
+    try std.testing.expectEqual(@as(?usize, 1), current.saveRoomAt(-9.5, -7.7));
+    try std.testing.expectEqual(@as(?usize, null), current.saveRoomAt(20.0, 0.0));
 }
 
 test "six stair ramps are pitched and terminate on first floor" {

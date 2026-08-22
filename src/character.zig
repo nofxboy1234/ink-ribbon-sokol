@@ -56,6 +56,8 @@ const HudNotice = enum { none, caught, saved, save_failed, deleted, hunter_frien
 const map_pan_speed: f32 = 25.0; // metres/second the map pans with WASD
 const map_pan_x_max: f32 = 40.0; // keep the pan center near the level
 const map_pan_z_max: f32 = 30.0;
+const map_half_width: f32 = 36.0;
+const map_min_half_height: f32 = 19.5;
 const map_route_capacity = navmesh.level_cols * navmesh.level_rows;
 const map_route_width: f32 = 0.16;
 const map_route_height: f32 = 0.04;
@@ -63,6 +65,7 @@ const map_route_danger_radius: f32 = 6.0;
 const map_route_danger_penalty: f32 = 4.0;
 const map_direction_color = rgb(0.741, 0.576, 0.976); // Dracula purple #BD93F9
 const map_direction_instance_count = 3;
+const map_save_capacity = 2;
 
 const Instance = extern struct {
     // One GPU instance record: 3 transform axes (xyz) + origin (w), then color.
@@ -141,6 +144,7 @@ const MenuState = struct {
 const MapState = struct {
     active: bool = false,
     hunter_paused: bool = true,
+    selected_save: usize = 0,
     pan: Vec3 = .{},
     route: [map_route_capacity]b3.b3Pos = undefined,
     route_instances: [map_route_capacity]Instance = undefined,
@@ -172,6 +176,7 @@ const RenderState = struct {
     roof_instance: sg.Buffer = .{},
     character_instance: sg.Buffer = .{},
     map_direction_instances: sg.Buffer = .{},
+    map_save_instances: sg.Buffer = .{},
     hunter_instance: sg.Buffer = .{},
     route_instances: sg.Buffer = .{},
     capsule_instances: sg.Buffer = .{},
@@ -410,6 +415,7 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                         game.map.hunter_paused = true;
                         rebuildMapRoute();
                     }
+                    sapp.lockMouse(!game.map.active);
                     // Drop held keys so the map doesn't immediately pan and
                     // gameplay doesn't resume with the character moving.
                     game.input = .{};
@@ -453,7 +459,11 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 else => {},
             }
         },
-        .MOUSE_DOWN => sapp.lockMouse(true),
+        .MOUSE_DOWN => if (game.map.active and value.mouse_button == .LEFT) {
+            selectMapSaveAt(value.mouse_x, value.mouse_y);
+        } else {
+            sapp.lockMouse(true);
+        },
         .MOUSE_MOVE => if (sapp.mouseLocked()) {
             game.input.mouse_delta.x += value.mouse_dx;
             game.input.mouse_delta.y += value.mouse_dy;
@@ -677,12 +687,13 @@ fn rebuildMapRoute() void {
     game.map.route_len = 0;
     game.map.route_segment_count = 0;
     game.map.route_upload_pending = true;
-    if (level.current.isInSaveRoom(game.character.position.x, game.character.position.z)) {
+    const selected = @min(game.map.selected_save, level.current.save_target_count - 1);
+    if (level.current.isInSaveRoomIndex(selected, game.character.position.x, game.character.position.z)) {
         game.map.route_status = .arrived;
         return;
     }
 
-    const target = level.current.save_room_target;
+    const target = level.current.save_targets[selected];
     const influence = navmesh.HunterInfluence{
         .x = game.hunter.position.x,
         .z = game.hunter.position.z,
@@ -737,6 +748,26 @@ fn rebuildMapRoute() void {
         from = waypoint;
     }
     game.map.route_status = .found;
+}
+
+fn mapHalfHeight() f32 {
+    return @max(map_min_half_height, map_half_width / (sapp.widthf() / @max(sapp.heightf(), 1)));
+}
+
+fn mapWorldAtScreen(screen_x: f32, screen_y: f32) Vec3 {
+    const normalized_x = screen_x / @max(sapp.widthf(), 1) * 2.0 - 1.0;
+    const normalized_y = screen_y / @max(sapp.heightf(), 1) * 2.0 - 1.0;
+    return .{
+        .x = game.map.pan.x + normalized_x * map_half_width,
+        .z = game.map.pan.z + normalized_y * mapHalfHeight(),
+    };
+}
+
+fn selectMapSaveAt(screen_x: f32, screen_y: f32) void {
+    const world = mapWorldAtScreen(screen_x, screen_y);
+    const selected = level.current.saveRoomAt(world.x, world.z) orelse return;
+    game.map.selected_save = selected;
+    rebuildMapRoute();
 }
 
 fn uploadMapRoute() void {
@@ -814,6 +845,11 @@ fn initRenderer() void {
         .size = map_direction_instance_count * @sizeOf(Instance),
         .usage = .{ .stream_update = true },
         .label = "character-map-direction-instances",
+    });
+    game.render.map_save_instances = sg.makeBuffer(.{
+        .size = map_save_capacity * @sizeOf(Instance),
+        .usage = .{ .stream_update = true },
+        .label = "character-map-save-instances",
     });
     // The hunter is a second dynamic single-instance buffer, drawn in red.
     game.render.hunter_instance = sg.makeBuffer(.{
@@ -949,6 +985,17 @@ fn draw(position: b3.b3Pos) void {
     sg.updateBuffer(game.render.character_instance, sg.asRange(&instance));
     const direction_instances = makeMapDirectionInstances(position, game.character.yaw);
     sg.updateBuffer(game.render.map_direction_instances, sg.asRange(&direction_instances));
+    var save_instances: [map_save_capacity]Instance = undefined;
+    for (level.current.save_targets[0..level.current.save_target_count], 0..) |target, index| {
+        const selected = index == game.map.selected_save;
+        save_instances[index] = makeScaledInstance(
+            .{ .x = target.x, .y = level.floor_height + 0.18, .z = target.z },
+            if (selected) .{ .x = 1.2, .y = 0.08, .z = 1.2 } else .{ .x = 0.75, .y = 0.06, .z = 0.75 },
+            0,
+            if (selected) rgb(1.0, 0.82, 0.22) else rgb(1.0, 0.49, 0.71),
+        );
+    }
+    sg.updateBuffer(game.render.map_save_instances, sg.asRange(save_instances[0..level.current.save_target_count]));
     if (game.debug.draw_physics) updateCapsuleInstances(position);
 
     // Interpolate during gameplay, but use the authoritative pose while paused
@@ -1012,6 +1059,7 @@ fn draw(position: b3.b3Pos) void {
         if (game.map.route_segment_count > 0) {
             drawInstances(game.render.route_instances, game.render.box_range, 0, game.map.route_segment_count, false);
         }
+        drawInstances(game.render.map_save_instances, game.render.box_range, 0, level.current.save_target_count, false);
         drawInstances(game.render.map_direction_instances, game.render.box_range, 0, map_direction_instance_count, false);
 
         // Map actors use flat instance colors while still writing depth.
@@ -1076,20 +1124,22 @@ fn drawHud(position: b3.b3Pos) void {
     if (game.map.active) {
         sdtx.pos(1.0, 1.0);
         sdtx.color3b(255, 220, 120);
-        sdtx.print("MAP (WASD pans, P toggles hunter, M exits)", .{});
+        sdtx.print("MAP (click save room, WASD pans, P hunter, M exits)", .{});
         sdtx.pos(1.0, 2.2);
         sdtx.print("HUNTER: {s} / {s}", .{
             if (game.map.hunter_paused) "PAUSED" else "MOVING",
             if (game.hunter_friendly) "FRIENDLY" else "HOSTILE",
         });
+        sdtx.pos(1.0, 3.4);
+        sdtx.print("TARGET SAVE: {d}", .{game.map.selected_save + 1});
         switch (game.map.route_status) {
             .arrived => {
-                sdtx.pos(1.0, 3.4);
+                sdtx.pos(1.0, 4.6);
                 sdtx.color3b(80, 250, 123);
                 sdtx.print("SAVE ROOM REACHED", .{});
             },
             .no_path => {
-                sdtx.pos(1.0, 3.4);
+                sdtx.pos(1.0, 4.6);
                 sdtx.color3b(255, 85, 85);
                 sdtx.print("NO SAFE ROUTE", .{});
             },
@@ -1294,14 +1344,12 @@ fn instanceAttr(offset: i32) sg.VertexAttrState {
 // Orthographic top-down view of the level, centred on the map pan position.
 // North (-Z) points up on screen; the roof is hidden so interiors are visible.
 fn mapViewProjection() Mat4 {
-    const aspect = sapp.widthf() / @max(sapp.heightf(), 1);
-    const half_w: f32 = 36.0; // visible half-width in metres (covers x +-26)
-    const half_h = @max(19.5, half_w / aspect); // covers z +-19
+    const half_h = mapHalfHeight(); // covers z +-19
     const center = game.map.pan;
     const eye = Vec3{ .x = center.x, .y = 80, .z = center.z };
     const at = Vec3{ .x = center.x, .y = 0, .z = center.z };
     const view = Mat4.lookAtRh(eye, at, .{ .x = 0, .y = 0, .z = -1 });
-    const projection = Mat4.orthoOffCenterRh(-half_w, half_w, -half_h, half_h, 1, 200);
+    const projection = Mat4.orthoOffCenterRh(-map_half_width, map_half_width, -half_h, half_h, 1, 200);
     return Mat4.mul(view, projection);
 }
 
