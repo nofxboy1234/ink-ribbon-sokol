@@ -45,8 +45,11 @@ const hunter_color = Vec4{ .x = 0.92, .y = 0.12, .z = 0.14, .w = 1 };
 const player_spawn_y: f32 = 0.9;
 const hunter_spawn_y: f32 = 1.5;
 
-// How long the "returned to last save" HUD notice stays up after a catch.
-const catch_notice_seconds: f32 = 3;
+// How long a HUD notice (catch / save result) stays on screen.
+const notice_seconds: f32 = 3;
+
+// Transient centered HUD messages.
+const HudNotice = enum { none, caught, saved, save_failed, deleted };
 
 // Top-down map view tuning.
 const map_pan_speed: f32 = 25.0; // metres/second the map pans with WASD
@@ -200,8 +203,9 @@ const GameState = struct {
     character: controller.State = initialCharacter(),
     hunter_config: hunter.Config = .{},
     hunter: hunter.State = initialHunter(),
-    // Seconds left on the "returned to last save" notice after a catch.
-    catch_notice: f32 = 0,
+    // Current transient HUD message and its remaining seconds.
+    notice: HudNotice = .none,
+    notice_timer: f32 = 0,
     quick_turn: QuickTurn = .{},
     mover_scratch: controller.MoverScratch = .{},
     camera_config: camera.Config = .{},
@@ -258,7 +262,10 @@ fn updateQuickTurn(dt: f32) void {
 fn frame() callconv(.c) void {
     const frame_time: f32 = @floatCast(@min(sapp.frameDuration(), max_frame_dt));
     game.clock.addFrame(frame_time);
-    if (game.catch_notice > 0) game.catch_notice = @max(0, game.catch_notice - frame_time);
+    if (game.notice_timer > 0) {
+        game.notice_timer = @max(0, game.notice_timer - frame_time);
+        if (game.notice_timer == 0) game.notice = .none;
+    }
 
     // Menus freeze the round exactly like map mode does.
     const gameplay_active = !game.map.active and game.menu.kind == .none;
@@ -357,7 +364,11 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     game.input.back = down;
                 },
                 .A => game.input.left = down,
-                .D => game.input.right = down,
+                .D => if (game.menu.kind != .none) {
+                    if (down and !value.key_repeat) deleteSelectedSlot();
+                } else {
+                    game.input.right = down;
+                },
                 .LEFT_SHIFT, .RIGHT_SHIFT => if (down and !value.key_repeat) {
                     // Arm running. It only takes effect while a direction is
                     // held and is never toggled off by Shift again.
@@ -479,18 +490,52 @@ fn loadValidatedLevel() void {
     if (!navmesh.validateLevel()) @panic("authored level failed navmesh validation");
 }
 
-// Place both actors at authored room centres, then reset the round.
-fn spawnPlayerAndHunter() void {
-    const player_spawn = b3.b3Pos{ .x = level.current.player_spawn.x, .y = player_spawn_y, .z = level.current.player_spawn.z };
-    game.character = controller.State.init(player_spawn);
-    game.character.yaw = std.math.pi; // face -Z, matching the initial camera
-    resetHunter(player_spawn);
+// Index of the most recently written occupied save slot, if any.
+fn latestSaveIndex() ?usize {
+    var best_index: ?usize = null;
+    var best_timestamp: i64 = std.math.minInt(i64);
+    for (saves.slots, 0..) |slot, index| {
+        if (slot.occupied and slot.timestamp > best_timestamp) {
+            best_timestamp = slot.timestamp;
+            best_index = index;
+        }
+    }
+    return best_index;
+}
+
+// Teleport the player onto a recorded pose. The static world never changes,
+// so a saved position is always a valid capsule spot.
+fn placePlayerFromSlot(slot: saves.Slot) void {
+    game.character.previous_position = .{ .x = slot.x, .y = slot.y, .z = slot.z };
+    game.character.position = .{ .x = slot.x, .y = slot.y, .z = slot.z };
+    game.character.velocity = .{};
+    game.character.grounded = false;
+    game.character.yaw = slot.yaw;
+    // Re-seat the shoulder camera behind the restored heading.
     game.camera = .{};
+    game.camera.yaw = slot.yaw;
+    game.quick_turn = .{};
+}
+
+// Place both actors, then reset the round. The player resumes from the most
+// recent save when one exists; otherwise they start at the level's spawn.
+fn spawnPlayerAndHunter() void {
+    if (latestSaveIndex()) |index| {
+        placePlayerFromSlot(saves.slots[index]);
+    } else {
+        const player_spawn = b3.b3Pos{ .x = level.current.player_spawn.x, .y = player_spawn_y, .z = level.current.player_spawn.z };
+        game.character = controller.State.init(player_spawn);
+        // face -Z, matching the initial camera
+        game.character.yaw = std.math.pi;
+        game.camera = .{};
+        game.quick_turn = .{};
+    }
+    resetHunter(game.character.position);
     game.clock = .{};
     game.map = .{};
     game.menu = .{};
-    game.catch_notice = 0;
-    game.quick_turn = .{};
+    game.notice = .none;
+    game.notice_timer = 0;
     game.input = .{};
 }
 
@@ -516,37 +561,19 @@ fn hunterContacted() bool {
 // level start when nothing has been saved yet), and the hunter returns to his
 // own spawn room so the chase restarts fair.
 fn respawnAfterCatch() void {
-    var best_index: ?usize = null;
-    var best_timestamp: i64 = std.math.minInt(i64);
-    for (saves.slots, 0..) |slot, index| {
-        if (slot.occupied and slot.timestamp > best_timestamp) {
-            best_timestamp = slot.timestamp;
-            best_index = index;
-        }
-    }
-
-    if (best_index) |index| {
-        const slot = saves.slots[index];
-        // The static world never changes, so a recorded pose is always a
-        // valid capsule spot.
-        game.character.previous_position = .{ .x = slot.x, .y = slot.y, .z = slot.z };
-        game.character.position = .{ .x = slot.x, .y = slot.y, .z = slot.z };
-        game.character.velocity = .{};
-        game.character.grounded = false;
-        game.character.yaw = slot.yaw;
-        game.catch_notice = catch_notice_seconds;
+    if (latestSaveIndex()) |index| {
+        placePlayerFromSlot(saves.slots[index]);
     } else {
         const player_spawn = b3.b3Pos{ .x = level.current.player_spawn.x, .y = player_spawn_y, .z = level.current.player_spawn.z };
         game.character = controller.State.init(player_spawn);
         game.character.yaw = std.math.pi;
-        game.catch_notice = catch_notice_seconds;
+        game.camera = .{};
+        game.quick_turn = .{};
     }
 
     resetHunter(game.character.position);
-    // Re-seat the shoulder camera behind the respawn heading.
-    game.camera = .{};
-    game.camera.yaw = game.character.yaw;
-    game.quick_turn = .{};
+    game.notice = .caught;
+    game.notice_timer = notice_seconds;
     game.input = .{};
 }
 
@@ -575,6 +602,20 @@ fn moveMenuSlot(delta: i32) void {
     game.menu.slot = @intCast(@mod(current + delta + count, count));
 }
 
+// Clear the selected slot (when it holds a save) and persist the change.
+fn deleteSelectedSlot() void {
+    if (!saves.slots[game.menu.slot].occupied) return;
+    saves.slots[game.menu.slot] = .{};
+    if (saves.writeToCwd(app_io.io())) |_| {
+        game.notice = .deleted;
+        game.notice_timer = notice_seconds;
+    } else |_| {
+        // The slot is cleared in memory either way, but flag the disk trouble.
+        game.notice = .save_failed;
+        game.notice_timer = notice_seconds;
+    }
+}
+
 // Apply the highlighted slot: write the player's pose into it (save) or
 // teleport the player to it (load), then close the window.
 fn confirmMenu() void {
@@ -589,22 +630,18 @@ fn confirmMenu() void {
                 .yaw = game.character.yaw,
                 .timestamp = std.Io.Timestamp.now(app_io.io(), .real).toSeconds(),
             };
-            saves.writeToCwd(app_io.io()) catch {};
+            if (saves.writeToCwd(app_io.io())) |_| {
+                game.notice = .saved;
+                game.notice_timer = notice_seconds;
+            } else |_| {
+                game.notice = .save_failed;
+                game.notice_timer = notice_seconds;
+            }
         },
         .load => {
             const slot = saves.slots[game.menu.slot];
             if (slot.occupied) {
-                // The static world never changes between save and load, so a
-                // recorded pose is always a valid capsule spot.
-                game.character.previous_position = .{ .x = slot.x, .y = slot.y, .z = slot.z };
-                game.character.position = .{ .x = slot.x, .y = slot.y, .z = slot.z };
-                game.character.velocity = .{};
-                game.character.grounded = false;
-                game.character.yaw = slot.yaw;
-                // Re-seat the shoulder camera behind the loaded heading.
-                game.camera = .{};
-                game.camera.yaw = slot.yaw;
-                game.quick_turn = .{};
+                placePlayerFromSlot(slot);
             }
         },
     }
@@ -1034,11 +1071,12 @@ fn drawHud(position: b3.b3Pos) void {
         sdtx.pos(1.0, 1.0);
         sdtx.print("POS {d:.1} {d:.1} {d:.1}", .{ position.x, position.y, position.z });
     }
-    if (game.catch_notice > 0) {
-        const notice = "CAUGHT - RETURNED TO LAST SAVE";
-        sdtx.pos(sapp.widthf() / 8.0 / 2.0 - @as(f32, @floatFromInt(notice.len)) / 2.0, 2.0);
-        sdtx.color3b(255, 60, 60);
-        sdtx.print(notice, .{});
+    switch (game.notice) {
+        .caught => drawNotice("CAUGHT - RETURNED TO LAST SAVE", 255, 60, 60),
+        .saved => drawNotice("GAME SAVED", 80, 250, 123),
+        .deleted => drawNotice("SAVE DELETED", 255, 220, 120),
+        .save_failed => drawNotice("SAVE FAILED", 255, 60, 60),
+        .none => {},
     }
     if (game.menu.kind != .none) {
         drawSaveMenu();
@@ -1049,6 +1087,13 @@ fn drawHud(position: b3.b3Pos) void {
         sdtx.print(prompt, .{});
     }
     sdtx.draw();
+}
+
+// Centered transient HUD message on its own row near the top of the screen.
+fn drawNotice(text: []const u8, r: u8, g: u8, b: u8) void {
+    sdtx.pos(sapp.widthf() / 8.0 / 2.0 - @as(f32, @floatFromInt(text.len)) / 2.0, 2.0);
+    sdtx.color3b(r, g, b);
+    sdtx.print("{s}", .{text});
 }
 
 // Centered RE2R-style slot list: eight numbered lines, cursor on the selected
@@ -1077,7 +1122,7 @@ fn drawSaveMenu() void {
             sdtx.print("SLOT {d}   EMPTY", .{index + 1});
         }
     }
-    const footer = "W/S SELECT   SPACE CONFIRM   ESC CANCEL";
+    const footer = "W/S SELECT   SPACE CONFIRM   D DELETE   ESC CANCEL";
     sdtx.pos(text_w / 2.0 - @as(f32, @floatFromInt(footer.len)) / 2.0, text_h / 2.0 + 5.0);
     sdtx.color3b(160, 160, 160);
     sdtx.print(footer, .{});
