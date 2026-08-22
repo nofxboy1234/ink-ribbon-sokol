@@ -8,7 +8,7 @@ const std = @import("std");
 const b3 = @import("box3d");
 const sokol = @import("sokol");
 const math = @import("math.zig");
-const level = @import("rpd_level.zig");
+const level = @import("level.zig");
 const controller = @import("character_controller.zig");
 const hunter = @import("hunter.zig");
 const navmesh = @import("navmesh.zig");
@@ -197,7 +197,6 @@ const GameState = struct {
 };
 
 var game: GameState = .{};
-var level_seed_state: u64 = 0x9e3779b97f4a7c15;
 
 fn initialCharacter() controller.State {
     var character = controller.State.init(.{ .x = 0, .y = 0.9, .z = 17 });
@@ -222,7 +221,7 @@ fn init() callconv(.c) void {
         .logger = .{ .func = slog.func },
     });
     seedSpawnRandomness();
-    generateValidatedLevel();
+    loadValidatedLevel();
     initPhysics();
     initRenderer();
     spawnPlayerAndHunter();
@@ -363,7 +362,7 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     game.map.hunter_paused = !game.map.hunter_paused;
                 },
                 .R => if (down and !value.key_repeat and game.outcome != .playing) {
-                    restartWithNewLevel();
+                    restartLevel();
                 },
                 .E => if (down and !value.key_repeat) {
                     // RE2R quick-turn: while walking backward, swing the
@@ -426,40 +425,30 @@ fn addStaticBox(box: level.Box) void {
 }
 
 // Mix ASLR-derived addresses into the PRNG seed: both a stack local and the
-// global game state live at different addresses in each process.
+// global game state live at different addresses in each process. The level is
+// hand-authored, so only the hunter's patrol randomness derives from this.
 fn seedSpawnRandomness() void {
     var stack_marker: u32 = 0;
     const entropy = @as(u64, @bitCast(@intFromPtr(&stack_marker))) ^ @as(u64, @bitCast(@intFromPtr(&game)));
     hunter.seedRandom(@truncate(entropy));
-    level_seed_state = if (entropy == 0) 0x9e3779b97f4a7c15 else entropy;
 }
 
-fn nextLevelSeed() u64 {
-    level_seed_state ^= level_seed_state >> 12;
-    level_seed_state ^= level_seed_state << 25;
-    level_seed_state ^= level_seed_state >> 27;
-    return level_seed_state *% 2685821657736338717;
+fn loadValidatedLevel() void {
+    level.load();
+    navmesh.buildLevel();
+    if (!navmesh.validateLevel()) @panic("authored level failed navmesh validation");
 }
 
-fn generateValidatedLevel() void {
-    for (0..64) |_| {
-        level.regenerate(nextLevelSeed());
-        navmesh.buildLevel();
-        if (navmesh.validateLevel()) return;
-    }
-    @panic("procedural level generator failed validation");
-}
-
-fn restartWithNewLevel() void {
+fn restartLevel() void {
     b3.b3DestroyWorld(game.world);
     game.world = b3.b3_nullWorldId;
-    generateValidatedLevel();
+    loadValidatedLevel();
     initPhysics();
     uploadLevelInstances();
     spawnPlayerAndHunter();
 }
 
-// Place both actors at generated room centres, then reset the round.
+// Place both actors at authored room centres, then reset the round.
 fn spawnPlayerAndHunter() void {
     const player_spawn = b3.b3Pos{ .x = level.current.player_spawn.x, .y = player_spawn_y, .z = level.current.player_spawn.z };
     const hunter_spawn = b3.b3Pos{ .x = level.current.hunter_spawn.x, .y = hunter_spawn_y, .z = level.current.hunter_spawn.z };
@@ -608,7 +597,7 @@ fn initRenderer() void {
     game.render.index_buffer = sg.makeBuffer(sshape.indexBufferDesc(builder));
 
     // Runtime-sized instance counts are uploaded into capacity buffers whenever
-    // a new procedural level is generated. The roof remains separate for map mode.
+    // the level is (re)loaded. The roof remains separate for map mode.
     game.render.level_instances = sg.makeBuffer(.{
         .size = level.max_boxes * @sizeOf(Instance),
         .usage = .{ .stream_update = true },
@@ -805,7 +794,7 @@ fn draw(position: b3.b3Pos) void {
     const fs_params: shd.DisplayFsParams = .{
         .light_direction = Vec3.normalized(.{ .x = 20, .y = 32, .z = -24 }),
         .eye_position = game.camera.eye,
-        // Fixture positions and radii are derived from generated room bounds.
+        // Fixture positions and radii are derived from authored room bounds.
         .indoor_light_0 = level.current.lights[0],
         .indoor_light_1 = level.current.lights[1],
         .indoor_light_2 = level.current.lights[2],

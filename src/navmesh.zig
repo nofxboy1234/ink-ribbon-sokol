@@ -11,7 +11,7 @@
 
 const std = @import("std");
 const b3 = @import("box3d");
-const level = @import("rpd_level.zig");
+const level = @import("level.zig");
 
 // Level footprint and resolution. x in [-26, 26] -> 104 cells, z in [-19, 19]
 // -> 76 cells at 0.5 m.
@@ -446,7 +446,8 @@ pub fn validateLevel() bool {
 }
 
 test "grid marks walls and furniture but clears open floor" {
-    const generated = level.generate(0x1234);
+    level.load();
+    const generated = &level.current;
     var grid: Grid(level_cols, level_rows) = .{};
     grid.buildFromBoxes(generated.boxSlice(), 0.5);
 
@@ -459,7 +460,8 @@ test "grid marks walls and furniture but clears open floor" {
 }
 
 test "navmesh routes across rooms through doorways" {
-    const generated = level.generate(0x5678);
+    level.load();
+    const generated = &level.current;
     var grid: Grid(level_cols, level_rows) = .{};
     grid.buildFromBoxesWithOptions(generated.boxSlice(), .{ .radius = 0.35, .include_hunter_block = false });
 
@@ -478,36 +480,35 @@ test "navmesh routes across rooms through doorways" {
     }
 }
 
-test "procedural levels keep save reachable for player and excluded from hunter" {
+test "authored level keeps save reachable for player and excluded from hunter" {
     var path: [level_cols * level_rows]b3.b3Pos = undefined;
-    for (1..65) |seed| {
-        const generated = level.generate(seed);
-        var hunter_grid: Grid(level_cols, level_rows) = .{};
-        var player_grid: Grid(level_cols, level_rows) = .{};
-        hunter_grid.buildFromBoxes(generated.boxSlice(), 0.5);
-        player_grid.buildFromBoxesWithOptions(generated.boxSlice(), .{
-            .radius = 0.35,
-            .include_hunter_block = false,
-        });
+    level.load();
+    const generated = &level.current;
+    var hunter_grid: Grid(level_cols, level_rows) = .{};
+    var player_grid: Grid(level_cols, level_rows) = .{};
+    hunter_grid.buildFromBoxes(generated.boxSlice(), 0.5);
+    player_grid.buildFromBoxesWithOptions(generated.boxSlice(), .{
+        .radius = 0.35,
+        .include_hunter_block = false,
+    });
 
-        const target = generated.save_room_target;
-        try std.testing.expect(generated.isInSaveRoom(target.x, target.z));
-        try std.testing.expectEqual(@as(usize, 0), hunter_grid.findPath(
-            generated.hunter_spawn.x,
-            generated.hunter_spawn.z,
-            target.x,
-            target.z,
-            path[0..],
-        ));
-        const player_path_len = player_grid.findPath(
-            generated.player_spawn.x,
-            generated.player_spawn.z,
-            target.x,
-            target.z,
-            path[0..],
-        );
-        try std.testing.expect(player_path_len > 0);
-    }
+    const target = generated.save_room_target;
+    try std.testing.expect(generated.isInSaveRoom(target.x, target.z));
+    try std.testing.expectEqual(@as(usize, 0), hunter_grid.findPath(
+        generated.hunter_spawn.x,
+        generated.hunter_spawn.z,
+        target.x,
+        target.z,
+        path[0..],
+    ));
+    const player_path_len = player_grid.findPath(
+        generated.player_spawn.x,
+        generated.player_spawn.z,
+        target.x,
+        target.z,
+        path[0..],
+    );
+    try std.testing.expect(player_path_len > 0);
 }
 
 test "buildFromBoxes clears blocked state when rebuilt" {
@@ -671,7 +672,8 @@ test "navmesh routes through a door gap" {
 }
 
 test "nearest walkable snaps a blocked goal out of the wall" {
-    const generated = level.generate(99);
+    level.load();
+    const generated = &level.current;
     var grid: Grid(level_cols, level_rows) = .{};
     grid.buildFromBoxes(generated.boxSlice(), 0.5);
 

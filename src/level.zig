@@ -1,9 +1,10 @@
-//! Deterministic procedural single-floor level generation.
+//! Hand-authored single-floor level.
 //!
-//! The 52 x 38 metre footprint and the navigation grid never change. Rooms are
-//! placed in a 4 x 3 regional grid, joined by a randomized connected graph and
-//! carved together with two-tile-wide orthogonal corridors. Geometry, actor
-//! spawns, save-room bounds and lights all live in one runtime `Level` value.
+//! The 52 x 38 metre footprint and the navigation grid never change. The
+//! layout keeps the regional style of the old generator: twelve rooms arranged
+//! in a 4 x 3 grid, joined by an explicitly chosen connected graph and carved
+//! together with two-tile-wide orthogonal corridors. Geometry, actor spawns,
+//! save-room bounds and lights all live in one runtime `Level` value.
 
 const std = @import("std");
 const math = @import("math.zig");
@@ -38,6 +39,8 @@ pub const Box = struct {
     hunter_block: bool = false,
 };
 
+const RoomRect = struct { min_col: u8, min_row: u8, cols: u8, rows: u8 };
+
 pub const Room = struct {
     min_col: u8,
     min_row: u8,
@@ -55,8 +58,80 @@ pub const Room = struct {
 
 pub const Edge = struct { a: u8, b: u8 };
 
+// One room per region of the 4 x 3 grid, placed by hand. Row-major indices:
+// 0 is the north-west corner and 11 the south-east corner (the save room).
+const room_rects = [_]RoomRect{
+    .{ .min_col = 1, .min_row = 1, .cols = 5, .rows = 3 }, //  0 north-west start
+    .{ .min_col = 8, .min_row = 2, .cols = 4, .rows = 4 }, //  1 north hall
+    .{ .min_col = 14, .min_row = 1, .cols = 3, .rows = 5 }, // 2 north corridor room
+    .{ .min_col = 19, .min_row = 3, .cols = 4, .rows = 3 }, // 3 north-east
+    .{ .min_col = 2, .min_row = 7, .cols = 3, .rows = 4 }, //  4 west wing
+    .{ .min_col = 9, .min_row = 8, .cols = 5, .rows = 4 }, //  5 central atrium
+    .{ .min_col = 16, .min_row = 7, .cols = 4, .rows = 3 }, // 6 east gallery
+    .{ .min_col = 20, .min_row = 10, .cols = 4, .rows = 4 }, // 7 south-east stairwell
+    .{ .min_col = 1, .min_row = 13, .cols = 4, .rows = 4 }, // 8 south-west storage
+    .{ .min_col = 7, .min_row = 14, .cols = 5, .rows = 3 }, // 9 south corridor room
+    .{ .min_col = 15, .min_row = 13, .cols = 3, .rows = 4 }, // 10 south passage
+    .{ .min_col = 20, .min_row = 14, .cols = 4, .rows = 4 }, // 11 south-east save room
+};
+
+// A spanning tree plus five cycle edges: plenty of loops for chases without
+// losing the tree's long dead-end character.
+const room_edges = [_]Edge{
+    .{ .a = 0, .b = 1 },
+    .{ .a = 1, .b = 2 },
+    .{ .a = 2, .b = 3 },
+    .{ .a = 1, .b = 5 },
+    .{ .a = 4, .b = 5 },
+    .{ .a = 5, .b = 6 },
+    .{ .a = 6, .b = 7 },
+    .{ .a = 6, .b = 10 },
+    .{ .a = 4, .b = 8 },
+    .{ .a = 8, .b = 9 },
+    .{ .a = 10, .b = 11 },
+    .{ .a = 0, .b = 4 },
+    .{ .a = 2, .b = 6 },
+    .{ .a = 5, .b = 9 },
+    .{ .a = 9, .b = 10 },
+    .{ .a = 7, .b = 11 },
+};
+
+const start_room_index: usize = 0;
+const save_room_index: usize = 11;
+
+// Hand-placed furniture: (room, tile offset from the room's minimum corner,
+// half extents, colour). Every piece sits off the centre lanes the corridors
+// follow and away from doorway mouths, so capsule routes stay intact.
+const Furniture = struct { room: usize, dc: u8, dr: u8, hx: f32, hy: f32, hz: f32, color: Vec4 };
+const furniture = [_]Furniture{
+    .{ .room = 0, .dc = 0, .dr = 0, .hx = 0.50, .hy = 0.60, .hz = 0.50, .color = crate_color },
+    .{ .room = 0, .dc = 4, .dr = 2, .hx = 0.70, .hy = 0.55, .hz = 0.45, .color = wood_color },
+    .{ .room = 1, .dc = 0, .dr = 0, .hx = 0.40, .hy = 0.95, .hz = 0.50, .color = locker_color },
+    .{ .room = 1, .dc = 3, .dr = 3, .hx = 0.60, .hy = 0.70, .hz = 0.60, .color = crate_color },
+    .{ .room = 2, .dc = 0, .dr = 0, .hx = 0.35, .hy = 1.00, .hz = 0.70, .color = shelf_color },
+    .{ .room = 2, .dc = 2, .dr = 4, .hx = 0.55, .hy = 0.65, .hz = 0.45, .color = wood_color },
+    .{ .room = 3, .dc = 0, .dr = 0, .hx = 0.45, .hy = 0.75, .hz = 0.45, .color = crate_color },
+    .{ .room = 3, .dc = 3, .dr = 2, .hx = 0.65, .hy = 0.55, .hz = 0.50, .color = shelf_color },
+    .{ .room = 4, .dc = 0, .dr = 0, .hx = 0.50, .hy = 0.85, .hz = 0.40, .color = locker_color },
+    .{ .room = 4, .dc = 2, .dr = 3, .hx = 0.55, .hy = 0.60, .hz = 0.55, .color = crate_color },
+    .{ .room = 5, .dc = 0, .dr = 0, .hx = 0.70, .hy = 0.55, .hz = 0.70, .color = wood_color },
+    .{ .room = 5, .dc = 4, .dr = 0, .hx = 0.40, .hy = 0.95, .hz = 0.45, .color = locker_color },
+    .{ .room = 5, .dc = 4, .dr = 3, .hx = 0.60, .hy = 0.80, .hz = 0.60, .color = crate_color },
+    .{ .room = 6, .dc = 0, .dr = 0, .hx = 0.45, .hy = 0.90, .hz = 0.35, .color = shelf_color },
+    .{ .room = 6, .dc = 3, .dr = 2, .hx = 0.55, .hy = 0.65, .hz = 0.55, .color = wood_color },
+    .{ .room = 7, .dc = 0, .dr = 0, .hx = 0.50, .hy = 0.70, .hz = 0.50, .color = crate_color },
+    .{ .room = 7, .dc = 1, .dr = 3, .hx = 0.65, .hy = 0.55, .hz = 0.45, .color = wood_color },
+    .{ .room = 7, .dc = 3, .dr = 3, .hx = 0.40, .hy = 0.95, .hz = 0.40, .color = locker_color },
+    .{ .room = 8, .dc = 0, .dr = 0, .hx = 0.55, .hy = 0.60, .hz = 0.55, .color = crate_color },
+    .{ .room = 8, .dc = 3, .dr = 3, .hx = 0.70, .hy = 0.55, .hz = 0.40, .color = shelf_color },
+    .{ .room = 9, .dc = 0, .dr = 0, .hx = 0.45, .hy = 0.80, .hz = 0.50, .color = wood_color },
+    .{ .room = 9, .dc = 4, .dr = 2, .hx = 0.55, .hy = 0.65, .hz = 0.55, .color = crate_color },
+    .{ .room = 10, .dc = 0, .dr = 0, .hx = 0.35, .hy = 1.00, .hz = 0.60, .color = locker_color },
+    .{ .room = 10, .dc = 2, .dr = 3, .hx = 0.50, .hy = 0.70, .hz = 0.50, .color = wood_color },
+    .{ .room = 11, .dc = 0, .dr = 0, .hx = 0.50, .hy = 0.60, .hz = 0.50, .color = crate_color },
+};
+
 pub const Level = struct {
-    seed: u64,
     boxes: [max_boxes]Box = undefined,
     box_count: usize = 0,
     rooms: [room_capacity]Room = undefined,
@@ -105,8 +180,8 @@ pub const Level = struct {
         return null;
     }
 
-    // Structural validation independent of Box3D/navmesh. Generation also has
-    // navmesh-level deterministic tests, including the two different agents.
+    // Structural validation independent of Box3D/navmesh. Navmesh-level checks
+    // cover the two different agents before the level goes live.
     pub fn validate(self: *const Level) bool {
         if (self.room_count != room_capacity or self.box_count == 0 or self.box_count > max_boxes) return false;
         const distance = self.graphDistance(self.start_room, self.save_room) orelse return false;
@@ -120,25 +195,6 @@ pub const Level = struct {
         return barriers == 4;
     }
 
-    pub fn fingerprint(self: *const Level) u64 {
-        var hash: u64 = 1469598103934665603;
-        for (self.rooms[0..self.room_count]) |room| {
-            const values = [_]u64{ room.min_col, room.min_row, room.cols, room.rows, room.neighbors };
-            for (values) |value| {
-                hash ^= value;
-                hash *%= 1099511628211;
-            }
-        }
-        for (self.edges[0..self.edge_count]) |edge| {
-            hash ^= (@as(u64, edge.a) << 8) | edge.b;
-            hash *%= 1099511628211;
-        }
-        hash ^= @as(u32, @bitCast(self.save_room_target.x));
-        hash *%= 1099511628211;
-        hash ^= @as(u32, @bitCast(self.save_room_target.z));
-        return hash;
-    }
-
     fn addBox(self: *Level, box: Box) void {
         std.debug.assert(self.box_count < max_boxes);
         self.boxes[self.box_count] = box;
@@ -148,122 +204,37 @@ pub const Level = struct {
 
 pub var current: Level = undefined;
 
-pub fn regenerate(seed: u64) void {
-    current = generate(seed);
+// Rebuild the authored level into the runtime slot.
+pub fn load() void {
+    current = build();
 }
 
-pub fn generate(seed: u64) Level {
-    var result = Level{ .seed = seed };
-    var random = Random.init(seed);
-    placeRooms(&result, &random);
-    connectRooms(&result, &random);
-    carveRoomsAndCorridors(&result, &random);
-    chooseObjectives(&result, &random);
-    buildGeometry(&result, &random);
+fn build() Level {
+    var result = Level{};
+    placeRooms(&result);
+    connectRooms(&result);
+    carveRoomsAndCorridors(&result);
+    chooseObjectives(&result);
+    buildGeometry(&result);
     deriveLights(&result);
     std.debug.assert(result.validate());
     return result;
 }
 
-const Random = struct {
-    state: u64,
-
-    fn init(seed: u64) Random {
-        return .{ .state = if (seed == 0) 0x9e3779b97f4a7c15 else seed };
-    }
-
-    fn next(self: *Random) u64 {
-        var x = self.state;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        self.state = x;
-        return x *% 2685821657736338717;
-    }
-
-    fn lessThan(self: *Random, limit: usize) usize {
-        std.debug.assert(limit > 0);
-        return @intCast(self.next() % limit);
-    }
-
-    fn range(self: *Random, min: usize, max_inclusive: usize) usize {
-        return min + self.lessThan(max_inclusive - min + 1);
-    }
-
-    fn unit(self: *Random) f32 {
-        return @as(f32, @floatFromInt(self.next() & 0x00ffffff)) / 16777216.0;
-    }
-};
-
-fn placeRooms(result: *Level, random: *Random) void {
-    // One room per region guarantees useful coverage without placement retries.
-    const region_x = [_]usize{ 1, 7, 13, 19 };
-    const region_z = [_]usize{ 1, 7, 13 };
-    for (0..3) |regional_row| {
-        for (0..4) |regional_col| {
-            const width = random.range(3, 5);
-            const height = random.range(3, 5);
-            const x = region_x[regional_col] + random.lessThan(6 - width + 1);
-            const z = region_z[regional_row] + random.lessThan(5 - height + 1);
-            result.rooms[result.room_count] = .{
-                .min_col = @intCast(x),
-                .min_row = @intCast(z),
-                .cols = @intCast(width),
-                .rows = @intCast(height),
-            };
-            result.room_count += 1;
-        }
+fn placeRooms(result: *Level) void {
+    for (room_rects) |rect| {
+        result.rooms[result.room_count] = .{
+            .min_col = rect.min_col,
+            .min_row = rect.min_row,
+            .cols = rect.cols,
+            .rows = rect.rows,
+        };
+        result.room_count += 1;
     }
 }
 
-fn connectRooms(result: *Level, random: *Random) void {
-    var candidates: [17]Edge = undefined;
-    var count: usize = 0;
-    for (0..3) |row| for (0..4) |col| {
-        const index: u8 = @intCast(row * 4 + col);
-        if (col + 1 < 4) {
-            candidates[count] = .{ .a = index, .b = index + 1 };
-            count += 1;
-        }
-        if (row + 1 < 3) {
-            candidates[count] = .{ .a = index, .b = index + 4 };
-            count += 1;
-        }
-    };
-    var i = count;
-    while (i > 1) {
-        i -= 1;
-        const other = random.lessThan(i + 1);
-        const tmp = candidates[i];
-        candidates[i] = candidates[other];
-        candidates[other] = tmp;
-    }
-
-    var parent: [room_capacity]u8 = undefined;
-    for (&parent, 0..) |*entry, index| entry.* = @intCast(index);
-    for (candidates[0..count]) |edge| {
-        const a_root = rootOf(&parent, edge.a);
-        const b_root = rootOf(&parent, edge.b);
-        if (a_root == b_root) continue;
-        parent[b_root] = a_root;
-        addEdge(result, edge);
-    }
-    // A few cycle edges make alternate routes without destroying the graph's
-    // randomized spanning-tree character.
-    for (candidates[0..count]) |edge| {
-        if (hasEdge(result, edge) or random.lessThan(100) >= 28) continue;
-        addEdge(result, edge);
-    }
-}
-
-fn rootOf(parent: *[room_capacity]u8, start: u8) u8 {
-    var node = start;
-    while (parent[node] != node) node = parent[node];
-    return node;
-}
-
-fn hasEdge(result: *const Level, edge: Edge) bool {
-    return (result.rooms[edge.a].neighbors & (@as(u16, 1) << @intCast(edge.b))) != 0;
+fn connectRooms(result: *Level) void {
+    for (room_edges) |edge| addEdge(result, edge);
 }
 
 fn addEdge(result: *Level, edge: Edge) void {
@@ -274,7 +245,7 @@ fn addEdge(result: *Level, edge: Edge) void {
     result.rooms[edge.b].neighbors |= @as(u16, 1) << @intCast(edge.a);
 }
 
-fn carveRoomsAndCorridors(result: *Level, random: *Random) void {
+fn carveRoomsAndCorridors(result: *Level) void {
     for (result.rooms[0..result.room_count]) |room| {
         for (room.min_row..room.min_row + room.rows) |row| {
             for (room.min_col..room.min_col + room.cols) |col| setWalkable(result, col, row);
@@ -283,13 +254,9 @@ fn carveRoomsAndCorridors(result: *Level, random: *Random) void {
     for (result.edges[0..result.edge_count]) |edge| {
         const a = roomCenterTile(result.rooms[edge.a]);
         const b = roomCenterTile(result.rooms[edge.b]);
-        if ((random.next() & 1) == 0) {
-            carveHorizontal(result, a[0], b[0], a[1]);
-            carveVertical(result, a[1], b[1], b[0]);
-        } else {
-            carveVertical(result, a[1], b[1], a[0]);
-            carveHorizontal(result, a[0], b[0], b[1]);
-        }
+        // Fixed L-shape orientation: run horizontally first, then vertically.
+        carveHorizontal(result, a[0], b[0], a[1]);
+        carveVertical(result, a[1], b[1], b[0]);
     }
 }
 
@@ -319,28 +286,12 @@ fn setWalkable(result: *Level, col: usize, row: usize) void {
     if (col < tile_cols and row < tile_rows) result.walkable[row * tile_cols + col] = true;
 }
 
-fn chooseObjectives(result: *Level, random: *Random) void {
-    const corners = [_]usize{ 0, 3, 8, 11 };
-    result.start_room = corners[random.lessThan(corners.len)];
-    var farthest: [room_capacity]usize = undefined;
-    var farthest_count: usize = 0;
-    var maximum: usize = 0;
-    for (0..result.room_count) |candidate| {
-        const distance = result.graphDistance(result.start_room, candidate) orelse unreachable;
-        if (distance > maximum) {
-            maximum = distance;
-            farthest_count = 0;
-        }
-        if (distance == maximum) {
-            farthest[farthest_count] = candidate;
-            farthest_count += 1;
-        }
-    }
-    result.save_room = farthest[random.lessThan(farthest_count)];
-
-    const start = result.rooms[result.start_room].center();
-    const save = result.rooms[result.save_room];
+fn chooseObjectives(result: *Level) void {
+    const start = result.rooms[start_room_index].center();
+    const save = result.rooms[save_room_index];
     const save_center = save.center();
+    result.start_room = start_room_index;
+    result.save_room = save_room_index;
     result.player_spawn = start;
     result.save_room_target = save_center;
     result.save_min_x = -footprint_half_x + @as(f32, @floatFromInt(save.min_col)) * tile_size + 0.25;
@@ -364,41 +315,18 @@ fn chooseObjectives(result: *Level, random: *Random) void {
     }
 }
 
-fn buildGeometry(result: *Level, random: *Random) void {
+fn buildGeometry(result: *Level) void {
     result.addBox(slab(0, 0, 0, footprint_half_x, footprint_half_z));
     result.addBox(ceiling(0, floor_height, 0, footprint_half_x, footprint_half_z));
     buildHorizontalWalls(result);
     buildVerticalWalls(result);
 
-    // Random compact furniture in every room. Room and corridor center lines are
-    // kept clear, preserving robust capsule routes through all graph nodes.
-    for (result.rooms[0..result.room_count], 0..) |room, room_index| {
-        const furniture_count = 1 + random.lessThan(3);
-        const center_tile = roomCenterTile(room);
-        var made: usize = 0;
-        var attempts: usize = 0;
-        while (made < furniture_count and attempts < 16) : (attempts += 1) {
-            const col = room.min_col + random.lessThan(room.cols);
-            const row = room.min_row + random.lessThan(room.rows);
-            const dc = @abs(@as(i32, @intCast(col)) - @as(i32, @intCast(center_tile[0])));
-            const dr = @abs(@as(i32, @intCast(row)) - @as(i32, @intCast(center_tile[1])));
-            // Preserve the full horizontal and vertical centre lanes used by
-            // graph corridors, including enough side clearance for capsules.
-            if (dc <= 1 or dr <= 1) continue;
-            const center = tileCenter(col, row);
-            const hx = 0.42 + random.unit() * 0.35;
-            const hz = 0.42 + random.unit() * 0.35;
-            const colors = [_]Vec4{ wood_color, crate_color, shelf_color, locker_color };
-            result.addBox(solid(center.x, 0.55, center.z, hx, 0.55 + random.unit() * 0.45, hz, colors[random.lessThan(colors.len)]));
-            made += 1;
-        }
-        if (made == 0) {
-            // Small corner furniture is already inside the wall-clearance band,
-            // so it adds visible/physical variation without narrowing a route.
-            const corner = tileCenter(room.min_col, room.min_row);
-            result.addBox(solid(corner.x, 0.55, corner.z, 0.4, 0.55, 0.4, crate_color));
-        }
-        _ = room_index;
+    // Hand-placed furniture, kept clear of the centre lanes used by corridors.
+    for (furniture) |item| {
+        const room = room_rects[item.room];
+        std.debug.assert(item.dc < room.cols and item.dr < room.rows);
+        const center = tileCenter(room.min_col + item.dc, room.min_row + item.dr);
+        result.addBox(solid(center.x, item.hy, center.z, item.hx, item.hy, item.hz, item.color));
     }
 
     // A visible save fixture sits away from the open target at room centre.
@@ -410,7 +338,7 @@ fn buildGeometry(result: *Level, random: *Random) void {
 
     // Seal the complete room perimeter for the hunter. Physical walls still
     // define ordinary room boundaries; these four invisible boxes close every
-    // possible generated opening and also occlude hunter sight rays.
+    // opening and also occlude hunter sight rays.
     const min_x = -footprint_half_x + @as(f32, @floatFromInt(save.min_col)) * tile_size;
     const max_x = min_x + @as(f32, @floatFromInt(save.cols)) * tile_size;
     const min_z = -footprint_half_z + @as(f32, @floatFromInt(save.min_row)) * tile_size;
@@ -463,7 +391,7 @@ fn buildVerticalWalls(result: *Level) void {
             while (row < tile_rows and boundaryVertical(result, boundary_col, row)) row += 1;
             const length = row - start;
             const x = -footprint_half_x + @as(f32, @floatFromInt(boundary_col)) * tile_size;
-            const z = -footprint_half_z + (@as(f32, @floatFromInt(start)) + @as(f32, @floatFromInt(length)) * 0.5) * tile_size;
+            const z = -footprint_half_z + @as(f32, @floatFromInt(start)) + @as(f32, @floatFromInt(length)) * 0.5 * tile_size;
             result.addBox(wallZ(x, 0, z, @as(f32, @floatFromInt(length)), wall_color));
         }
     }
@@ -471,7 +399,7 @@ fn buildVerticalWalls(result: *Level) void {
 
 fn deriveLights(result: *Level) void {
     // Always light start/save first, then spread the remaining fixtures across
-    // the generated rooms. The shader has eight fixture slots.
+    // the other rooms. The shader has eight fixture slots.
     const first = [_]usize{ result.start_room, result.save_room };
     for (first) |index| addRoomLight(result, index);
     for (0..result.room_count) |index| {
@@ -558,26 +486,12 @@ fn rgba(r: f32, g: f32, b: f32, a: f32) Vec4 {
     return .{ .x = r, .y = g, .z = b, .w = a };
 }
 
-test "same seed produces identical procedural level" {
-    const a = generate(0x12345678);
-    const b = generate(0x12345678);
-    try std.testing.expectEqual(a.fingerprint(), b.fingerprint());
-    try std.testing.expectEqual(a.box_count, b.box_count);
-    try std.testing.expectEqual(a.save_room, b.save_room);
-}
-
-test "different seeds vary layouts" {
-    const a = generate(1);
-    const b = generate(2);
-    try std.testing.expect(a.fingerprint() != b.fingerprint());
-}
-
-test "generated graph and protected distant room validate across seeds" {
-    for (1..65) |seed| {
-        const generated = generate(seed);
-        try std.testing.expect(generated.validate());
-        try std.testing.expect((generated.graphDistance(generated.start_room, generated.save_room) orelse 0) >= 3);
-        try std.testing.expect(generated.player_spawn.x >= -footprint_half_x and generated.player_spawn.x <= footprint_half_x);
-        try std.testing.expect(generated.player_spawn.z >= -footprint_half_z and generated.player_spawn.z <= footprint_half_z);
-    }
+test "authored level validates structurally" {
+    load();
+    try std.testing.expect(current.validate());
+    try std.testing.expect((current.graphDistance(current.start_room, current.save_room) orelse 0) >= 3);
+    try std.testing.expect(current.player_spawn.x >= -footprint_half_x and current.player_spawn.x <= footprint_half_x);
+    try std.testing.expect(current.player_spawn.z >= -footprint_half_z and current.player_spawn.z <= footprint_half_z);
+    try std.testing.expectEqual(room_capacity, current.room_count);
+    try std.testing.expectEqual(@as(usize, 16), current.edge_count);
 }
