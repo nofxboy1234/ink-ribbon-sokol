@@ -20,7 +20,7 @@ STATE_FILE = Path("/tmp/ink-ribbon-native-input.json")
 LOG_FILE = Path("/tmp/ink-ribbon-native-input.log")
 WINDOW_TITLE = "Character Mover"
 ALLOWED_KEYS = {
-    "w", "a", "s", "d", "f", "m", "p", "shift", "f1", "escape",
+    "w", "a", "s", "d", "e", "f", "m", "p", "shift", "f1", "escape",
     "left", "right", "up", "down",
 }
 MAX_HOLD_SECONDS = 30.0

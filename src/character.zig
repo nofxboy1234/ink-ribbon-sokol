@@ -151,12 +151,12 @@ const MapState = struct {
     route_status: MapRouteStatus = .none,
 };
 
-// Smooth 180-degree quick-turn (RE2R): the character and camera swing around
-// over a short animation instead of snapping.
+// Smooth directional quick-turn (RE2R): the character and camera swing toward
+// the held backward direction over a short animation instead of snapping.
 const QuickTurn = struct {
     active: bool = false,
     timer: f32 = 0,
-    duration: f32 = 0.35,
+    duration: f32 = 0.35 / 1.5,
     character_start: f32 = 0,
     character_target: f32 = 0,
     camera_start: f32 = 0,
@@ -259,6 +259,26 @@ fn updateQuickTurn(dt: f32) void {
     game.character.yaw = game.quick_turn.character_start + (game.quick_turn.character_target - game.quick_turn.character_start) * eased;
     game.camera.yaw = game.quick_turn.camera_start + (game.quick_turn.camera_target - game.quick_turn.camera_start) * eased;
     if (t >= 1) game.quick_turn.active = false;
+}
+
+// Signed shortest turn from forward toward the held keyboard direction. In
+// this yaw convention local right is negative rotation: S+A is +135 degrees,
+// S+D is -135 degrees, and S alone uses the deterministic +180-degree case.
+fn keyboardQuickTurnDelta(left: bool, right: bool) f32 {
+    const lateral = fbool(right) - fbool(left);
+    if (lateral == 0) return std.math.pi;
+    return std.math.atan2(-lateral, -1.0);
+}
+
+fn beginQuickTurn() void {
+    const delta = keyboardQuickTurnDelta(game.input.left, game.input.right);
+    game.quick_turn = .{
+        .active = true,
+        .character_start = game.character.yaw,
+        .character_target = game.character.yaw + delta,
+        .camera_start = game.camera.yaw,
+        .camera_target = game.camera.yaw + delta,
+    };
 }
 
 fn frame() callconv(.c) void {
@@ -417,16 +437,10 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     confirmMenu();
                 },
                 .E => if (down and !value.key_repeat) {
-                    // RE2R quick-turn: while walking backward, swing the
-                    // character and camera 180 degrees over a short animation.
+                    // Turn toward the held backward/diagonal direction using
+                    // the shortest clockwise or counter-clockwise arc.
                     if (game.input.back and !game.quick_turn.active) {
-                        game.quick_turn = .{
-                            .active = true,
-                            .character_start = game.character.yaw,
-                            .character_target = game.character.yaw + std.math.pi,
-                            .camera_start = game.camera.yaw,
-                            .camera_target = game.camera.yaw + std.math.pi,
-                        };
+                        beginQuickTurn();
                     }
                 },
                 .ESCAPE => if (down) {
@@ -1335,6 +1349,15 @@ test "clock consumes fixed ticks independent of frame chunks" {
         while (b.consumeTick()) count_b += 1;
     }
     try std.testing.expectEqual(count_a, count_b);
+}
+
+test "keyboard quick turn chooses shortest backward direction" {
+    const tolerance: f32 = 0.0001;
+    try std.testing.expectApproxEqAbs(std.math.pi, keyboardQuickTurnDelta(false, false), tolerance);
+    try std.testing.expectApproxEqAbs(std.math.pi * 0.75, keyboardQuickTurnDelta(true, false), tolerance);
+    try std.testing.expectApproxEqAbs(-std.math.pi * 0.75, keyboardQuickTurnDelta(false, true), tolerance);
+    // Opposing lateral keys cancel back to a straight 180-degree turn.
+    try std.testing.expectApproxEqAbs(std.math.pi, keyboardQuickTurnDelta(true, true), tolerance);
 }
 
 test "hunter AI tests" {
