@@ -45,6 +45,9 @@ const hunter_color = Vec4{ .x = 0.92, .y = 0.12, .z = 0.14, .w = 1 };
 const player_spawn_y: f32 = 0.9;
 const hunter_spawn_y: f32 = 1.5;
 
+// How long the "returned to last save" HUD notice stays up after a catch.
+const catch_notice_seconds: f32 = 3;
+
 // Top-down map view tuning.
 const map_pan_speed: f32 = 25.0; // metres/second the map pans with WASD
 const map_pan_x_max: f32 = 40.0; // keep the pan center near the level
@@ -120,7 +123,6 @@ const DebugState = struct {
 };
 
 const MapRouteStatus = enum { none, found, arrived, no_path };
-const RoundOutcome = enum { playing, caught };
 
 // Typewriter save/load windows. While open they freeze the round exactly like
 // map mode does; navigation is keyboard-only.
@@ -198,7 +200,8 @@ const GameState = struct {
     character: controller.State = initialCharacter(),
     hunter_config: hunter.Config = .{},
     hunter: hunter.State = initialHunter(),
-    outcome: RoundOutcome = .playing,
+    // Seconds left on the "returned to last save" notice after a catch.
+    catch_notice: f32 = 0,
     quick_turn: QuickTurn = .{},
     mover_scratch: controller.MoverScratch = .{},
     camera_config: camera.Config = .{},
@@ -255,16 +258,12 @@ fn updateQuickTurn(dt: f32) void {
 fn frame() callconv(.c) void {
     const frame_time: f32 = @floatCast(@min(sapp.frameDuration(), max_frame_dt));
     game.clock.addFrame(frame_time);
+    if (game.catch_notice > 0) game.catch_notice = @max(0, game.catch_notice - frame_time);
 
     // Menus freeze the round exactly like map mode does.
     const gameplay_active = !game.map.active and game.menu.kind == .none;
 
-    const render_position = if (game.outcome != .playing) blk: {
-        // Finished round: everything freezes behind the overlay. Drain pending
-        // physics ticks so restarting doesn't burst-catch-up the simulation.
-        while (game.clock.consumeTick()) {}
-        break :blk game.character.position;
-    } else blk: {
+    const render_position = blk: {
         var ticks: usize = 0;
         while (ticks < max_ticks_per_frame and game.clock.consumeTick()) : (ticks += 1) {
             // Map/menu modes always freeze the player. On the map the hunter
@@ -291,7 +290,7 @@ fn frame() callconv(.c) void {
                     @floatCast(fixed_dt),
                 );
                 if (hunterContacted()) {
-                    game.outcome = .caught;
+                    respawnAfterCatch();
                     break;
                 }
             }
@@ -318,7 +317,7 @@ fn frame() callconv(.c) void {
         game.map.pan.x = std.math.clamp(game.map.pan.x, -map_pan_x_max, map_pan_x_max);
         game.map.pan.z = std.math.clamp(game.map.pan.z, -map_pan_z_max, map_pan_z_max);
         game.camera.view_projection = mapViewProjection();
-    } else if (game.outcome == .playing and game.menu.kind == .none) {
+    } else if (game.menu.kind == .none) {
         camera.update(
             game.camera_config,
             &game.camera,
@@ -380,9 +379,6 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 .P => if (down and !value.key_repeat and game.map.active) {
                     game.map.hunter_paused = !game.map.hunter_paused;
                 },
-                .R => if (down and !value.key_repeat and game.outcome != .playing) {
-                    restartLevel();
-                },
                 .UP => if (down and !value.key_repeat and game.menu.kind != .none) {
                     moveMenuSlot(-1);
                 },
@@ -392,7 +388,7 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 .SPACE => if (down and !value.key_repeat) {
                     if (game.menu.kind != .none) {
                         confirmMenu();
-                    } else if (!game.map.active and game.outcome == .playing and nearSaveFixture()) {
+                    } else if (!game.map.active and nearSaveFixture()) {
                         openMenu(.save);
                     }
                 },
@@ -405,7 +401,7 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 .E => if (down and !value.key_repeat) {
                     // RE2R quick-turn: while walking backward, swing the
                     // character and camera 180 degrees over a short animation.
-                    if (game.outcome == .playing and game.input.back and !game.quick_turn.active) {
+                    if (game.input.back and !game.quick_turn.active) {
                         game.quick_turn = .{
                             .active = true,
                             .character_start = game.character.yaw,
@@ -483,36 +479,29 @@ fn loadValidatedLevel() void {
     if (!navmesh.validateLevel()) @panic("authored level failed navmesh validation");
 }
 
-fn restartLevel() void {
-    b3.b3DestroyWorld(game.world);
-    game.world = b3.b3_nullWorldId;
-    loadValidatedLevel();
-    initPhysics();
-    uploadLevelInstances();
-    spawnPlayerAndHunter();
-}
-
 // Place both actors at authored room centres, then reset the round.
 fn spawnPlayerAndHunter() void {
     const player_spawn = b3.b3Pos{ .x = level.current.player_spawn.x, .y = player_spawn_y, .z = level.current.player_spawn.z };
-    const hunter_spawn = b3.b3Pos{ .x = level.current.hunter_spawn.x, .y = hunter_spawn_y, .z = level.current.hunter_spawn.z };
-
     game.character = controller.State.init(player_spawn);
     game.character.yaw = std.math.pi; // face -Z, matching the initial camera
-    game.hunter = hunter.State.init(hunter_spawn);
-    // Face the player from the start (Mr X's head sweep then scans around this
-    // heading), and give him a real patrol destination so he sets off walking
-    // immediately instead of idling at his spawn point.
-    game.hunter.yaw = std.math.atan2(player_spawn.x - hunter_spawn.x, player_spawn.z - hunter_spawn.z);
-    game.hunter.target = hunter.randomPatrolTarget(game.hunter_config, game.hunter.position);
-    game.hunter.repath_timer = 0;
+    resetHunter(player_spawn);
     game.camera = .{};
     game.clock = .{};
     game.map = .{};
     game.menu = .{};
-    game.outcome = .playing;
+    game.catch_notice = 0;
     game.quick_turn = .{};
     game.input = .{};
+}
+
+// Send the hunter back to his authored spawn room facing the player, with a
+// fresh patrol destination so he sets off walking immediately.
+fn resetHunter(player_pos: b3.b3Pos) void {
+    const hunter_spawn = b3.b3Pos{ .x = level.current.hunter_spawn.x, .y = hunter_spawn_y, .z = level.current.hunter_spawn.z };
+    game.hunter = hunter.State.init(hunter_spawn);
+    game.hunter.yaw = std.math.atan2(player_pos.x - hunter_spawn.x, player_pos.z - hunter_spawn.z);
+    game.hunter.target = hunter.randomPatrolTarget(game.hunter_config, game.hunter.position);
+    game.hunter.repath_timer = 0;
 }
 
 // The hunter catches the player when their capsules touch horizontally.
@@ -521,6 +510,44 @@ fn hunterContacted() bool {
     const dz = game.hunter.position.z - game.character.position.z;
     const radius = game.hunter_config.contact_radius;
     return dx * dx + dz * dz < radius * radius;
+}
+
+// Caught: the player is sent back to their most recent save slot (or the
+// level start when nothing has been saved yet), and the hunter returns to his
+// own spawn room so the chase restarts fair.
+fn respawnAfterCatch() void {
+    var best_index: ?usize = null;
+    var best_timestamp: i64 = std.math.minInt(i64);
+    for (saves.slots, 0..) |slot, index| {
+        if (slot.occupied and slot.timestamp > best_timestamp) {
+            best_timestamp = slot.timestamp;
+            best_index = index;
+        }
+    }
+
+    if (best_index) |index| {
+        const slot = saves.slots[index];
+        // The static world never changes, so a recorded pose is always a
+        // valid capsule spot.
+        game.character.previous_position = .{ .x = slot.x, .y = slot.y, .z = slot.z };
+        game.character.position = .{ .x = slot.x, .y = slot.y, .z = slot.z };
+        game.character.velocity = .{};
+        game.character.grounded = false;
+        game.character.yaw = slot.yaw;
+        game.catch_notice = catch_notice_seconds;
+    } else {
+        const player_spawn = b3.b3Pos{ .x = level.current.player_spawn.x, .y = player_spawn_y, .z = level.current.player_spawn.z };
+        game.character = controller.State.init(player_spawn);
+        game.character.yaw = std.math.pi;
+        game.catch_notice = catch_notice_seconds;
+    }
+
+    resetHunter(game.character.position);
+    // Re-seat the shoulder camera behind the respawn heading.
+    game.camera = .{};
+    game.camera.yaw = game.character.yaw;
+    game.quick_turn = .{};
+    game.input = .{};
 }
 
 // True while the character stands within 1 m of the pink typewriter table.
@@ -578,9 +605,6 @@ fn confirmMenu() void {
                 game.camera = .{};
                 game.camera.yaw = slot.yaw;
                 game.quick_turn = .{};
-                // Loading also rescues a caught round; the hunter keeps his
-                // current position, RE2-style tension intact.
-                game.outcome = .playing;
             }
         },
     }
@@ -867,7 +891,7 @@ fn draw(position: b3.b3Pos) void {
 
     // Interpolate during gameplay, but use the authoritative pose while paused
     // so the clock's cycling alpha cannot replay the hunter's last movement.
-    const hunter_render = if ((game.map.active and game.map.hunter_paused) or game.menu.kind != .none or game.outcome != .playing)
+    const hunter_render = if ((game.map.active and game.map.hunter_paused) or game.menu.kind != .none)
         game.hunter.position
     else
         hunter.interpolatedPosition(game.hunter, game.clock.alpha());
@@ -1006,25 +1030,19 @@ fn drawHud(position: b3.b3Pos) void {
             },
             else => {},
         }
-    } else if (game.debug.draw_physics and game.outcome == .playing) {
+    } else if (game.debug.draw_physics) {
         sdtx.pos(1.0, 1.0);
         sdtx.print("POS {d:.1} {d:.1} {d:.1}", .{ position.x, position.y, position.z });
     }
-    if (game.outcome != .playing) {
-        const title = "YOU WERE CAUGHT BY THE HUNTER";
-        const prompt = "PRESS R TO START A NEW PLAYTHROUGH";
-        // The 8x8 font renders in text units of 8 px, so dividing the pixel
-        // canvas by 8 centres a line of `len` characters.
-        sdtx.pos(sapp.widthf() / 8.0 / 2.0 - @as(f32, @floatFromInt(title.len)) / 2.0, sapp.heightf() / 8.0 / 2.0 - 1.0);
+    if (game.catch_notice > 0) {
+        const notice = "CAUGHT - RETURNED TO LAST SAVE";
+        sdtx.pos(sapp.widthf() / 8.0 / 2.0 - @as(f32, @floatFromInt(notice.len)) / 2.0, 2.0);
         sdtx.color3b(255, 60, 60);
-        sdtx.print("YOU WERE CAUGHT BY THE HUNTER", .{});
-        sdtx.pos(sapp.widthf() / 8.0 / 2.0 - @as(f32, @floatFromInt(prompt.len)) / 2.0, sapp.heightf() / 8.0 / 2.0 + 1.0);
-        sdtx.color3b(255, 255, 255);
-        sdtx.print(prompt, .{});
+        sdtx.print(notice, .{});
     }
     if (game.menu.kind != .none) {
         drawSaveMenu();
-    } else if (!game.map.active and game.outcome == .playing and nearSaveFixture()) {
+    } else if (!game.map.active and nearSaveFixture()) {
         const prompt = "PRESS SPACE TO SAVE";
         sdtx.pos(sapp.widthf() / 8.0 / 2.0 - @as(f32, @floatFromInt(prompt.len)) / 2.0, sapp.heightf() / 8.0 - 2.0);
         sdtx.color3b(255, 220, 120);
