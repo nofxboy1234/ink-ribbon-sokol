@@ -1,10 +1,9 @@
-//! Hand-authored single-floor level.
+//! Hand-authored first floor of the RPD, traced from `layout.png`.
 //!
-//! The 52 x 38 metre footprint and the navigation grid never change. The
-//! layout keeps the regional style of the old generator: twelve rooms arranged
-//! in a 4 x 3 grid, joined by an explicitly chosen connected graph and carved
-//! together with two-tile-wide orthogonal corridors. Geometry, actor spawns,
-//! save-room bounds and lights all live in one runtime `Level` value.
+//! The walkable footprint follows the reference's west wing, main hall,
+//! courtyards, east wing, and north-east stair block. Interior walls and doors
+//! are authored separately so their proportions are not constrained to a room
+//! generator. Stairs end at first-floor walls until upper floors are added.
 
 const std = @import("std");
 const math = @import("math.zig");
@@ -14,11 +13,11 @@ pub const Vec4 = math.Vec4;
 pub const footprint_half_x: f32 = 26;
 pub const footprint_half_z: f32 = 19;
 pub const floor_height: f32 = 5.5;
-pub const tile_size: f32 = 2;
-pub const tile_cols = 26;
-pub const tile_rows = 19;
+pub const tile_size: f32 = 1;
+pub const tile_cols = 52;
+pub const tile_rows = 38;
 pub const tile_count = tile_cols * tile_rows;
-pub const room_capacity = 12;
+pub const room_capacity = 16;
 pub const edge_capacity = 24;
 pub const light_capacity = 8;
 pub const max_boxes = 768;
@@ -34,12 +33,14 @@ pub const Box = struct {
     pitch: f32 = 0,
     visible: bool = true,
     collidable: bool = true,
+    nav_block: bool = true,
     is_roof: bool = false,
     // Invisible save-room perimeter. The player and camera ignore this category.
     hunter_block: bool = false,
 };
 
 const RoomRect = struct { min_col: u8, min_row: u8, cols: u8, rows: u8 };
+const FloorRect = struct { min_col: u8, min_row: u8, cols: u8, rows: u8 };
 
 pub const Room = struct {
     min_col: u8,
@@ -58,78 +59,177 @@ pub const Room = struct {
 
 pub const Edge = struct { a: u8, b: u8 };
 
-// One room per region of the 4 x 3 grid, placed by hand. Row-major indices:
-// 0 is the north-west corner and 11 the south-east corner (the save room).
+// These are lighting/patrol regions, not a generated room grid. Their positions
+// follow the named spaces visible in the supplied first-floor plan.
 const room_rects = [_]RoomRect{
-    .{ .min_col = 1, .min_row = 1, .cols = 5, .rows = 3 }, //  0 north-west start
-    .{ .min_col = 8, .min_row = 2, .cols = 4, .rows = 4 }, //  1 north hall
-    .{ .min_col = 14, .min_row = 1, .cols = 3, .rows = 5 }, // 2 north corridor room
-    .{ .min_col = 19, .min_row = 3, .cols = 4, .rows = 3 }, // 3 north-east
-    .{ .min_col = 2, .min_row = 7, .cols = 3, .rows = 4 }, //  4 west wing
-    .{ .min_col = 9, .min_row = 8, .cols = 5, .rows = 4 }, //  5 central atrium
-    .{ .min_col = 16, .min_row = 7, .cols = 4, .rows = 3 }, // 6 east gallery
-    .{ .min_col = 20, .min_row = 10, .cols = 4, .rows = 3 }, // 7 south-east stairwell
-    .{ .min_col = 1, .min_row = 13, .cols = 4, .rows = 4 }, // 8 south-west storage
-    .{ .min_col = 7, .min_row = 14, .cols = 5, .rows = 3 }, // 9 south corridor room
-    .{ .min_col = 15, .min_row = 13, .cols = 3, .rows = 4 }, // 10 south passage
-    .{ .min_col = 20, .min_row = 14, .cols = 4, .rows = 4 }, // 11 south-east save room
+    .{ .min_col = 22, .min_row = 27, .cols = 6, .rows = 6 }, //  0 entrance lobby
+    .{ .min_col = 20, .min_row = 16, .cols = 10, .rows = 11 }, // 1 main hall
+    .{ .min_col = 20, .min_row = 9, .cols = 10, .rows = 7 }, //  2 north main hall
+    .{ .min_col = 14, .min_row = 8, .cols = 5, .rows = 8 }, //   3 west save room
+    .{ .min_col = 2, .min_row = 6, .cols = 8, .rows = 7 }, //    4 north-west office
+    .{ .min_col = 2, .min_row = 14, .cols = 8, .rows = 7 }, //   5 west operations
+    .{ .min_col = 3, .min_row = 22, .cols = 8, .rows = 6 }, //   6 south-west office
+    .{ .min_col = 11, .min_row = 20, .cols = 8, .rows = 9 }, //  7 west records
+    .{ .min_col = 30, .min_row = 8, .cols = 7, .rows = 7 }, //   8 north-east office
+    .{ .min_col = 30, .min_row = 15, .cols = 7, .rows = 7 }, //  9 east office
+    .{ .min_col = 31, .min_row = 23, .cols = 10, .rows = 6 }, // 10 east records
+    .{ .min_col = 43, .min_row = 15, .cols = 5, .rows = 7 }, // 11 east corridor
+    .{ .min_col = 44, .min_row = 23, .cols = 7, .rows = 6 }, // 12 east hunter room
+    .{ .min_col = 40, .min_row = 5, .cols = 7, .rows = 7 }, //  13 north-east hall
+    .{ .min_col = 48, .min_row = 8, .cols = 4, .rows = 7 }, //  14 east stair hall
+    .{ .min_col = 39, .min_row = 0, .cols = 3, .rows = 5 }, //  15 north stair room
 };
 
-// A spanning tree plus four cycle edges: loops for chases without losing the
-// tree's long dead-end character. Room 11 (save) deliberately has exactly one
-// connection: its west doorway is the room's single entrance.
+// Broad floor masses traced from the outer silhouette. Boundary walls are
+// derived from this union, preserving the long west/east wings and narrow joins.
+const floor_rects = [_]FloorRect{
+    .{ .min_col = 1, .min_row = 5, .cols = 17, .rows = 14 },
+    .{ .min_col = 1, .min_row = 18, .cols = 19, .rows = 11 },
+    .{ .min_col = 17, .min_row = 5, .cols = 3, .rows = 17 },
+    .{ .min_col = 20, .min_row = 9, .cols = 10, .rows = 23 },
+    .{ .min_col = 22, .min_row = 31, .cols = 6, .rows = 2 },
+    .{ .min_col = 29, .min_row = 7, .cols = 14, .rows = 22 },
+    .{ .min_col = 42, .min_row = 14, .cols = 6, .rows = 15 },
+    .{ .min_col = 47, .min_row = 7, .cols = 5, .rows = 22 },
+    .{ .min_col = 39, .min_row = 0, .cols = 3, .rows = 7 },
+    .{ .min_col = 40, .min_row = 4, .cols = 12, .rows = 4 },
+    .{ .min_col = 37, .min_row = 5, .cols = 5, .rows = 7 },
+};
+
 const room_edges = [_]Edge{
-    .{ .a = 0, .b = 1 },
-    .{ .a = 1, .b = 2 },
-    .{ .a = 2, .b = 3 },
-    .{ .a = 1, .b = 5 },
-    .{ .a = 4, .b = 5 },
-    .{ .a = 5, .b = 6 },
-    .{ .a = 6, .b = 7 },
-    .{ .a = 6, .b = 10 },
-    .{ .a = 4, .b = 8 },
-    .{ .a = 8, .b = 9 },
-    .{ .a = 10, .b = 11 },
-    .{ .a = 0, .b = 4 },
-    .{ .a = 2, .b = 6 },
-    .{ .a = 5, .b = 9 },
-    .{ .a = 9, .b = 10 },
+    .{ .a = 0, .b = 1 },   .{ .a = 1, .b = 2 },   .{ .a = 2, .b = 3 },
+    .{ .a = 3, .b = 4 },   .{ .a = 4, .b = 5 },   .{ .a = 5, .b = 6 },
+    .{ .a = 6, .b = 7 },   .{ .a = 7, .b = 1 },   .{ .a = 2, .b = 8 },
+    .{ .a = 8, .b = 9 },   .{ .a = 9, .b = 10 },  .{ .a = 10, .b = 11 },
+    .{ .a = 11, .b = 12 }, .{ .a = 11, .b = 13 }, .{ .a = 13, .b = 14 },
+    .{ .a = 14, .b = 15 }, .{ .a = 1, .b = 9 },
 };
 
 const start_room_index: usize = 0;
-const save_room_index: usize = 11;
+const save_room_index: usize = 1;
 
-// Hand-placed furniture: (room, tile offset from the room's minimum corner,
-// half extents, colour). Every piece sits off the centre lanes the corridors
-// follow and away from doorway mouths, so capsule routes stay intact.
-const Furniture = struct { room: usize, dc: u8, dr: u8, hx: f32, hy: f32, hz: f32, color: Vec4 };
-const furniture = [_]Furniture{
-    .{ .room = 0, .dc = 0, .dr = 0, .hx = 0.50, .hy = 0.60, .hz = 0.50, .color = crate_color },
-    .{ .room = 0, .dc = 4, .dr = 2, .hx = 0.70, .hy = 0.55, .hz = 0.45, .color = wood_color },
-    .{ .room = 1, .dc = 0, .dr = 0, .hx = 0.40, .hy = 0.95, .hz = 0.50, .color = locker_color },
-    .{ .room = 1, .dc = 3, .dr = 3, .hx = 0.60, .hy = 0.70, .hz = 0.60, .color = crate_color },
-    .{ .room = 2, .dc = 0, .dr = 0, .hx = 0.35, .hy = 1.00, .hz = 0.70, .color = shelf_color },
-    .{ .room = 2, .dc = 2, .dr = 4, .hx = 0.55, .hy = 0.65, .hz = 0.45, .color = wood_color },
-    .{ .room = 3, .dc = 0, .dr = 0, .hx = 0.45, .hy = 0.75, .hz = 0.45, .color = crate_color },
-    .{ .room = 3, .dc = 3, .dr = 2, .hx = 0.65, .hy = 0.55, .hz = 0.50, .color = shelf_color },
-    .{ .room = 4, .dc = 0, .dr = 0, .hx = 0.50, .hy = 0.85, .hz = 0.40, .color = locker_color },
-    .{ .room = 4, .dc = 2, .dr = 3, .hx = 0.55, .hy = 0.60, .hz = 0.55, .color = crate_color },
-    .{ .room = 5, .dc = 0, .dr = 0, .hx = 0.70, .hy = 0.55, .hz = 0.70, .color = wood_color },
-    .{ .room = 5, .dc = 4, .dr = 0, .hx = 0.40, .hy = 0.95, .hz = 0.45, .color = locker_color },
-    .{ .room = 5, .dc = 4, .dr = 3, .hx = 0.60, .hy = 0.80, .hz = 0.60, .color = crate_color },
-    .{ .room = 6, .dc = 0, .dr = 0, .hx = 0.45, .hy = 0.90, .hz = 0.35, .color = shelf_color },
-    .{ .room = 6, .dc = 3, .dr = 2, .hx = 0.55, .hy = 0.65, .hz = 0.55, .color = wood_color },
-    .{ .room = 7, .dc = 0, .dr = 0, .hx = 0.50, .hy = 0.70, .hz = 0.50, .color = crate_color },
-    .{ .room = 7, .dc = 1, .dr = 2, .hx = 0.65, .hy = 0.55, .hz = 0.45, .color = wood_color },
-    .{ .room = 7, .dc = 3, .dr = 2, .hx = 0.40, .hy = 0.95, .hz = 0.40, .color = locker_color },
-    .{ .room = 8, .dc = 0, .dr = 0, .hx = 0.55, .hy = 0.60, .hz = 0.55, .color = crate_color },
-    .{ .room = 8, .dc = 3, .dr = 3, .hx = 0.70, .hy = 0.55, .hz = 0.40, .color = shelf_color },
-    .{ .room = 9, .dc = 0, .dr = 0, .hx = 0.45, .hy = 0.80, .hz = 0.50, .color = wood_color },
-    .{ .room = 9, .dc = 4, .dr = 2, .hx = 0.55, .hy = 0.65, .hz = 0.55, .color = crate_color },
-    .{ .room = 10, .dc = 0, .dr = 0, .hx = 0.35, .hy = 1.00, .hz = 0.60, .color = locker_color },
-    .{ .room = 10, .dc = 2, .dr = 3, .hx = 0.50, .hy = 0.70, .hz = 0.50, .color = wood_color },
-    .{ .room = 11, .dc = 0, .dr = 0, .hx = 0.50, .hy = 0.60, .hz = 0.50, .color = crate_color },
+const Wall = struct {
+    horizontal: bool,
+    fixed: f32,
+    from: f32,
+    to: f32,
 };
+
+// Door gaps are deliberately encoded as separate wall runs. This mirrors the
+// reference much more closely than carving centre-to-centre corridors.
+const interior_walls = [_]Wall{
+    // West wing: offices wrapped around a long central corridor.
+    .{ .horizontal = true, .fixed = -12.1, .from = -23.5, .to = -20.5 },
+    .{ .horizontal = true, .fixed = -12.1, .from = -18.9, .to = -16.2 },
+    .{ .horizontal = true, .fixed = -5.5, .from = -23.5, .to = -20.1 },
+    .{ .horizontal = true, .fixed = -5.5, .from = -18.5, .to = -16.5 },
+    .{ .horizontal = true, .fixed = -1.1, .from = -24.0, .to = -20.3 },
+    .{ .horizontal = true, .fixed = -1.1, .from = -18.7, .to = -14.0 },
+    .{ .horizontal = true, .fixed = 2.2, .from = -23.0, .to = -18.2 },
+    .{ .horizontal = true, .fixed = 2.2, .from = -16.6, .to = -12.6 },
+    .{ .horizontal = true, .fixed = 5.4, .from = -22.8, .to = -18.4 },
+    .{ .horizontal = true, .fixed = 5.4, .from = -16.8, .to = -12.0 },
+    .{ .horizontal = true, .fixed = 8.0, .from = -15.8, .to = -12.2 },
+    .{ .horizontal = false, .fixed = -23.5, .from = -12.1, .to = -6.9 },
+    .{ .horizontal = false, .fixed = -20.4, .from = -13.8, .to = -8.2 },
+    .{ .horizontal = false, .fixed = -18.3, .from = -5.5, .to = -3.8 },
+    .{ .horizontal = false, .fixed = -18.3, .from = -2.2, .to = 2.2 },
+    .{ .horizontal = false, .fixed = -18.7, .from = 2.2, .to = 7.5 },
+    .{ .horizontal = false, .fixed = -16.2, .from = -13.8, .to = -8.3 },
+    .{ .horizontal = false, .fixed = -16.2, .from = -6.7, .to = -1.1 },
+    .{ .horizontal = false, .fixed = -14.0, .from = -5.5, .to = -2.9 },
+    .{ .horizontal = false, .fixed = -12.6, .from = -1.1, .to = 5.4 },
+    .{ .horizontal = false, .fixed = -11.0, .from = 5.4, .to = 9.7 },
+    .{ .horizontal = false, .fixed = -8.2, .from = -13.8, .to = -10.5 },
+    .{ .horizontal = false, .fixed = -8.2, .from = -9.0, .to = -3.0 },
+
+    // West typewriter room, in the upper-right corner of the west wing.
+    .{ .horizontal = true, .fixed = -10.5, .from = -12.0, .to = -8.2 },
+    .{ .horizontal = true, .fixed = -3.0, .from = -12.0, .to = -8.2 },
+    .{ .horizontal = false, .fixed = -12.0, .from = -10.5, .to = -8.7 },
+    .{ .horizontal = false, .fixed = -12.0, .from = -7.3, .to = -3.0 },
+
+    // Main hall side rooms and the north cross-corridor.
+    .{ .horizontal = true, .fixed = -9.2, .from = -5.8, .to = -2.2 },
+    .{ .horizontal = true, .fixed = -9.2, .from = -0.6, .to = 3.0 },
+    .{ .horizontal = true, .fixed = -3.5, .from = 3.2, .to = 7.2 },
+    // Large office island in the central-east hall.
+    .{ .horizontal = true, .fixed = -9.2, .from = 9.3, .to = 14.8 },
+    .{ .horizontal = true, .fixed = -0.2, .from = 9.3, .to = 11.8 },
+    .{ .horizontal = true, .fixed = -0.2, .from = 13.2, .to = 14.8 },
+    .{ .horizontal = true, .fixed = -5.5, .from = 9.3, .to = 12.0 },
+    .{ .horizontal = true, .fixed = 2.0, .from = 5.8, .to = 8.7 },
+    .{ .horizontal = true, .fixed = 2.0, .from = 10.3, .to = 16.8 },
+    .{ .horizontal = true, .fixed = 5.2, .from = 6.0, .to = 9.6 },
+    .{ .horizontal = true, .fixed = 5.2, .from = 11.2, .to = 16.8 },
+    .{ .horizontal = false, .fixed = 4.0, .from = -9.2, .to = -5.8 },
+    .{ .horizontal = false, .fixed = 4.0, .from = -2.8, .to = 2.0 },
+    .{ .horizontal = false, .fixed = 6.0, .from = 2.0, .to = 8.8 },
+    .{ .horizontal = false, .fixed = 9.2, .from = 5.2, .to = 8.8 },
+    .{ .horizontal = false, .fixed = 9.3, .from = -9.2, .to = -0.2 },
+    .{ .horizontal = false, .fixed = 12.0, .from = -5.5, .to = -0.2 },
+    .{ .horizontal = false, .fixed = 14.8, .from = -9.2, .to = -0.2 },
+    .{ .horizontal = false, .fixed = 16.8, .from = -12.0, .to = -8.1 },
+    .{ .horizontal = false, .fixed = 16.8, .from = -6.5, .to = -4.0 },
+    .{ .horizontal = false, .fixed = 16.8, .from = -1.4, .to = 2.0 },
+
+    // East spine and the stacked rooms shown along the right edge.
+    .{ .horizontal = true, .fixed = -11.0, .from = 17.0, .to = 21.4 },
+    .{ .horizontal = true, .fixed = -11.0, .from = 23.0, .to = 25.8 },
+    .{ .horizontal = true, .fixed = -7.0, .from = 17.0, .to = 20.0 },
+    .{ .horizontal = true, .fixed = -7.0, .from = 21.6, .to = 25.8 },
+    .{ .horizontal = true, .fixed = -3.5, .from = 17.0, .to = 19.2 },
+    .{ .horizontal = true, .fixed = -3.5, .from = 22.6, .to = 25.8 },
+    .{ .horizontal = true, .fixed = 0.0, .from = 17.0, .to = 20.0 },
+    .{ .horizontal = true, .fixed = 0.0, .from = 22.6, .to = 25.8 },
+    .{ .horizontal = true, .fixed = 3.2, .from = 18.6, .to = 21.8 },
+    .{ .horizontal = true, .fixed = 3.2, .from = 23.4, .to = 25.8 },
+    .{ .horizontal = false, .fixed = 20.8, .from = -7.0, .to = -4.5 },
+    .{ .horizontal = false, .fixed = 20.8, .from = -1.8, .to = 0.0 },
+    .{ .horizontal = false, .fixed = 18.6, .from = 0.0, .to = 5.3 },
+    .{ .horizontal = false, .fixed = 18.6, .from = 6.9, .to = 9.8 },
+    .{ .horizontal = false, .fixed = 22.0, .from = -14.8, .to = -12.4 },
+    .{ .horizontal = false, .fixed = 22.0, .from = -10.8, .to = -7.0 },
+    .{ .horizontal = false, .fixed = 22.0, .from = 0.0, .to = 3.2 },
+
+    // North-east upper corridor and stair block.
+    .{ .horizontal = true, .fixed = -16.8, .from = 13.0, .to = 16.0 },
+    .{ .horizontal = true, .fixed = -14.8, .from = 13.0, .to = 16.0 },
+    .{ .horizontal = true, .fixed = -12.0, .from = 17.0, .to = 21.2 },
+    .{ .horizontal = true, .fixed = -12.0, .from = 22.8, .to = 25.8 },
+    .{ .horizontal = false, .fixed = 16.0, .from = -18.8, .to = -15.7 },
+    .{ .horizontal = false, .fixed = 16.0, .from = -14.1, .to = -12.0 },
+};
+
+const Prop = struct { x: f32, z: f32, hx: f32, hy: f32, hz: f32, color: Vec4 };
+const props = [_]Prop{
+    // West offices and records: desks, archive shelves, and lockers.
+    .{ .x = -21.7, .z = -9.0, .hx = 1.5, .hy = 0.55, .hz = 0.55, .color = wood_color },
+    .{ .x = -17.2, .z = -10.0, .hx = 0.40, .hy = 1.05, .hz = 1.20, .color = locker_color },
+    .{ .x = -21.2, .z = -3.4, .hx = 1.1, .hy = 0.55, .hz = 0.65, .color = wood_color },
+    .{ .x = -15.4, .z = -1.9, .hx = 1.2, .hy = 0.85, .hz = 0.38, .color = shelf_color },
+    .{ .x = -21.2, .z = 4.0, .hx = 0.42, .hy = 1.05, .hz = 1.25, .color = locker_color },
+    .{ .x = -15.1, .z = 6.7, .hx = 1.4, .hy = 0.55, .hz = 0.55, .color = wood_color },
+    .{ .x = -8.9, .z = 7.5, .hx = 0.45, .hy = 1.0, .hz = 1.4, .color = locker_color },
+    .{ .x = -10.0, .z = -5.0, .hx = 0.55, .hy = 0.65, .hz = 0.55, .color = crate_color },
+
+    // Main hall furniture leaves broad lanes around both sides.
+    .{ .x = -4.2, .z = -0.8, .hx = 0.55, .hy = 0.65, .hz = 1.35, .color = wood_color },
+    .{ .x = 2.2, .z = -0.8, .hx = 0.55, .hy = 0.65, .hz = 1.35, .color = wood_color },
+    .{ .x = -4.5, .z = 8.0, .hx = 1.1, .hy = 0.50, .hz = 0.45, .color = wood_color },
+    .{ .x = 2.4, .z = 8.1, .hx = 0.40, .hy = 1.0, .hz = 0.75, .color = locker_color },
+
+    // East offices and the hunter's starting room.
+    .{ .x = 6.8, .z = -7.0, .hx = 1.3, .hy = 0.55, .hz = 0.60, .color = wood_color },
+    .{ .x = 10.8, .z = -1.2, .hx = 0.38, .hy = 1.0, .hz = 1.35, .color = locker_color },
+    .{ .x = 13.7, .z = 3.6, .hx = 1.25, .hy = 0.55, .hz = 0.55, .color = wood_color },
+    .{ .x = 15.2, .z = 7.2, .hx = 0.40, .hy = 1.0, .hz = 1.15, .color = shelf_color },
+    .{ .x = 21.0, .z = 5.1, .hx = 0.45, .hy = 1.05, .hz = 1.15, .color = locker_color },
+    .{ .x = 23.8, .z = 7.6, .hx = 1.0, .hy = 0.60, .hz = 0.65, .color = crate_color },
+    .{ .x = 24.2, .z = -5.2, .hx = 0.42, .hy = 1.0, .hz = 1.0, .color = locker_color },
+};
+
+const SaveBounds = struct { min_x: f32, max_x: f32, min_z: f32, max_z: f32 };
 
 pub const Level = struct {
     boxes: [max_boxes]Box = undefined,
@@ -144,8 +244,10 @@ pub const Level = struct {
     player_spawn: Vec3 = .{},
     hunter_spawn: Vec3 = .{},
     save_room_target: Vec3 = .{},
-    // Base of the pink typewriter table, used for the save interaction radius.
-    save_fixture: Vec3 = .{},
+    save_fixtures: [2]Vec3 = @splat(.{}),
+    save_fixture_count: usize = 0,
+    save_bounds: [2]SaveBounds = @splat(.{ .min_x = 0, .max_x = 0, .min_z = 0, .max_z = 0 }),
+    // Retained for the map/game API; these describe the primary main-hall save.
     save_min_x: f32 = 0,
     save_max_x: f32 = 0,
     save_min_z: f32 = 0,
@@ -158,7 +260,10 @@ pub const Level = struct {
     }
 
     pub fn isInSaveRoom(self: *const Level, x: f32, z: f32) bool {
-        return x > self.save_min_x and x < self.save_max_x and z > self.save_min_z and z < self.save_max_z;
+        for (self.save_bounds) |bounds| {
+            if (x > bounds.min_x and x < bounds.max_x and z > bounds.min_z and z < bounds.max_z) return true;
+        }
+        return false;
     }
 
     pub fn graphDistance(self: *const Level, from: usize, to: usize) ?usize {
@@ -182,19 +287,17 @@ pub const Level = struct {
         return null;
     }
 
-    // Structural validation independent of Box3D/navmesh. Navmesh-level checks
-    // cover the two different agents before the level goes live.
     pub fn validate(self: *const Level) bool {
         if (self.room_count != room_capacity or self.box_count == 0 or self.box_count > max_boxes) return false;
-        const distance = self.graphDistance(self.start_room, self.save_room) orelse return false;
-        if (distance < 3 or !self.isInSaveRoom(self.save_room_target.x, self.save_room_target.z)) return false;
+        if (self.graphDistance(self.start_room, self.save_room) == null) return false;
+        if (!self.isInSaveRoom(self.save_room_target.x, self.save_room_target.z)) return false;
         if (self.isInSaveRoom(self.hunter_spawn.x, self.hunter_spawn.z)) return false;
-        const target_col = worldTile(self.save_room_target.x, footprint_half_x, tile_cols) orelse return false;
-        const target_row = worldTile(self.save_room_target.z, footprint_half_z, tile_rows) orelse return false;
-        if (!self.walkable[target_row * tile_cols + target_col]) return false;
+        const spawn_col = worldTile(self.player_spawn.x, footprint_half_x, tile_cols) orelse return false;
+        const spawn_row = worldTile(self.player_spawn.z, footprint_half_z, tile_rows) orelse return false;
+        if (!self.walkable[spawn_row * tile_cols + spawn_col]) return false;
         var barriers: usize = 0;
         for (self.boxSlice()) |box| barriers += @intFromBool(box.hunter_block);
-        return barriers == 1;
+        return barriers == 2 and self.save_fixture_count == 2;
     }
 
     fn addBox(self: *Level, box: Box) void {
@@ -206,7 +309,6 @@ pub const Level = struct {
 
 pub var current: Level = undefined;
 
-// Rebuild the authored level into the runtime slot.
 pub fn load() void {
     current = build();
 }
@@ -215,7 +317,7 @@ fn build() Level {
     var result = Level{};
     placeRooms(&result);
     connectRooms(&result);
-    carveRoomsAndCorridors(&result);
+    carveFootprint(&result);
     chooseObjectives(&result);
     buildGeometry(&result);
     deriveLights(&result);
@@ -236,119 +338,140 @@ fn placeRooms(result: *Level) void {
 }
 
 fn connectRooms(result: *Level) void {
-    for (room_edges) |edge| addEdge(result, edge);
+    for (room_edges) |edge| {
+        result.edges[result.edge_count] = edge;
+        result.edge_count += 1;
+        result.rooms[edge.a].neighbors |= @as(u16, 1) << @intCast(edge.b);
+        result.rooms[edge.b].neighbors |= @as(u16, 1) << @intCast(edge.a);
+    }
 }
 
-fn addEdge(result: *Level, edge: Edge) void {
-    std.debug.assert(result.edge_count < edge_capacity);
-    result.edges[result.edge_count] = edge;
-    result.edge_count += 1;
-    result.rooms[edge.a].neighbors |= @as(u16, 1) << @intCast(edge.b);
-    result.rooms[edge.b].neighbors |= @as(u16, 1) << @intCast(edge.a);
-}
-
-fn carveRoomsAndCorridors(result: *Level) void {
-    for (result.rooms[0..result.room_count]) |room| {
-        for (room.min_row..room.min_row + room.rows) |row| {
-            for (room.min_col..room.min_col + room.cols) |col| setWalkable(result, col, row);
+fn carveFootprint(result: *Level) void {
+    for (floor_rects) |rect| {
+        for (rect.min_row..rect.min_row + rect.rows) |row| {
+            for (rect.min_col..rect.min_col + rect.cols) |col| {
+                result.walkable[row * tile_cols + col] = true;
+            }
         }
     }
-    for (result.edges[0..result.edge_count]) |edge| {
-        const a = roomCenterTile(result.rooms[edge.a]);
-        const b = roomCenterTile(result.rooms[edge.b]);
-        // Fixed L-shape orientation: run horizontally first, then vertically.
-        carveHorizontal(result, a[0], b[0], a[1]);
-        carveVertical(result, a[1], b[1], b[0]);
-    }
-}
-
-fn roomCenterTile(room: Room) [2]usize {
-    return .{ room.min_col + room.cols / 2, room.min_row + room.rows / 2 };
-}
-
-fn carveHorizontal(result: *Level, from: usize, to: usize, row: usize) void {
-    const low = @min(from, to);
-    const high = @max(from, to);
-    for (low..high + 1) |col| {
-        setWalkable(result, col, row);
-        setWalkable(result, col, if (row + 1 < tile_rows - 1) row + 1 else row - 1);
-    }
-}
-
-fn carveVertical(result: *Level, from: usize, to: usize, col: usize) void {
-    const low = @min(from, to);
-    const high = @max(from, to);
-    for (low..high + 1) |row| {
-        setWalkable(result, col, row);
-        setWalkable(result, if (col + 1 < tile_cols - 1) col + 1 else col - 1, row);
-    }
-}
-
-fn setWalkable(result: *Level, col: usize, row: usize) void {
-    if (col < tile_cols and row < tile_rows) result.walkable[row * tile_cols + col] = true;
 }
 
 fn chooseObjectives(result: *Level) void {
-    const start = result.rooms[start_room_index].center();
-    const save = result.rooms[save_room_index];
-    const save_center = save.center();
     result.start_room = start_room_index;
     result.save_room = save_room_index;
-    result.player_spawn = start;
-    result.save_room_target = save_center;
-    result.save_min_x = -footprint_half_x + @as(f32, @floatFromInt(save.min_col)) * tile_size + 0.25;
-    result.save_max_x = result.save_min_x + @as(f32, @floatFromInt(save.cols)) * tile_size - 0.5;
-    result.save_min_z = -footprint_half_z + @as(f32, @floatFromInt(save.min_row)) * tile_size + 0.25;
-    result.save_max_z = result.save_min_z + @as(f32, @floatFromInt(save.rows)) * tile_size - 0.5;
+    // South end of the central entrance lobby, facing into the main hall.
+    result.player_spawn = .{ .x = 0, .z = 10.5 };
+    // The large room at the south-east end of the eastern spine.
+    result.hunter_spawn = .{ .x = 23.8, .z = -1.8 };
 
-    // Hunter starts in the room with greatest Euclidean separation from the
-    // player, excluding the protected room.
-    var best_distance: f32 = -1;
-    for (0..result.room_count) |index| {
-        if (index == result.start_room or index == result.save_room) continue;
-        const center = result.rooms[index].center();
-        const dx = center.x - start.x;
-        const dz = center.z - start.z;
-        const distance = dx * dx + dz * dz;
-        if (distance > best_distance) {
-            best_distance = distance;
-            result.hunter_spawn = center;
+    // Main hall typewriter enclosure and west-wing typewriter room.
+    result.save_bounds[0] = .{ .min_x = -3.7, .max_x = 1.7, .min_z = 2.0, .max_z = 5.7 };
+    result.save_bounds[1] = .{ .min_x = -11.8, .max_x = -8.35, .min_z = -10.3, .max_z = -3.2 };
+    result.save_min_x = result.save_bounds[0].min_x;
+    result.save_max_x = result.save_bounds[0].max_x;
+    result.save_min_z = result.save_bounds[0].min_z;
+    result.save_max_z = result.save_bounds[0].max_z;
+    result.save_room_target = .{ .x = -0.5, .z = 4.2 };
+}
+
+fn buildGeometry(result: *Level) void {
+    buildSurfaces(result);
+    buildHorizontalBoundaries(result);
+    buildVerticalBoundaries(result);
+
+    for (interior_walls) |wall| {
+        const middle = (wall.from + wall.to) * 0.5;
+        const half = (wall.to - wall.from) * 0.5;
+        if (wall.horizontal) {
+            result.addBox(wallX(middle, 0, wall.fixed, half, wall_color));
+        } else {
+            result.addBox(wallZ(wall.fixed, 0, middle, half, wall_color));
+        }
+    }
+
+    // Narrow shafts/courtyards visible as black holes in the source plan.
+    result.addBox(solid(-18.0, 0.65, -4.5, 0.55, 0.65, 1.0, void_color));
+    result.addBox(solid(3.55, 0.65, 3.0, 0.45, 0.65, 5.8, void_color));
+    result.addBox(solid(17.8, 0.65, -5.1, 2.8, 0.65, 1.0, void_color));
+    result.addBox(solid(19.8, 0.65, 1.5, 1.2, 0.65, 0.75, void_color));
+
+    for (props) |item| {
+        result.addBox(solid(item.x, item.hy, item.z, item.hx, item.hy, item.hz, item.color));
+    }
+
+    // Main-hall save enclosure: a shallow U with one player-sized opening.
+    result.addBox(wallX(-1.0, 0, 2.0, 2.7, wall_color));
+    result.addBox(wallZ(-3.7, 0, 3.85, 1.85, wall_color));
+    result.addBox(wallZ(1.7, 0, 3.85, 1.85, wall_color));
+    result.addBox(wallX(-2.95, 0, 5.7, 0.75, wall_color));
+    result.addBox(wallX(0.95, 0, 5.7, 0.75, wall_color));
+    result.addBox(hunterDoorX(-1.0, 5.7, 1.2));
+    addTypewriter(result, -2.3, 3.3);
+
+    // West save room has one doorway in its west wall.
+    result.addBox(hunterDoorZ(-12.0, -8.0, 0.7));
+    addTypewriter(result, -9.5, -7.7);
+
+    // First-floor-only stair treatment. Each ramp rises into an existing solid
+    // wall, making the unfinished upper-floor exits explicit dead ends.
+    addRamp(result, -9.7, -12.1, 1.25, 1.65, -0.20);
+    addRamp(result, -4.1, -5.9, 1.15, 1.85, -0.20);
+    addRamp(result, 2.2, -5.9, 1.15, 1.85, -0.20);
+    addRamp(result, 14.5, -15.8, 1.15, 1.45, -0.22);
+    addRamp(result, 20.0, -9.5, 1.05, 1.55, -0.22);
+    addRamp(result, 24.0, 6.1, 1.05, 1.50, 0.22);
+}
+
+// Tile the exact footprint into non-overlapping rectangular floor and roof
+// pieces. The old full-footprint slabs made exterior voids look like playable
+// floor in map view and left a roof hanging outside the building silhouette.
+fn buildSurfaces(result: *Level) void {
+    var consumed: [tile_count]bool = @splat(false);
+    for (0..tile_rows) |row| {
+        for (0..tile_cols) |col| {
+            const start = row * tile_cols + col;
+            if (!result.walkable[start] or consumed[start]) continue;
+
+            var width: usize = 1;
+            while (col + width < tile_cols) : (width += 1) {
+                const cell = row * tile_cols + col + width;
+                if (!result.walkable[cell] or consumed[cell]) break;
+            }
+
+            var height: usize = 1;
+            height_loop: while (row + height < tile_rows) : (height += 1) {
+                for (col..col + width) |next_col| {
+                    const cell = (row + height) * tile_cols + next_col;
+                    if (!result.walkable[cell] or consumed[cell]) break :height_loop;
+                }
+            }
+
+            for (row..row + height) |used_row| {
+                for (col..col + width) |used_col| consumed[used_row * tile_cols + used_col] = true;
+            }
+
+            const x = -footprint_half_x + (@as(f32, @floatFromInt(col)) + @as(f32, @floatFromInt(width)) * 0.5) * tile_size;
+            const z = -footprint_half_z + (@as(f32, @floatFromInt(row)) + @as(f32, @floatFromInt(height)) * 0.5) * tile_size;
+            const hx = @as(f32, @floatFromInt(width)) * tile_size * 0.5;
+            const hz = @as(f32, @floatFromInt(height)) * tile_size * 0.5;
+            result.addBox(slab(x, 0, z, hx, hz));
+            result.addBox(ceiling(x, floor_height, z, hx, hz));
         }
     }
 }
 
-fn buildGeometry(result: *Level) void {
-    result.addBox(slab(0, 0, 0, footprint_half_x, footprint_half_z));
-    result.addBox(ceiling(0, floor_height, 0, footprint_half_x, footprint_half_z));
-    buildHorizontalWalls(result);
-    buildVerticalWalls(result);
+fn addTypewriter(result: *Level, x: f32, z: f32) void {
+    result.save_fixtures[result.save_fixture_count] = .{ .x = x, .z = z };
+    result.save_fixture_count += 1;
+    result.addBox(solid(x, 0.55, z, 1.0, 0.55, 0.62, oxocarbon_pink));
+    result.addBox(visual(x, 1.16, z, 0.28, 0.06, 0.18, typewriter_color));
+}
 
-    // Hand-placed furniture, kept clear of the centre lanes used by corridors.
-    for (furniture) |item| {
-        const room = room_rects[item.room];
-        std.debug.assert(item.dc < room.cols and item.dr < room.rows);
-        const center = tileCenter(room.min_col + item.dc, room.min_row + item.dr);
-        result.addBox(solid(center.x, item.hy, center.z, item.hx, item.hy, item.hz, item.color));
-    }
-
-    // A visible save fixture sits away from the open target at room centre.
-    const save = result.rooms[result.save_room];
-    const save_center = save.center();
-    const offset_x: f32 = if (save_center.x < 0) 1.8 else -1.8;
-    result.save_fixture = .{ .x = save_center.x + offset_x, .y = 0, .z = save_center.z };
-    result.addBox(visual(save_center.x + offset_x, 0.8, save_center.z, 1.1, 0.8, 0.65, oxocarbon_pink));
-    result.addBox(visual(save_center.x + offset_x, 1.66, save_center.z, 0.28, 0.06, 0.18, typewriter_color));
-
-    // The room is closed on every side except its single west doorway (the
-    // two-tile corridor mouth from edge {10,11}, centred on the room's z).
-    // Physical walls define the rest of the perimeter; this one invisible
-    // box seals only the doorway against the hunter while the player walks
-    // through freely, and it also occludes hunter sight rays.
-    result.addBox(hunterDoorZ(
-        -footprint_half_x + @as(f32, @floatFromInt(save.min_col)) * tile_size,
-        save_center.z,
-        tile_size,
-    ));
+fn addRamp(result: *Level, x: f32, z: f32, hx: f32, hz: f32, pitch: f32) void {
+    var box = solid(x, 0.38, z, hx, 0.12, hz, stair_color);
+    box.pitch = pitch;
+    box.nav_block = false;
+    result.addBox(box);
 }
 
 fn boundaryHorizontal(result: *const Level, col: usize, boundary_row: usize) bool {
@@ -363,7 +486,7 @@ fn boundaryVertical(result: *const Level, boundary_col: usize, row: usize) bool 
     return west != east;
 }
 
-fn buildHorizontalWalls(result: *Level) void {
+fn buildHorizontalBoundaries(result: *Level) void {
     for (0..tile_rows + 1) |boundary_row| {
         var col: usize = 0;
         while (col < tile_cols) {
@@ -374,14 +497,14 @@ fn buildHorizontalWalls(result: *Level) void {
             const start = col;
             while (col < tile_cols and boundaryHorizontal(result, col, boundary_row)) col += 1;
             const length = col - start;
-            const x = -footprint_half_x + (@as(f32, @floatFromInt(start)) + @as(f32, @floatFromInt(length)) * 0.5) * tile_size;
-            const z = -footprint_half_z + @as(f32, @floatFromInt(boundary_row)) * tile_size;
-            result.addBox(wallX(x, 0, z, @as(f32, @floatFromInt(length)), wall_color));
+            const x = -footprint_half_x + @as(f32, @floatFromInt(start)) + @as(f32, @floatFromInt(length)) * 0.5;
+            const z = -footprint_half_z + @as(f32, @floatFromInt(boundary_row));
+            result.addBox(wallX(x, 0, z, @as(f32, @floatFromInt(length)) * 0.5, wall_color));
         }
     }
 }
 
-fn buildVerticalWalls(result: *Level) void {
+fn buildVerticalBoundaries(result: *Level) void {
     for (0..tile_cols + 1) |boundary_col| {
         var row: usize = 0;
         while (row < tile_rows) {
@@ -392,38 +515,28 @@ fn buildVerticalWalls(result: *Level) void {
             const start = row;
             while (row < tile_rows and boundaryVertical(result, boundary_col, row)) row += 1;
             const length = row - start;
-            const x = -footprint_half_x + @as(f32, @floatFromInt(boundary_col)) * tile_size;
-            const z = -footprint_half_z + (@as(f32, @floatFromInt(start)) + @as(f32, @floatFromInt(length)) * 0.5) * tile_size;
-            result.addBox(wallZ(x, 0, z, @as(f32, @floatFromInt(length)), wall_color));
+            const x = -footprint_half_x + @as(f32, @floatFromInt(boundary_col));
+            const z = -footprint_half_z + @as(f32, @floatFromInt(start)) + @as(f32, @floatFromInt(length)) * 0.5;
+            result.addBox(wallZ(x, 0, z, @as(f32, @floatFromInt(length)) * 0.5, wall_color));
         }
     }
 }
 
 fn deriveLights(result: *Level) void {
-    // Always light start/save first, then spread the remaining fixtures across
-    // the other rooms. The shader has eight fixture slots.
-    const first = [_]usize{ result.start_room, result.save_room };
-    for (first) |index| addRoomLight(result, index);
-    for (0..result.room_count) |index| {
-        if (result.light_count == light_capacity) break;
-        if (index == result.start_room or index == result.save_room) continue;
-        addRoomLight(result, index);
-    }
-}
-
-fn addRoomLight(result: *Level, index: usize) void {
-    const room = result.rooms[index];
-    const center = room.center();
-    const radius = @max(@as(f32, @floatFromInt(room.cols)), @as(f32, @floatFromInt(room.rows))) * tile_size * 0.9;
-    result.lights[result.light_count] = .{ .x = center.x, .y = 4.1, .z = center.z, .w = @max(radius, 7) };
-    result.light_count += 1;
-}
-
-fn tileCenter(col: usize, row: usize) Vec3 {
-    return .{
-        .x = -footprint_half_x + (@as(f32, @floatFromInt(col)) + 0.5) * tile_size,
-        .z = -footprint_half_z + (@as(f32, @floatFromInt(row)) + 0.5) * tile_size,
+    const fixtures = [_]Vec4{
+        .{ .x = -1.0, .y = 4.1, .z = 5.0, .w = 9.0 },
+        .{ .x = -1.0, .y = 4.1, .z = -5.0, .w = 9.0 },
+        .{ .x = -10.0, .y = 4.1, .z = -7.0, .w = 8.0 },
+        .{ .x = -21.0, .y = 4.1, .z = -8.0, .w = 9.0 },
+        .{ .x = -18.0, .y = 4.1, .z = 5.0, .w = 9.0 },
+        .{ .x = 9.0, .y = 4.1, .z = -6.0, .w = 9.0 },
+        .{ .x = 13.0, .y = 4.1, .z = 5.0, .w = 9.0 },
+        .{ .x = 23.0, .y = 4.1, .z = 4.0, .w = 9.0 },
     };
+    for (fixtures) |fixture| {
+        result.lights[result.light_count] = fixture;
+        result.light_count += 1;
+    }
 }
 
 fn worldTile(value: f32, half_extent: f32, count: usize) ?usize {
@@ -439,6 +552,8 @@ const wood_color = rgba(0.42, 0.37, 0.31, 1);
 const crate_color = rgba(0.55, 0.47, 0.33, 1);
 const shelf_color = rgba(0.33, 0.30, 0.27, 1);
 const locker_color = rgba(0.47, 0.51, 0.53, 1);
+const stair_color = rgba(0.36, 0.38, 0.40, 1);
+const void_color = rgba(0.035, 0.04, 0.045, 1);
 const oxocarbon_pink = rgba(1.0, 0.49, 0.71, 1);
 const typewriter_color = rgba(0.06, 0.06, 0.07, 1);
 
@@ -488,45 +603,33 @@ fn rgba(r: f32, g: f32, b: f32, a: f32) Vec4 {
     return .{ .x = r, .y = g, .z = b, .w = a };
 }
 
-test "authored level validates structurally" {
+test "RPD first floor validates structurally" {
     load();
     try std.testing.expect(current.validate());
-    try std.testing.expect((current.graphDistance(current.start_room, current.save_room) orelse 0) >= 3);
-    try std.testing.expect(current.player_spawn.x >= -footprint_half_x and current.player_spawn.x <= footprint_half_x);
-    try std.testing.expect(current.player_spawn.z >= -footprint_half_z and current.player_spawn.z <= footprint_half_z);
     try std.testing.expectEqual(room_capacity, current.room_count);
-    try std.testing.expectEqual(@as(usize, 15), current.edge_count);
+    try std.testing.expectEqual(@as(usize, 17), current.edge_count);
+    try std.testing.expectEqual(@as(usize, 2), current.save_fixture_count);
 }
 
-test "save room perimeter has exactly one two-tile doorway" {
+test "player starts in south entrance and hunter starts east" {
     load();
-    const save = current.rooms[current.save_room];
-    var openings: usize = 0;
-    // Count walkable cells just outside each boundary line of the room rect.
-    for ([_]usize{ save.min_col - 1, save.min_col + save.cols }) |outside_col| {
-        for (save.min_row..save.min_row + save.rows) |row| {
-            if (current.walkable[row * tile_cols + outside_col]) openings += 1;
-        }
-    }
-    for ([_]usize{ save.min_row - 1, save.min_row + save.rows }) |outside_row| {
-        for (save.min_col..save.min_col + save.cols) |col| {
-            if (current.walkable[outside_row * tile_cols + col]) openings += 1;
-        }
-    }
-    // One doorway, two tiles wide.
-    try std.testing.expectEqual(@as(usize, 2), openings);
+    try std.testing.expect(current.player_spawn.z > 8.0);
+    try std.testing.expect(@abs(current.player_spawn.x) < 1.0);
+    try std.testing.expect(current.hunter_spawn.x > 18.0);
 }
 
-test "single hunter barrier sits inside the save-room doorway" {
+test "both save locations have hunter barriers" {
     load();
-    const save = current.rooms[current.save_room];
-    var found: usize = 0;
-    for (current.boxSlice()) |box| {
-        if (!box.hunter_block) continue;
-        found += 1;
-        try std.testing.expect(box.center.x <= -footprint_half_x + @as(f32, @floatFromInt(save.min_col)) * tile_size + 0.01);
-        try std.testing.expect(box.center.z > -footprint_half_z + @as(f32, @floatFromInt(save.min_row)) * tile_size);
-        try std.testing.expect(box.center.z < -footprint_half_z + @as(f32, @floatFromInt(save.min_row + save.rows)) * tile_size);
-    }
-    try std.testing.expectEqual(@as(usize, 1), found);
+    var barriers: usize = 0;
+    for (current.boxSlice()) |box| barriers += @intFromBool(box.hunter_block);
+    try std.testing.expectEqual(@as(usize, 2), barriers);
+    try std.testing.expect(current.isInSaveRoom(-1.0, 4.1));
+    try std.testing.expect(current.isInSaveRoom(-9.5, -7.7));
+}
+
+test "six stair ramps are pitched and terminate on first floor" {
+    load();
+    var ramps: usize = 0;
+    for (current.boxSlice()) |box| ramps += @intFromBool(box.pitch != 0);
+    try std.testing.expectEqual(@as(usize, 6), ramps);
 }

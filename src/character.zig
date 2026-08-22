@@ -44,12 +44,13 @@ const hunter_color = Vec4{ .x = 0.92, .y = 0.12, .z = 0.14, .w = 1 };
 // the floor at the room-derived spawn points.
 const player_spawn_y: f32 = 0.9;
 const hunter_spawn_y: f32 = 1.5;
+const save_interaction_radius: f32 = 2.0;
 
 // How long a HUD notice (catch / save result) stays on screen.
 const notice_seconds: f32 = 3;
 
 // Transient centered HUD messages.
-const HudNotice = enum { none, caught, saved, save_failed, deleted };
+const HudNotice = enum { none, caught, saved, save_failed, deleted, hunter_friendly, hunter_hostile };
 
 // Top-down map view tuning.
 const map_pan_speed: f32 = 25.0; // metres/second the map pans with WASD
@@ -203,6 +204,7 @@ const GameState = struct {
     character: controller.State = initialCharacter(),
     hunter_config: hunter.Config = .{},
     hunter: hunter.State = initialHunter(),
+    hunter_friendly: bool = false,
     // Current transient HUD message and its remaining seconds.
     notice: HudNotice = .none,
     notice_timer: f32 = 0,
@@ -376,6 +378,11 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 },
                 .F1 => if (down and !value.key_repeat) {
                     game.debug.draw_physics = !game.debug.draw_physics;
+                },
+                .F => if (down and !value.key_repeat and game.menu.kind == .none) {
+                    game.hunter_friendly = !game.hunter_friendly;
+                    game.notice = if (game.hunter_friendly) .hunter_friendly else .hunter_hostile;
+                    game.notice_timer = notice_seconds;
                 },
                 .M => if (down and !value.key_repeat and game.menu.kind == .none) {
                     game.map.active = !game.map.active;
@@ -551,6 +558,7 @@ fn resetHunter(player_pos: b3.b3Pos) void {
 
 // The hunter catches the player when their capsules touch horizontally.
 fn hunterContacted() bool {
+    if (game.hunter_friendly) return false;
     const dx = game.hunter.position.x - game.character.position.x;
     const dz = game.hunter.position.z - game.character.position.z;
     const radius = game.hunter_config.contact_radius;
@@ -577,12 +585,15 @@ fn respawnAfterCatch() void {
     game.input = .{};
 }
 
-// True while the character stands within 1 m of the pink typewriter table.
+// True while the character stands within the interaction area of a typewriter.
 fn nearSaveFixture() bool {
-    const fixture = level.current.save_fixture;
-    const dx = game.character.position.x - fixture.x;
-    const dz = game.character.position.z - fixture.z;
-    return dx * dx + dz * dz <= 1.0;
+    const radius_squared = save_interaction_radius * save_interaction_radius;
+    for (level.current.save_fixtures[0..level.current.save_fixture_count]) |fixture| {
+        const dx = game.character.position.x - fixture.x;
+        const dz = game.character.position.z - fixture.z;
+        if (dx * dx + dz * dz <= radius_squared) return true;
+    }
+    return false;
 }
 
 fn openMenu(kind: MenuKind) void {
@@ -1053,7 +1064,10 @@ fn drawHud(position: b3.b3Pos) void {
         sdtx.color3b(255, 220, 120);
         sdtx.print("MAP (WASD pans, P toggles hunter, M exits)", .{});
         sdtx.pos(1.0, 2.2);
-        sdtx.print("HUNTER: {s}", .{if (game.map.hunter_paused) "PAUSED" else "MOVING"});
+        sdtx.print("HUNTER: {s} / {s}", .{
+            if (game.map.hunter_paused) "PAUSED" else "MOVING",
+            if (game.hunter_friendly) "FRIENDLY" else "HOSTILE",
+        });
         switch (game.map.route_status) {
             .arrived => {
                 sdtx.pos(1.0, 3.4);
@@ -1067,15 +1081,24 @@ fn drawHud(position: b3.b3Pos) void {
             },
             else => {},
         }
-    } else if (game.debug.draw_physics) {
-        sdtx.pos(1.0, 1.0);
-        sdtx.print("POS {d:.1} {d:.1} {d:.1}", .{ position.x, position.y, position.z });
+    } else {
+        if (game.debug.draw_physics) {
+            sdtx.pos(1.0, 1.0);
+            sdtx.print("POS {d:.1} {d:.1} {d:.1}", .{ position.x, position.y, position.z });
+        }
+        if (game.hunter_friendly) {
+            sdtx.pos(1.0, 2.2);
+            sdtx.color3b(80, 250, 123);
+            sdtx.print("HUNTER FRIENDLY (F toggles)", .{});
+        }
     }
     switch (game.notice) {
         .caught => drawNotice("CAUGHT - RETURNED TO LAST SAVE", 255, 60, 60),
         .saved => drawNotice("GAME SAVED", 80, 250, 123),
         .deleted => drawNotice("SAVE DELETED", 255, 220, 120),
         .save_failed => drawNotice("SAVE FAILED", 255, 60, 60),
+        .hunter_friendly => drawNotice("HUNTER FRIENDLY", 80, 250, 123),
+        .hunter_hostile => drawNotice("HUNTER HOSTILE", 255, 85, 85),
         .none => {},
     }
     if (game.menu.kind != .none) {

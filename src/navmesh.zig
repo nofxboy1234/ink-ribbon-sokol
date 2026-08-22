@@ -117,7 +117,7 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
                 const cz = self.worldZ(cell / cols);
                 const half = cell_size * 0.5 + options.radius;
                 for (boxes) |box| {
-                    if (!box.collidable or box.is_roof) continue;
+                    if (!box.collidable or !box.nav_block or box.is_roof) continue;
                     if (!options.include_hunter_block and box.hunter_block) continue;
                     if (box.center.y + box.half_extents.y <= 0.05) continue;
                     if (aabbXZ(cx, cz, half, box)) {
@@ -415,7 +415,10 @@ pub var player_nav: Grid(level_cols, level_rows) = .{};
 
 pub fn buildLevel() void {
     const boxes = level.current.boxSlice();
-    level_nav.buildFromBoxes(boxes, 0.5);
+    // A nav cell already contributes 0.25 m of footprint. The remaining
+    // 0.25 m gives the hunter's 0.5 m capsule its true wall clearance without
+    // conservatively sealing ordinary doorways.
+    level_nav.buildFromBoxes(boxes, 0.25);
     player_nav.buildFromBoxesWithOptions(boxes, .{
         .radius = 0.35,
         .include_hunter_block = false,
@@ -436,6 +439,13 @@ pub fn validateLevel() bool {
         target.z,
         path[0..],
     ) == 0) return false;
+    if (level_nav.findPath(
+        level.current.hunter_spawn.x,
+        level.current.hunter_spawn.z,
+        level.current.player_spawn.x,
+        level.current.player_spawn.z,
+        path[0..],
+    ) == 0) return false;
     return level_nav.findPath(
         level.current.hunter_spawn.x,
         level.current.hunter_spawn.z,
@@ -443,6 +453,34 @@ pub fn validateLevel() bool {
         target.z,
         path[0..],
     ) == 0;
+}
+
+test "runtime level validation accepts the authored floor" {
+    level.load();
+    buildLevel();
+    var path: [level_cols * level_rows]b3.b3Pos = undefined;
+    try std.testing.expect(player_nav.findPath(
+        level.current.player_spawn.x,
+        level.current.player_spawn.z,
+        level.current.save_room_target.x,
+        level.current.save_room_target.z,
+        path[0..],
+    ) > 0);
+    try std.testing.expect(level_nav.findPath(
+        level.current.hunter_spawn.x,
+        level.current.hunter_spawn.z,
+        level.current.player_spawn.x,
+        level.current.player_spawn.z,
+        path[0..],
+    ) > 0);
+    try std.testing.expectEqual(@as(usize, 0), level_nav.findPath(
+        level.current.hunter_spawn.x,
+        level.current.hunter_spawn.z,
+        level.current.save_room_target.x,
+        level.current.save_room_target.z,
+        path[0..],
+    ));
+    try std.testing.expect(validateLevel());
 }
 
 test "grid marks walls and furniture but clears open floor" {

@@ -23,22 +23,24 @@ pub var slots: [slot_count]Slot = @splat(.{});
 
 const file_name = "saves.json";
 const file_limit = 1 << 20;
+const current_version: u32 = 2;
 
 const FileFormat = struct {
-    version: u32 = 1,
+    version: u32 = current_version,
     slots: [slot_count]Slot = @splat(.{}),
 };
 
 // Read all slots from disk. A missing or corrupt file simply leaves every
 // slot empty; saving is never blocked by load problems.
 pub fn loadFromDir(dir: std.Io.Dir, io: std.Io) void {
+    slots = @splat(.{});
     const contents = dir.readFileAlloc(io, file_name, std.heap.page_allocator, std.Io.Limit.limited(file_limit)) catch return;
     defer std.heap.page_allocator.free(contents);
     const parsed = std.json.parseFromSlice(FileFormat, std.heap.page_allocator, contents, .{
         .ignore_unknown_fields = true,
     }) catch return;
     defer parsed.deinit();
-    if (parsed.value.slots.len == slot_count) {
+    if (parsed.value.version == current_version and parsed.value.slots.len == slot_count) {
         slots = parsed.value.slots;
     }
 }
@@ -48,7 +50,7 @@ pub fn loadFromDir(dir: std.Io.Dir, io: std.Io) void {
 pub fn writeToDir(dir: std.Io.Dir, io: std.Io) !void {
     const data = try std.json.Stringify.valueAlloc(
         std.heap.page_allocator,
-        FileFormat{ .version = 1, .slots = slots },
+        FileFormat{ .version = current_version, .slots = slots },
         .{},
     );
     defer std.heap.page_allocator.free(data);
@@ -104,6 +106,24 @@ test "corrupt save file leaves empty slots" {
 
     slots[1] = .{ .occupied = true };
     defer slots[1] = .{};
+    loadFromDir(tmp.dir, std.testing.io);
+    for (slots) |slot| try std.testing.expect(!slot.occupied);
+}
+
+test "old level saves are ignored" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var old_slots: [slot_count]Slot = @splat(.{});
+    old_slots[0] = .{ .occupied = true, .x = 15.5, .z = 12.4 };
+    const data = try std.json.Stringify.valueAlloc(
+        std.heap.page_allocator,
+        FileFormat{ .version = 1, .slots = old_slots },
+        .{},
+    );
+    defer std.heap.page_allocator.free(data);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = file_name, .data = data });
+
     loadFromDir(tmp.dir, std.testing.io);
     for (slots) |slot| try std.testing.expect(!slot.occupied);
 }
