@@ -68,15 +68,16 @@ const room_rects = [_]RoomRect{
     .{ .min_col = 2, .min_row = 7, .cols = 3, .rows = 4 }, //  4 west wing
     .{ .min_col = 9, .min_row = 8, .cols = 5, .rows = 4 }, //  5 central atrium
     .{ .min_col = 16, .min_row = 7, .cols = 4, .rows = 3 }, // 6 east gallery
-    .{ .min_col = 20, .min_row = 10, .cols = 4, .rows = 4 }, // 7 south-east stairwell
+    .{ .min_col = 20, .min_row = 10, .cols = 4, .rows = 3 }, // 7 south-east stairwell
     .{ .min_col = 1, .min_row = 13, .cols = 4, .rows = 4 }, // 8 south-west storage
     .{ .min_col = 7, .min_row = 14, .cols = 5, .rows = 3 }, // 9 south corridor room
     .{ .min_col = 15, .min_row = 13, .cols = 3, .rows = 4 }, // 10 south passage
     .{ .min_col = 20, .min_row = 14, .cols = 4, .rows = 4 }, // 11 south-east save room
 };
 
-// A spanning tree plus five cycle edges: plenty of loops for chases without
-// losing the tree's long dead-end character.
+// A spanning tree plus four cycle edges: loops for chases without losing the
+// tree's long dead-end character. Room 11 (save) deliberately has exactly one
+// connection: its west doorway is the room's single entrance.
 const room_edges = [_]Edge{
     .{ .a = 0, .b = 1 },
     .{ .a = 1, .b = 2 },
@@ -93,7 +94,6 @@ const room_edges = [_]Edge{
     .{ .a = 2, .b = 6 },
     .{ .a = 5, .b = 9 },
     .{ .a = 9, .b = 10 },
-    .{ .a = 7, .b = 11 },
 };
 
 const start_room_index: usize = 0;
@@ -120,8 +120,8 @@ const furniture = [_]Furniture{
     .{ .room = 6, .dc = 0, .dr = 0, .hx = 0.45, .hy = 0.90, .hz = 0.35, .color = shelf_color },
     .{ .room = 6, .dc = 3, .dr = 2, .hx = 0.55, .hy = 0.65, .hz = 0.55, .color = wood_color },
     .{ .room = 7, .dc = 0, .dr = 0, .hx = 0.50, .hy = 0.70, .hz = 0.50, .color = crate_color },
-    .{ .room = 7, .dc = 1, .dr = 3, .hx = 0.65, .hy = 0.55, .hz = 0.45, .color = wood_color },
-    .{ .room = 7, .dc = 3, .dr = 3, .hx = 0.40, .hy = 0.95, .hz = 0.40, .color = locker_color },
+    .{ .room = 7, .dc = 1, .dr = 2, .hx = 0.65, .hy = 0.55, .hz = 0.45, .color = wood_color },
+    .{ .room = 7, .dc = 3, .dr = 2, .hx = 0.40, .hy = 0.95, .hz = 0.40, .color = locker_color },
     .{ .room = 8, .dc = 0, .dr = 0, .hx = 0.55, .hy = 0.60, .hz = 0.55, .color = crate_color },
     .{ .room = 8, .dc = 3, .dr = 3, .hx = 0.70, .hy = 0.55, .hz = 0.40, .color = shelf_color },
     .{ .room = 9, .dc = 0, .dr = 0, .hx = 0.45, .hy = 0.80, .hz = 0.50, .color = wood_color },
@@ -144,6 +144,8 @@ pub const Level = struct {
     player_spawn: Vec3 = .{},
     hunter_spawn: Vec3 = .{},
     save_room_target: Vec3 = .{},
+    // Base of the pink typewriter table, used for the save interaction radius.
+    save_fixture: Vec3 = .{},
     save_min_x: f32 = 0,
     save_max_x: f32 = 0,
     save_min_z: f32 = 0,
@@ -192,7 +194,7 @@ pub const Level = struct {
         if (!self.walkable[target_row * tile_cols + target_col]) return false;
         var barriers: usize = 0;
         for (self.boxSlice()) |box| barriers += @intFromBool(box.hunter_block);
-        return barriers == 4;
+        return barriers == 1;
     }
 
     fn addBox(self: *Level, box: Box) void {
@@ -333,20 +335,20 @@ fn buildGeometry(result: *Level) void {
     const save = result.rooms[result.save_room];
     const save_center = save.center();
     const offset_x: f32 = if (save_center.x < 0) 1.8 else -1.8;
+    result.save_fixture = .{ .x = save_center.x + offset_x, .y = 0, .z = save_center.z };
     result.addBox(visual(save_center.x + offset_x, 0.8, save_center.z, 1.1, 0.8, 0.65, oxocarbon_pink));
     result.addBox(visual(save_center.x + offset_x, 1.66, save_center.z, 0.28, 0.06, 0.18, typewriter_color));
 
-    // Seal the complete room perimeter for the hunter. Physical walls still
-    // define ordinary room boundaries; these four invisible boxes close every
-    // opening and also occlude hunter sight rays.
-    const min_x = -footprint_half_x + @as(f32, @floatFromInt(save.min_col)) * tile_size;
-    const max_x = min_x + @as(f32, @floatFromInt(save.cols)) * tile_size;
-    const min_z = -footprint_half_z + @as(f32, @floatFromInt(save.min_row)) * tile_size;
-    const max_z = min_z + @as(f32, @floatFromInt(save.rows)) * tile_size;
-    result.addBox(hunterDoorX((min_x + max_x) * 0.5, min_z, (max_x - min_x) * 0.5));
-    result.addBox(hunterDoorX((min_x + max_x) * 0.5, max_z, (max_x - min_x) * 0.5));
-    result.addBox(hunterDoorZ(min_x, (min_z + max_z) * 0.5, (max_z - min_z) * 0.5));
-    result.addBox(hunterDoorZ(max_x, (min_z + max_z) * 0.5, (max_z - min_z) * 0.5));
+    // The room is closed on every side except its single west doorway (the
+    // two-tile corridor mouth from edge {10,11}, centred on the room's z).
+    // Physical walls define the rest of the perimeter; this one invisible
+    // box seals only the doorway against the hunter while the player walks
+    // through freely, and it also occludes hunter sight rays.
+    result.addBox(hunterDoorZ(
+        -footprint_half_x + @as(f32, @floatFromInt(save.min_col)) * tile_size,
+        save_center.z,
+        tile_size,
+    ));
 }
 
 fn boundaryHorizontal(result: *const Level, col: usize, boundary_row: usize) bool {
@@ -391,7 +393,7 @@ fn buildVerticalWalls(result: *Level) void {
             while (row < tile_rows and boundaryVertical(result, boundary_col, row)) row += 1;
             const length = row - start;
             const x = -footprint_half_x + @as(f32, @floatFromInt(boundary_col)) * tile_size;
-            const z = -footprint_half_z + @as(f32, @floatFromInt(start)) + @as(f32, @floatFromInt(length)) * 0.5 * tile_size;
+            const z = -footprint_half_z + (@as(f32, @floatFromInt(start)) + @as(f32, @floatFromInt(length)) * 0.5) * tile_size;
             result.addBox(wallZ(x, 0, z, @as(f32, @floatFromInt(length)), wall_color));
         }
     }
@@ -493,5 +495,38 @@ test "authored level validates structurally" {
     try std.testing.expect(current.player_spawn.x >= -footprint_half_x and current.player_spawn.x <= footprint_half_x);
     try std.testing.expect(current.player_spawn.z >= -footprint_half_z and current.player_spawn.z <= footprint_half_z);
     try std.testing.expectEqual(room_capacity, current.room_count);
-    try std.testing.expectEqual(@as(usize, 16), current.edge_count);
+    try std.testing.expectEqual(@as(usize, 15), current.edge_count);
+}
+
+test "save room perimeter has exactly one two-tile doorway" {
+    load();
+    const save = current.rooms[current.save_room];
+    var openings: usize = 0;
+    // Count walkable cells just outside each boundary line of the room rect.
+    for ([_]usize{ save.min_col - 1, save.min_col + save.cols }) |outside_col| {
+        for (save.min_row..save.min_row + save.rows) |row| {
+            if (current.walkable[row * tile_cols + outside_col]) openings += 1;
+        }
+    }
+    for ([_]usize{ save.min_row - 1, save.min_row + save.rows }) |outside_row| {
+        for (save.min_col..save.min_col + save.cols) |col| {
+            if (current.walkable[outside_row * tile_cols + col]) openings += 1;
+        }
+    }
+    // One doorway, two tiles wide.
+    try std.testing.expectEqual(@as(usize, 2), openings);
+}
+
+test "single hunter barrier sits inside the save-room doorway" {
+    load();
+    const save = current.rooms[current.save_room];
+    var found: usize = 0;
+    for (current.boxSlice()) |box| {
+        if (!box.hunter_block) continue;
+        found += 1;
+        try std.testing.expect(box.center.x <= -footprint_half_x + @as(f32, @floatFromInt(save.min_col)) * tile_size + 0.01);
+        try std.testing.expect(box.center.z > -footprint_half_z + @as(f32, @floatFromInt(save.min_row)) * tile_size);
+        try std.testing.expect(box.center.z < -footprint_half_z + @as(f32, @floatFromInt(save.min_row + save.rows)) * tile_size);
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
 }

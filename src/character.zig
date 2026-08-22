@@ -12,6 +12,7 @@ const level = @import("level.zig");
 const controller = @import("character_controller.zig");
 const hunter = @import("hunter.zig");
 const navmesh = @import("navmesh.zig");
+const saves = @import("saves.zig");
 const camera = @import("third_person_camera.zig");
 const shd = @import("generated/character_shader.zig");
 
@@ -119,7 +120,15 @@ const DebugState = struct {
 };
 
 const MapRouteStatus = enum { none, found, arrived, no_path };
-const RoundOutcome = enum { playing, caught, escaped };
+const RoundOutcome = enum { playing, caught };
+
+// Typewriter save/load windows. While open they freeze the round exactly like
+// map mode does; navigation is keyboard-only.
+const MenuKind = enum { none, save, load };
+const MenuState = struct {
+    kind: MenuKind = .none,
+    slot: usize = 0,
+};
 
 // Top-down map overlay state. The route is rebuilt from the current actor poses
 // whenever the map opens, then remains fixed while the player is paused.
@@ -184,6 +193,7 @@ const GameState = struct {
     input: InputState = .{},
     debug: DebugState = .{},
     map: MapState = .{},
+    menu: MenuState = .{},
     character_config: controller.Config = .{},
     character: controller.State = initialCharacter(),
     hunter_config: hunter.Config = .{},
@@ -221,6 +231,7 @@ fn init() callconv(.c) void {
         .logger = .{ .func = slog.func },
     });
     seedSpawnRandomness();
+    saves.loadFromCwd(app_io.io());
     loadValidatedLevel();
     initPhysics();
     initRenderer();
@@ -245,6 +256,9 @@ fn frame() callconv(.c) void {
     const frame_time: f32 = @floatCast(@min(sapp.frameDuration(), max_frame_dt));
     game.clock.addFrame(frame_time);
 
+    // Menus freeze the round exactly like map mode does.
+    const gameplay_active = !game.map.active and game.menu.kind == .none;
+
     const render_position = if (game.outcome != .playing) blk: {
         // Finished round: everything freezes behind the overlay. Drain pending
         // physics ticks so restarting doesn't burst-catch-up the simulation.
@@ -253,9 +267,9 @@ fn frame() callconv(.c) void {
     } else blk: {
         var ticks: usize = 0;
         while (ticks < max_ticks_per_frame and game.clock.consumeTick()) : (ticks += 1) {
-            // Map mode always freezes the player. The hunter is independently
-            // paused by default and can be resumed with P.
-            if (!game.map.active) {
+            // Map/menu modes always freeze the player. On the map the hunter
+            // is independently paused by default and can be resumed with P.
+            if (gameplay_active) {
                 controller.update(
                     game.character_config,
                     &game.character,
@@ -266,12 +280,8 @@ fn frame() callconv(.c) void {
                     @floatCast(fixed_dt),
                 );
                 updateQuickTurn(@floatCast(fixed_dt));
-                if (level.current.isInSaveRoom(game.character.position.x, game.character.position.z)) {
-                    game.outcome = .escaped;
-                    break;
-                }
             }
-            if (!game.map.active or !game.map.hunter_paused) {
+            if (game.menu.kind == .none and (!game.map.active or !game.map.hunter_paused)) {
                 hunter.update(
                     game.hunter_config,
                     &game.hunter,
@@ -290,13 +300,14 @@ fn frame() callconv(.c) void {
         if (ticks == max_ticks_per_frame and game.clock.accumulator >= fixed_dt) {
             game.clock.accumulator = @mod(game.clock.accumulator, fixed_dt);
         }
-        // The clock keeps consuming ticks while the map is open so no backlog
-        // accumulates. Render the exact paused pose instead of using its cycling
-        // interpolation alpha, which would replay the last movement every tick.
-        break :blk if (game.map.active)
-            game.character.position
+        // The clock keeps consuming ticks while the map or a menu is open so
+        // no backlog accumulates. Render the exact paused pose instead of
+        // using its cycling interpolation alpha, which would replay the last
+        // movement every tick.
+        break :blk if (gameplay_active)
+            controller.interpolatedPosition(game.character, game.clock.alpha())
         else
-            controller.interpolatedPosition(game.character, game.clock.alpha());
+            game.character.position;
     };
 
     if (game.map.active) {
@@ -307,7 +318,7 @@ fn frame() callconv(.c) void {
         game.map.pan.x = std.math.clamp(game.map.pan.x, -map_pan_x_max, map_pan_x_max);
         game.map.pan.z = std.math.clamp(game.map.pan.z, -map_pan_z_max, map_pan_z_max);
         game.camera.view_projection = mapViewProjection();
-    } else if (game.outcome == .playing) {
+    } else if (game.outcome == .playing and game.menu.kind == .none) {
         camera.update(
             game.camera_config,
             &game.camera,
@@ -336,8 +347,16 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
         .KEY_DOWN, .KEY_UP => {
             const down = value.type == .KEY_DOWN;
             switch (value.key_code) {
-                .W => game.input.forward = down,
-                .S => game.input.back = down,
+                .W => if (game.menu.kind != .none) {
+                    if (down and !value.key_repeat) moveMenuSlot(-1);
+                } else {
+                    game.input.forward = down;
+                },
+                .S => if (game.menu.kind != .none) {
+                    if (down and !value.key_repeat) moveMenuSlot(1);
+                } else {
+                    game.input.back = down;
+                },
                 .A => game.input.left = down,
                 .D => game.input.right = down,
                 .LEFT_SHIFT, .RIGHT_SHIFT => if (down and !value.key_repeat) {
@@ -348,7 +367,7 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 .F1 => if (down and !value.key_repeat) {
                     game.debug.draw_physics = !game.debug.draw_physics;
                 },
-                .M => if (down and !value.key_repeat) {
+                .M => if (down and !value.key_repeat and game.menu.kind == .none) {
                     game.map.active = !game.map.active;
                     if (game.map.active) {
                         game.map.hunter_paused = true;
@@ -364,6 +383,25 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 .R => if (down and !value.key_repeat and game.outcome != .playing) {
                     restartLevel();
                 },
+                .UP => if (down and !value.key_repeat and game.menu.kind != .none) {
+                    moveMenuSlot(-1);
+                },
+                .DOWN => if (down and !value.key_repeat and game.menu.kind != .none) {
+                    moveMenuSlot(1);
+                },
+                .SPACE => if (down and !value.key_repeat) {
+                    if (game.menu.kind != .none) {
+                        confirmMenu();
+                    } else if (!game.map.active and game.outcome == .playing and nearSaveFixture()) {
+                        openMenu(.save);
+                    }
+                },
+                .L => if (down and !value.key_repeat) {
+                    if (game.menu.kind == .none and !game.map.active) openMenu(.load);
+                },
+                .ENTER => if (down and !value.key_repeat and game.menu.kind != .none) {
+                    confirmMenu();
+                },
                 .E => if (down and !value.key_repeat) {
                     // RE2R quick-turn: while walking backward, swing the
                     // character and camera 180 degrees over a short animation.
@@ -377,7 +415,13 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                         };
                     }
                 },
-                .ESCAPE => if (down) sapp.lockMouse(false),
+                .ESCAPE => if (down) {
+                    if (game.menu.kind != .none) {
+                        closeMenu();
+                    } else {
+                        sapp.lockMouse(false);
+                    }
+                },
                 else => {},
             }
         },
@@ -465,6 +509,7 @@ fn spawnPlayerAndHunter() void {
     game.camera = .{};
     game.clock = .{};
     game.map = .{};
+    game.menu = .{};
     game.outcome = .playing;
     game.quick_turn = .{};
     game.input = .{};
@@ -476,6 +521,70 @@ fn hunterContacted() bool {
     const dz = game.hunter.position.z - game.character.position.z;
     const radius = game.hunter_config.contact_radius;
     return dx * dx + dz * dz < radius * radius;
+}
+
+// True while the character stands within 1 m of the pink typewriter table.
+fn nearSaveFixture() bool {
+    const fixture = level.current.save_fixture;
+    const dx = game.character.position.x - fixture.x;
+    const dz = game.character.position.z - fixture.z;
+    return dx * dx + dz * dz <= 1.0;
+}
+
+fn openMenu(kind: MenuKind) void {
+    game.menu = .{ .kind = kind, .slot = 0 };
+    // Drop held keys so gameplay doesn't resume with the character moving.
+    game.input = .{};
+}
+
+fn closeMenu() void {
+    game.menu.kind = .none;
+    game.input = .{};
+}
+
+fn moveMenuSlot(delta: i32) void {
+    const count: i32 = saves.slot_count;
+    const current: i32 = @intCast(game.menu.slot);
+    game.menu.slot = @intCast(@mod(current + delta + count, count));
+}
+
+// Apply the highlighted slot: write the player's pose into it (save) or
+// teleport the player to it (load), then close the window.
+fn confirmMenu() void {
+    switch (game.menu.kind) {
+        .none => return,
+        .save => {
+            saves.slots[game.menu.slot] = .{
+                .occupied = true,
+                .x = game.character.position.x,
+                .y = game.character.position.y,
+                .z = game.character.position.z,
+                .yaw = game.character.yaw,
+                .timestamp = std.Io.Timestamp.now(app_io.io(), .real).toSeconds(),
+            };
+            saves.writeToCwd(app_io.io()) catch {};
+        },
+        .load => {
+            const slot = saves.slots[game.menu.slot];
+            if (slot.occupied) {
+                // The static world never changes between save and load, so a
+                // recorded pose is always a valid capsule spot.
+                game.character.previous_position = .{ .x = slot.x, .y = slot.y, .z = slot.z };
+                game.character.position = .{ .x = slot.x, .y = slot.y, .z = slot.z };
+                game.character.velocity = .{};
+                game.character.grounded = false;
+                game.character.yaw = slot.yaw;
+                // Re-seat the shoulder camera behind the loaded heading.
+                game.camera = .{};
+                game.camera.yaw = slot.yaw;
+                game.quick_turn = .{};
+                // Loading also rescues a caught round; the hunter keeps his
+                // current position, RE2-style tension intact.
+                game.outcome = .playing;
+            }
+        },
+    }
+    closeMenu();
 }
 
 fn rebuildMapRoute() void {
@@ -758,7 +867,7 @@ fn draw(position: b3.b3Pos) void {
 
     // Interpolate during gameplay, but use the authoritative pose while paused
     // so the clock's cycling alpha cannot replay the hunter's last movement.
-    const hunter_render = if ((game.map.active and game.map.hunter_paused) or game.outcome != .playing)
+    const hunter_render = if ((game.map.active and game.map.hunter_paused) or game.menu.kind != .none or game.outcome != .playing)
         game.hunter.position
     else
         hunter.interpolatedPosition(game.hunter, game.clock.alpha());
@@ -902,24 +1011,74 @@ fn drawHud(position: b3.b3Pos) void {
         sdtx.print("POS {d:.1} {d:.1} {d:.1}", .{ position.x, position.y, position.z });
     }
     if (game.outcome != .playing) {
-        const escaped = game.outcome == .escaped;
-        const title = if (escaped) "YOU REACHED THE SAVE ROOM" else "YOU WERE CAUGHT BY THE HUNTER";
+        const title = "YOU WERE CAUGHT BY THE HUNTER";
         const prompt = "PRESS R TO START A NEW PLAYTHROUGH";
         // The 8x8 font renders in text units of 8 px, so dividing the pixel
         // canvas by 8 centres a line of `len` characters.
         sdtx.pos(sapp.widthf() / 8.0 / 2.0 - @as(f32, @floatFromInt(title.len)) / 2.0, sapp.heightf() / 8.0 / 2.0 - 1.0);
-        if (escaped) {
-            sdtx.color3b(80, 250, 123);
-            sdtx.print("YOU REACHED THE SAVE ROOM", .{});
-        } else {
-            sdtx.color3b(255, 60, 60);
-            sdtx.print("YOU WERE CAUGHT BY THE HUNTER", .{});
-        }
+        sdtx.color3b(255, 60, 60);
+        sdtx.print("YOU WERE CAUGHT BY THE HUNTER", .{});
         sdtx.pos(sapp.widthf() / 8.0 / 2.0 - @as(f32, @floatFromInt(prompt.len)) / 2.0, sapp.heightf() / 8.0 / 2.0 + 1.0);
         sdtx.color3b(255, 255, 255);
         sdtx.print(prompt, .{});
     }
+    if (game.menu.kind != .none) {
+        drawSaveMenu();
+    } else if (!game.map.active and game.outcome == .playing and nearSaveFixture()) {
+        const prompt = "PRESS SPACE TO SAVE";
+        sdtx.pos(sapp.widthf() / 8.0 / 2.0 - @as(f32, @floatFromInt(prompt.len)) / 2.0, sapp.heightf() / 8.0 - 2.0);
+        sdtx.color3b(255, 220, 120);
+        sdtx.print(prompt, .{});
+    }
     sdtx.draw();
+}
+
+// Centered RE2R-style slot list: eight numbered lines, cursor on the selected
+// one, EMPTY or a date stamp per row.
+fn drawSaveMenu() void {
+    const text_w = sapp.widthf() / 8.0;
+    const text_h = sapp.heightf() / 8.0;
+    const title = if (game.menu.kind == .save) "SAVE GAME" else "LOAD GAME";
+    var line_buffer: [64]u8 = undefined;
+
+    sdtx.pos(text_w / 2.0 - 10.0, text_h / 2.0 - 6.0);
+    sdtx.color3b(255, 220, 120);
+    sdtx.print("{s}", .{title});
+    for (saves.slots, 0..) |slot, index| {
+        sdtx.pos(text_w / 2.0 - 12.0, text_h / 2.0 - 4.0 + @as(f32, @floatFromInt(index)));
+        if (index == game.menu.slot) {
+            sdtx.color3b(80, 250, 123);
+            sdtx.print("> ", .{});
+        } else {
+            sdtx.color3b(255, 255, 255);
+            sdtx.print("  ", .{});
+        }
+        if (slot.occupied) {
+            sdtx.print("SLOT {d}   {s}", .{ index + 1, formatTimestamp(&line_buffer, slot.timestamp) });
+        } else {
+            sdtx.print("SLOT {d}   EMPTY", .{index + 1});
+        }
+    }
+    const footer = "W/S SELECT   SPACE CONFIRM   ESC CANCEL";
+    sdtx.pos(text_w / 2.0 - @as(f32, @floatFromInt(footer.len)) / 2.0, text_h / 2.0 + 5.0);
+    sdtx.color3b(160, 160, 160);
+    sdtx.print(footer, .{});
+}
+
+// "YYYY-MM-DD HH:MM" in local wall-clock-free UTC from epoch seconds.
+fn formatTimestamp(buffer: []u8, timestamp: i64) []const u8 {
+    const epoch: std.time.epoch.EpochSeconds = .{ .secs = @intCast(@max(timestamp, 0)) };
+    const day = epoch.getEpochDay();
+    const year_day = day.calculateYearDay();
+    const month_day = year_day.calculateMonthDay();
+    const day_seconds = epoch.getDaySeconds();
+    return std.fmt.bufPrint(buffer, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}", .{
+        year_day.year,
+        month_day.month.numeric(),
+        month_day.day_index + 1,
+        day_seconds.getHoursIntoDay(),
+        day_seconds.getMinutesIntoHour(),
+    }) catch "";
 }
 
 // Draw `count` instances of one mesh from the shared buffers. The debug
@@ -1054,7 +1213,12 @@ fn rgb(r: f32, g: f32, b: f32) Vec4 {
     return .{ .x = r, .y = g, .z = b, .w = 1 };
 }
 
+// The save-file APIs need an Io instance; the app owns one for its lifetime.
+var app_io: std.Io.Threaded = undefined;
+
 pub fn main() void {
+    app_io = .init(std.heap.page_allocator, .{});
+    defer app_io.deinit();
     sapp.run(.{
         .init_cb = init,
         .frame_cb = frame,
