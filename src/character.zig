@@ -283,8 +283,9 @@ fn init() callconv(.c) void {
     sapp.lockMouse(true);
 }
 
-// Advance the quick-turn swing. Runs each physics tick after the controller
-// has had its say, so the animated yaw wins while it is active.
+// Advance the quick-turn swing at render cadence. The controller may update on
+// fixed simulation ticks, but orientation is presentation-only here; updating
+// it once per rendered frame avoids visible 60 Hz stepping on faster displays.
 fn updateQuickTurn(dt: f32) void {
     if (!game.quick_turn.active) return;
     game.quick_turn.timer += dt;
@@ -343,7 +344,6 @@ fn frame() callconv(.c) void {
                     game.camera.basis,
                     @floatCast(fixed_dt),
                 );
-                if (!game.input.aiming) updateQuickTurn(@floatCast(fixed_dt));
                 const combat_events = combat.update(game.combat_config, &game.combat, .{
                     .aiming = game.input.aiming,
                     .firing = game.input.firing,
@@ -381,6 +381,8 @@ fn frame() callconv(.c) void {
         else
             game.character.position;
     };
+
+    if (gameplay_active and !game.input.aiming) updateQuickTurn(frame_time);
 
     if (game.map.active) {
         // WASD pans the map camera around the level.

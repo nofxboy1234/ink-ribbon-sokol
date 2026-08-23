@@ -6,3 +6,4 @@ NUL
 .toolchain/
 __pycache__/
 *.py[cod]
+*.webm

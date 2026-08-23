@@ -24,11 +24,14 @@ pub const Config = struct {
     wall_margin: f32 = 0.08,
     follow_rate: f32 = 18.0,
     recovery_rate: f32 = 8.0,
+    orbit_rate: f32 = 30.0,
 };
 
 pub const State = struct {
     yaw: f32 = std.math.pi,
     pitch: f32 = 0.15,
+    visual_yaw: f32 = std.math.pi,
+    visual_pitch: f32 = 0.15,
     pivot: Vec3 = .{},
     eye: Vec3 = .{},
     view_projection: Mat4 = Mat4.identity(),
@@ -36,6 +39,7 @@ pub const State = struct {
     forward: Vec3 = .{ .z = -1 },
     aim_alpha: f32 = 0,
     recoil_pitch: f32 = 0,
+    boom_fraction: f32 = 1,
     initialized: bool = false,
 };
 
@@ -64,12 +68,15 @@ pub fn update(
     const follow_alpha = exponentialAlpha(config.follow_rate, frame_dt);
     if (!state.initialized) {
         state.pivot = target_pivot;
-        state.initialized = true;
+        state.visual_yaw = state.yaw;
+        state.visual_pitch = state.pitch;
     } else {
         state.pivot = lerp(state.pivot, target_pivot, follow_alpha);
+        state.visual_yaw = lerpAngle(state.visual_yaw, state.yaw, exponentialAlpha(config.orbit_rate, frame_dt));
+        state.visual_pitch = lerpScalar(state.visual_pitch, state.pitch, exponentialAlpha(config.orbit_rate, frame_dt));
     }
 
-    const forward: Vec3 = .{ .x = @sin(state.yaw), .y = 0, .z = @cos(state.yaw) };
+    const forward: Vec3 = .{ .x = @sin(state.visual_yaw), .y = 0, .z = @cos(state.visual_yaw) };
     // In this right-handed Y-up world, screen-right is forward cross up.
     const right: Vec3 = .{ .x = -forward.z, .y = 0, .z = forward.x };
     state.basis = .{
@@ -77,12 +84,12 @@ pub fn update(
         .right = .{ .x = right.x, .y = 0, .z = right.z },
     };
 
-    const rendered_pitch = std.math.clamp(state.pitch + state.recoil_pitch, config.pitch_min, config.pitch_max);
+    const rendered_pitch = std.math.clamp(state.visual_pitch + state.recoil_pitch, config.pitch_min, config.pitch_max);
     const cos_pitch = @cos(rendered_pitch);
     state.forward = .{
-        .x = @sin(state.yaw) * cos_pitch,
+        .x = @sin(state.visual_yaw) * cos_pitch,
         .y = -@sin(rendered_pitch),
-        .z = @cos(state.yaw) * cos_pitch,
+        .z = @cos(state.visual_yaw) * cos_pitch,
     };
     const distance = lerpScalar(config.hip_distance, config.aim_distance, state.aim_alpha);
     const shoulder_offset = lerpScalar(config.hip_shoulder_offset, config.aim_shoulder_offset, state.aim_alpha);
@@ -90,15 +97,15 @@ pub fn update(
         Vec3.add(state.pivot, Vec3.scale(right, shoulder_offset)),
         Vec3.scale(state.forward, -distance),
     );
-    const safe_eye = collideCamera(config, world, state.pivot, desired_eye);
-    const rate = if (distanceSquared(state.pivot, safe_eye) < distanceSquared(state.pivot, state.eye))
+    const safe_fraction = collideCameraFraction(config, world, state.pivot, desired_eye);
+    if (!state.initialized) state.boom_fraction = safe_fraction;
+    const rate = if (safe_fraction < state.boom_fraction)
         config.follow_rate
     else
         config.recovery_rate;
-    state.eye = if (state.eye.x == 0 and state.eye.y == 0 and state.eye.z == 0)
-        safe_eye
-    else
-        lerp(state.eye, safe_eye, exponentialAlpha(rate, frame_dt));
+    state.boom_fraction = lerpScalar(state.boom_fraction, safe_fraction, exponentialAlpha(rate, frame_dt));
+    state.eye = Vec3.add(state.pivot, Vec3.scale(Vec3.sub(desired_eye, state.pivot), state.boom_fraction));
+    state.initialized = true;
 
     const view = Mat4.lookAtRh(state.eye, Vec3.add(state.eye, state.forward), .{ .y = 1 });
     const fov = lerpScalar(config.hip_fov_degrees, config.aim_fov_degrees, state.aim_alpha);
@@ -110,7 +117,7 @@ pub fn addRecoil(state: *State, amount: f32) void {
     state.recoil_pitch = @max(-0.12, state.recoil_pitch - amount);
 }
 
-fn collideCamera(config: Config, world: b3.b3WorldId, pivot: Vec3, desired: Vec3) Vec3 {
+fn collideCameraFraction(config: Config, world: b3.b3WorldId, pivot: Vec3, desired: Vec3) f32 {
     var context = CastContext{};
     var point = b3.b3Vec3{};
     var proxy: b3.b3ShapeProxy = .{ .points = &point, .count = 1, .radius = config.cast_radius };
@@ -129,12 +136,7 @@ fn collideCamera(config: Config, world: b3.b3WorldId, pivot: Vec3, desired: Vec3
     );
     const length = @sqrt(translation.x * translation.x + translation.y * translation.y + translation.z * translation.z);
     const margin_fraction = if (length > 0) config.wall_margin / length else 0;
-    const fraction = @max(0, context.fraction - margin_fraction);
-    return .{
-        .x = pivot.x + translation.x * fraction,
-        .y = pivot.y + translation.y * fraction,
-        .z = pivot.z + translation.z * fraction,
-    };
+    return @max(0, context.fraction - margin_fraction);
 }
 
 const CastContext = struct { fraction: f32 = 1 };
@@ -161,13 +163,18 @@ fn lerpScalar(a: f32, b: f32, alpha: f32) f32 {
     return a + (b - a) * alpha;
 }
 
-fn distanceSquared(a: Vec3, b: Vec3) f32 {
-    const d = Vec3.sub(a, b);
-    return Vec3.dot(d, d);
+fn lerpAngle(value: f32, target: f32, alpha: f32) f32 {
+    const delta = @mod(target - value + std.math.pi, 2.0 * std.math.pi) - std.math.pi;
+    return value + delta * alpha;
 }
 
 test "exponential smoothing is frame-rate independent" {
     const one_step = 1.0 - exponentialAlpha(8, 1.0 / 30.0);
     const two_steps = std.math.pow(f32, 1.0 - exponentialAlpha(8, 1.0 / 60.0), 2);
     try std.testing.expectApproxEqAbs(one_step, two_steps, 0.00001);
+}
+
+test "visual yaw smoothing follows the shortest arc" {
+    const result = lerpAngle(3.0, -3.0, 0.5);
+    try std.testing.expect(result > 3.0);
 }

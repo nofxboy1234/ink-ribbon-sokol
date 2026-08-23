@@ -30,6 +30,7 @@ tools/native-input-test hold q 2.0
 tools/native-input-test fire 0.5
 tools/native-input-test aim-fire 0.75
 tools/native-input-test aim-move d 1.0
+tools/native-input-test quick-turn
 tools/native-input-test look -628 0
 tools/native-input-test screenshot /tmp/leg-1.png
 tools/native-input-test sequence w:4.0 w:2.5 w:1.0 w:1.5
