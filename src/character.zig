@@ -19,6 +19,7 @@ const deformed_box = @import("deformed_box.zig");
 const navmesh = @import("navmesh.zig");
 const saves = @import("saves.zig");
 const camera = @import("third_person_camera.zig");
+const game_audio = @import("game_audio.zig");
 const shd = @import("generated/character_shader.zig");
 
 const sapp = sokol.app;
@@ -27,6 +28,7 @@ const sglue = sokol.glue;
 const slog = sokol.log;
 const sshape = sokol.shape;
 const sdtx = sokol.debugtext;
+const saudio = sokol.audio;
 const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
 const Mat4 = math.Mat4;
@@ -139,6 +141,9 @@ const action_contact_time: f32 = 0.30;
 const box_item_chance: f32 = 0.60;
 const box_health_share: f32 = 0.25;
 const box_ammo_amount: u16 = 20;
+const breakable_half_extent: f32 = 0.42;
+const audio_buffer_frames = 1024;
+const audio_channel_count = 2;
 
 const InteractionKind = enum { pickup, breakable, box_drop };
 const InteractionTarget = struct {
@@ -399,6 +404,7 @@ const RenderState = struct {
 
 const GameState = struct {
     world: b3.b3WorldId = b3.b3_nullWorldId,
+    breakable_bodies: [breakable_defs.len]b3.b3BodyId = @splat(b3.b3_nullBodyId),
     clock: Clock = .{},
     input: InputState = .{},
     debug: DebugState = .{},
@@ -430,6 +436,10 @@ const GameState = struct {
     player_deformation: deformation.State = .{},
     hunter_deformation: deformation.State = .{},
     hunter_friendly: bool = false,
+    audio: game_audio.System = .{},
+    audio_buffer: [audio_buffer_frames * audio_channel_count]f32 = @splat(0),
+    player_step_distance: f32 = 0,
+    hunter_step_distance: f32 = 0,
     // Current transient HUD message and its remaining seconds.
     notice: HudNotice = .none,
     notice_timer: f32 = 0,
@@ -456,6 +466,12 @@ fn initialHunter() hunter.State {
 
 fn init() callconv(.c) void {
     sg.setup(.{ .environment = sglue.environment(), .logger = .{ .func = slog.func } });
+    saudio.setup(.{
+        .sample_rate = 44_100,
+        .num_channels = audio_channel_count,
+        .logger = .{ .func = slog.func },
+    });
+    if (saudio.isvalid()) game.audio.reset(@floatFromInt(saudio.sampleRate()));
     sdtx.setup(.{
         .fonts = init: {
             var fonts: [8]sdtx.FontDesc = @splat(.{});
@@ -535,6 +551,7 @@ fn frame() callconv(.c) void {
                     game.camera.basis,
                     @floatCast(fixed_dt),
                 );
+                updatePlayerFootsteps();
                 if (game.condition.canMove() and !playerActionActive()) {
                     const reserve_before = game.combat.reserve;
                     const combat_events = combat.update(game.combat_config, &game.combat, .{
@@ -547,10 +564,15 @@ fn frame() callconv(.c) void {
                     if (game.combat.reserve < reserve_before) {
                         _ = game.inventory.consumeAmmo(reserve_before - game.combat.reserve);
                     }
+                    if (combat_events.reload_started) game.audio.play(.reload_start);
+                    if (combat_events.reload_completed) game.audio.play(.reload_complete);
                     for (combat_events.shot_focus[0..combat_events.shot_count]) |shot_focus| fireShot(shot_focus);
                 }
                 updateActionsAndDebris(@floatCast(fixed_dt));
-                if (game.condition.update(game.condition_config, game.character.grounded, @floatCast(fixed_dt)) == .defeated) {
+                const condition_before = game.condition.phase;
+                const condition_event = game.condition.update(game.condition_config, game.character.grounded, @floatCast(fixed_dt));
+                if (condition_before == .airborne and game.condition.phase == .down) game.audio.play(.body_fall);
+                if (condition_event == .defeated) {
                     respawnAfterCatch();
                     break;
                 }
@@ -570,6 +592,7 @@ fn frame() callconv(.c) void {
                             game.character.position,
                             @floatCast(fixed_dt),
                         );
+                        updateHunterFootsteps();
                         if (hunterContacted()) punchPlayer();
                     }
                 }
@@ -618,14 +641,31 @@ fn frame() callconv(.c) void {
         game.interaction_target = null;
     }
     uploadMapRoute();
+    pumpAudio();
     draw(render_position, frame_time, gameplay_active);
 }
 
 fn cleanup() callconv(.c) void {
     b3.b3DestroyWorld(game.world);
     game.world = b3.b3_nullWorldId;
+    saudio.shutdown();
     sdtx.shutdown();
     sg.shutdown();
+}
+
+fn pumpAudio() void {
+    if (!saudio.isvalid()) return;
+    const channels: usize = @intCast(saudio.channels());
+    if (channels == 0 or channels > audio_channel_count) return;
+
+    var expected = saudio.expect();
+    while (expected > 0) {
+        const frames: usize = @min(@as(usize, @intCast(expected)), audio_buffer_frames);
+        game.audio.mix(game.audio_buffer[0 .. frames * channels], frames, channels);
+        const pushed = saudio.push(&game.audio_buffer[0], @intCast(frames));
+        if (pushed <= 0) break;
+        expected -= pushed;
+    }
 }
 
 fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
@@ -788,7 +828,38 @@ fn updateCombatVisuals(dt: f32) void {
     for (&game.combat_visuals.impacts) |*impact| impact.timer = @max(0, impact.timer - dt);
 }
 
+fn updatePlayerFootsteps() void {
+    if (!game.character.grounded or !game.condition.canMove() or playerActionActive()) {
+        if (!game.character.grounded) game.player_step_distance = 0;
+        return;
+    }
+    const dx = game.character.position.x - game.character.previous_position.x;
+    const dz = game.character.position.z - game.character.previous_position.z;
+    game.player_step_distance += std.math.hypot(dx, dz);
+    const stride: f32 = if (game.input.run) 0.92 else if (game.input.aiming) 0.58 else 0.72;
+    if (game.player_step_distance >= stride) {
+        game.player_step_distance = @mod(game.player_step_distance, stride);
+        game.audio.play(.player_step);
+    }
+}
+
+fn updateHunterFootsteps() void {
+    const dx = game.hunter.position.x - game.hunter.previous_position.x;
+    const dz = game.hunter.position.z - game.hunter.previous_position.z;
+    game.hunter_step_distance += std.math.hypot(dx, dz);
+    const stride: f32 = 1.05;
+    if (game.hunter_step_distance < stride) return;
+    game.hunter_step_distance = @mod(game.hunter_step_distance, stride);
+
+    const player_dx = game.hunter.position.x - game.character.position.x;
+    const player_dz = game.hunter.position.z - game.character.position.z;
+    const distance = std.math.hypot(player_dx, player_dz);
+    const volume = std.math.clamp(1.0 - distance / 28.0, 0, 1);
+    game.audio.playVolume(.hunter_step, volume);
+}
+
 fn fireShot(focus: f32) void {
+    game.audio.play(.gunshot);
     const forward = game.camera.forward;
     const right = Vec3.normalized(Vec3.cross(forward, .{ .y = 1 }));
     const up = Vec3.normalized(Vec3.cross(right, forward));
@@ -826,12 +897,15 @@ fn fireShot(focus: f32) void {
         game.hunter.previous_position = game.hunter.position;
         if (knocked_down) {
             game.hunter_reaction = .{};
+            game.audio.play(.hunter_knockdown);
         } else {
             game.hunter_reaction.begin(if (spread_x < 0) -1 else 1);
+            game.audio.play(.hunter_hit);
         }
         game.combat_visuals.hunter_hit_flash = hunter_hit_flash_seconds;
     } else if (level_hit.hit) {
         addImpact(.{ .x = level_hit.point.x, .y = level_hit.point.y, .z = level_hit.point.z }, level_hit.normal);
+        game.audio.play(.bullet_impact);
     }
     alertHunterToGunshot();
     camera.addRecoil(&game.camera, shot_recoil_radians);
@@ -861,6 +935,8 @@ fn initPhysics() void {
     var world_def = b3.b3DefaultWorldDef();
     game.world = b3.b3CreateWorld(&world_def);
     for (level.current.boxSlice()) |box| if (box.collidable) addStaticBox(box);
+    game.breakable_bodies = @splat(b3.b3_nullBodyId);
+    for (breakable_defs, 0..) |box, index| game.breakable_bodies[index] = addBreakableBody(box);
 }
 
 fn addStaticBox(box: level.Box) void {
@@ -883,6 +959,31 @@ fn addStaticBox(box: level.Box) void {
     }
     var hull = b3.b3MakeBoxHull(box.half_extents.x, box.half_extents.y, box.half_extents.z);
     _ = b3.b3CreateHullShape(body, &shape_def, &hull.base);
+}
+
+fn addBreakableBody(box: BreakableDef) b3.b3BodyId {
+    var body_def = b3.b3DefaultBodyDef();
+    body_def.position = .{ .x = box.position.x, .y = box.position.y, .z = box.position.z };
+    const body = b3.b3CreateBody(game.world, &body_def);
+    var shape_def = b3.b3DefaultShapeDef();
+    shape_def.filter.categoryBits = controller.level_category;
+    shape_def.filter.maskBits = controller.player_query_category | camera.camera_query_category | controller.hunter_query_category;
+    var hull = b3.b3MakeBoxHull(breakable_half_extent, breakable_half_extent, breakable_half_extent);
+    _ = b3.b3CreateHullShape(body, &shape_def, &hull.base);
+    return body;
+}
+
+fn setBreakableCollision(index: usize, enabled: bool) void {
+    const body = game.breakable_bodies[index];
+    if (!b3.b3Body_IsValid(body) or b3.b3Body_IsEnabled(body) == enabled) return;
+    if (enabled) b3.b3Body_Enable(body) else b3.b3Body_Disable(body);
+}
+
+fn syncBreakableCollision() void {
+    for (breakable_defs, 0..) |_, index| {
+        const bit = @as(u32, 1) << @intCast(index);
+        setBreakableCollision(index, game.broken_boxes & bit == 0);
+    }
 }
 
 // Mix ASLR-derived addresses into the PRNG seed: both a stack local and the
@@ -943,6 +1044,9 @@ fn placePlayerFromSlot(slot: saves.Slot) void {
     game.kick = .{};
     game.pickup_action = .{};
     game.debris = @splat(.{});
+    game.player_step_distance = 0;
+    game.hunter_step_distance = 0;
+    syncBreakableCollision();
 }
 
 // Place both actors, then reset the round. The player resumes from the most
@@ -980,6 +1084,9 @@ fn spawnPlayerAndHunter() void {
     game.notice = .none;
     game.notice_timer = 0;
     game.input = .{};
+    game.player_step_distance = 0;
+    game.hunter_step_distance = 0;
+    syncBreakableCollision();
 }
 
 // Send the hunter back to his authored spawn room facing the player, with a
@@ -1008,6 +1115,7 @@ fn hunterContacted() bool {
 
 fn punchPlayer() void {
     if (!game.condition.punch(game.condition_config)) return;
+    game.audio.play(.punch);
     var dx = game.character.position.x - game.hunter.position.x;
     var dz = game.character.position.z - game.hunter.position.z;
     const length = @sqrt(dx * dx + dz * dz);
@@ -1208,9 +1316,11 @@ fn updateActionsAndDebris(dt: f32) void {
         game.kick.timer += dt;
         if (!game.kick.broke_box and game.kick.timer >= 0.30) {
             game.kick.broke_box = true;
+            setBreakableCollision(game.kick.target, false);
             game.broken_boxes |= @as(u32, 1) << @intCast(game.kick.target);
             revealBoxDrop(game.kick.target);
             spawnBoxDebris(game.kick.target);
+            game.audio.play(.box_break);
         }
         if (game.kick.timer >= action_duration) game.kick = .{};
     }
@@ -1264,6 +1374,7 @@ fn collectInteractionItem(target: InteractionTarget) void {
     } else {
         game.notice = .health_found;
     }
+    game.audio.play(.pickup);
     game.notice_timer = notice_seconds;
 }
 
@@ -1357,6 +1468,9 @@ fn respawnAfterCatch() void {
     game.kick = .{};
     game.pickup_action = .{};
     game.debris = @splat(.{});
+    game.player_step_distance = 0;
+    game.hunter_step_distance = 0;
+    syncBreakableCollision();
 }
 
 // True while the character stands within the interaction area of a typewriter.
@@ -1469,6 +1583,7 @@ fn inventoryClick(x: f32, y: f32) void {
                     game.condition_config.heal_amount,
                 )) {
                     game.notice = .healed;
+                    game.audio.play(.heal);
                 } else {
                     game.notice = .full_health;
                 }
@@ -2184,7 +2299,7 @@ fn updatePickupInstances() void {
         if (game.broken_boxes & bit == 0) {
             instances[count] = makeInstance(
                 box.position,
-                .{ .x = 0.42, .y = 0.42, .z = 0.42 },
+                .{ .x = breakable_half_extent, .y = breakable_half_extent, .z = breakable_half_extent },
                 0,
                 rgb(1.0, 0.42, 0.06),
             );
