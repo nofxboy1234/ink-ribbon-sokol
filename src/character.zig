@@ -57,6 +57,8 @@ const impact_capacity = 32;
 const impact_seconds: f32 = 0.35;
 const hunter_hit_flash_seconds: f32 = 0.09;
 const hunter_flinch_seconds: f32 = 0.32;
+const hunter_knockdown_enter_seconds: f32 = 0.75;
+const hunter_knockdown_exit_seconds: f32 = 1.15;
 const shot_recoil_radians: f32 = 0.008;
 
 // Transient centered HUD messages.
@@ -121,6 +123,12 @@ const breakable_defs = [_]BreakableDef{
     .{ .position = .{ .x = -1.55, .y = 0.42, .z = 7.4 } },
     .{ .position = .{ .x = 1.45, .y = 0.42, .z = 6.3 } },
     .{ .position = .{ .x = -2.4, .y = 0.42, .z = 3.4 } },
+    // Appended so existing save-file broken-box bits retain their meaning.
+    .{ .position = .{ .x = -2.2, .y = 0.42, .z = -1.0 } },
+    .{ .position = .{ .x = 0.0, .y = 0.42, .z = -4.5 } },
+    .{ .position = .{ .x = 6.0, .y = 0.42, .z = -0.8 } },
+    .{ .position = .{ .x = -0.8, .y = 0.42, .z = -8.0 } },
+    .{ .position = .{ .x = -10.7, .y = 0.42, .z = -8.2 } },
 };
 const world_item_count = pickup_defs.len + breakable_defs.len;
 const interaction_radius: f32 = 2.0;
@@ -809,11 +817,11 @@ fn fireShot(focus: f32) void {
     const hunter_hit = b3.b3RayCastCapsule(&hunter_capsule, &ray_input);
     if (hunter_hit.hit and !game.combat.hunterKnockedDown()) {
         const knocked_down = game.combat.applyHunterHit(game.combat_config, focus);
+        game.hunter.previous_position = game.hunter.position;
         if (knocked_down) {
             game.hunter_reaction = .{};
         } else {
             game.hunter_reaction.begin(if (spread_x < 0) -1 else 1);
-            game.hunter.previous_position = game.hunter.position;
         }
         game.combat_visuals.hunter_hit_flash = hunter_hit_flash_seconds;
     } else if (level_hit.hit) {
@@ -1885,14 +1893,7 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
     else
         hunter.interpolatedPosition(game.hunter, game.clock.alpha());
     const knocked_down = game.combat.hunterKnockedDown();
-    const hunter_center = if (knocked_down)
-        Vec3{ .x = hunter_render.x, .y = hunter_render.y - hunter_half_extents.y + 0.28, .z = hunter_render.z }
-    else
-        Vec3{ .x = hunter_render.x, .y = hunter_render.y, .z = hunter_render.z };
-    const hunter_extents = if (knocked_down)
-        Vec3{ .x = hunter_half_extents.y, .y = 0.28, .z = hunter_half_extents.x }
-    else
-        hunter_half_extents;
+    const hunter_center = Vec3{ .x = hunter_render.x, .y = hunter_render.y, .z = hunter_render.z };
     const hunter_render_color = if (game.combat_visuals.hunter_hit_flash > 0)
         rgb(1.0, 0.78, 0.24)
     else if (knocked_down)
@@ -1901,7 +1902,7 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         hunter_color;
     const hunter_instance = makeInstance(
         hunter_center,
-        hunter_extents,
+        hunter_half_extents,
         game.hunter.yaw,
         hunter_render_color,
     );
@@ -1939,6 +1940,14 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
     hunter_pose.bend_z += flinch * 0.12;
     hunter_pose.twist += game.hunter_reaction.side * flinch * 0.24;
     hunter_pose.foot_roll -= game.hunter_reaction.side * flinch * 0.035;
+    const knockdown = hunterKnockdownAmount(game.combat.knockdown_timer, game.combat_config.knockdown_duration);
+    const breath_phase = (game.combat_config.knockdown_duration - game.combat.knockdown_timer) * 2.0 * std.math.pi * 0.72;
+    const breath = @sin(breath_phase) * knockdown;
+    hunter_pose.bend_z += knockdown * 0.82 + breath * 0.035;
+    hunter_pose.bend_x += breath * 0.018;
+    hunter_pose.twist += breath * 0.025;
+    hunter_pose.squash += knockdown * 0.055 + breath * 0.008;
+    hunter_pose.foot_pitch += knockdown * 0.045;
 
     // Pass 1: render everything from the sun's viewpoint, depth-only, to the
     // shadow map. The character draws as a second single-instance call. The
@@ -2100,7 +2109,7 @@ fn updatePickupInstances() void {
     for (pickup_defs, 0..) |pickup, index| {
         const collected_bit = @as(u32, 1) << @intCast(index);
         const discovered_bit = collected_bit;
-        if (game.collected_pickups & collected_bit != 0 or (!game.debug.draw_physics and game.discovered_items & discovered_bit == 0)) continue;
+        if (game.collected_pickups & collected_bit != 0 or !mapItemVisible(discovered_bit)) continue;
         const color = switch (pickup.item.kind) {
             .ammo => rgb(0.15, 0.48, 1.0),
             .health => rgb(0.18, 0.82, 0.37),
@@ -2117,7 +2126,7 @@ fn updatePickupInstances() void {
     for (breakable_defs, 0..) |box, index| {
         const broken_bit = @as(u32, 1) << @intCast(index);
         const discovered_bit = @as(u32, 1) << @intCast(pickup_defs.len + index);
-        if (game.broken_boxes & broken_bit != 0 or (!game.debug.draw_physics and game.discovered_items & discovered_bit == 0)) continue;
+        if (game.broken_boxes & broken_bit != 0 or !mapItemVisible(discovered_bit)) continue;
         map_instances[map_count] = makeInstance(
             .{ .x = box.position.x, .y = level.floor_height + 0.22, .z = box.position.z },
             .{ .x = 0.28, .y = 0.06, .z = 0.28 },
@@ -2213,7 +2222,7 @@ fn mapHoverName() ?[]const u8 {
     const world = mapWorldAtScreen(game.map.cursor.x, game.map.cursor.y);
     for (pickup_defs, 0..) |pickup, index| {
         const item_bit = @as(u32, 1) << @intCast(index);
-        if ((!game.debug.draw_physics and game.discovered_items & item_bit == 0) or game.collected_pickups & item_bit != 0) continue;
+        if (!mapItemVisible(item_bit) or game.collected_pickups & item_bit != 0) continue;
         const dx = world.x - pickup.position.x;
         const dz = world.z - pickup.position.z;
         if (dx * dx + dz * dz <= 0.8 * 0.8) return pickup.name;
@@ -2221,7 +2230,7 @@ fn mapHoverName() ?[]const u8 {
     for (breakable_defs, 0..) |box, index| {
         const discovered_bit = @as(u32, 1) << @intCast(pickup_defs.len + index);
         const broken_bit = @as(u32, 1) << @intCast(index);
-        if ((!game.debug.draw_physics and game.discovered_items & discovered_bit == 0) or game.broken_boxes & broken_bit != 0) continue;
+        if (!mapItemVisible(discovered_bit) or game.broken_boxes & broken_bit != 0) continue;
         const dx = world.x - box.position.x;
         const dz = world.z - box.position.z;
         if (dx * dx + dz * dz <= 0.9 * 0.9) return box.name;
@@ -2718,6 +2727,18 @@ fn smoothstep(value: f32) f32 {
     return t * t * (3.0 - 2.0 * t);
 }
 
+fn hunterKnockdownAmount(remaining: f32, duration: f32) f32 {
+    if (remaining <= 0 or duration <= 0) return 0;
+    const elapsed = @max(0, duration - remaining);
+    const bend_in = smoothstep(elapsed / hunter_knockdown_enter_seconds);
+    const stand_up = smoothstep(remaining / hunter_knockdown_exit_seconds);
+    return @min(bend_in, stand_up);
+}
+
+fn mapItemVisible(discovery_bit: u32) bool {
+    return game.debug.draw_physics or game.discovered_items & discovery_bit != 0;
+}
+
 fn rgb(r: f32, g: f32, b: f32) Vec4 {
     return .{ .x = r, .y = g, .z = b, .w = 1 };
 }
@@ -2780,6 +2801,17 @@ test "hunter flinch stops briefly and eases back to neutral" {
     try std.testing.expectEqual(@as(f32, 0), reaction.amount());
 }
 
+test "hunter knockdown eases into and out of the recovery bend" {
+    const duration: f32 = 8;
+    try std.testing.expectEqual(@as(f32, 0), hunterKnockdownAmount(duration, duration));
+    const entering = hunterKnockdownAmount(duration - hunter_knockdown_enter_seconds * 0.5, duration);
+    try std.testing.expect(entering > 0 and entering < 1);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), hunterKnockdownAmount(duration - hunter_knockdown_enter_seconds, duration), 0.0001);
+    const recovering = hunterKnockdownAmount(hunter_knockdown_exit_seconds * 0.5, duration);
+    try std.testing.expect(recovering > 0 and recovering < 1);
+    try std.testing.expectEqual(@as(f32, 0), hunterKnockdownAmount(0, duration));
+}
+
 test "pickup action commits at contact and finishes after retracting" {
     var action = PickupAction{ .active = true, .target = 3 };
     var events = action.advance(action_contact_time - 0.01);
@@ -2813,6 +2845,27 @@ test "authored world items occupy walkable player cells" {
         );
         if (!reachable) std.debug.print("unreachable pickup {d}: ({d}, {d})\n", .{ index, pickup.position.x, pickup.position.z });
         try std.testing.expect(reachable);
+    }
+}
+
+test "breakable boxes can be approached from the reachable navmesh" {
+    level.load();
+    navmesh.buildLevel();
+    try std.testing.expect(world_item_count <= 32);
+    for (breakable_defs, 0..) |box, index| {
+        const cell = navmesh.player_nav.nearestWalkable(box.position.x, box.position.z, 4) orelse return error.TestUnexpectedResult;
+        const approach = navmesh.player_nav.worldAt(cell);
+        const dx = approach.x - box.position.x;
+        const dz = approach.z - box.position.z;
+        const close_enough = dx * dx + dz * dz <= interaction_radius * interaction_radius;
+        if (!close_enough) std.debug.print("unapproachable box {d}: ({d}, {d})\n", .{ index, box.position.x, box.position.z });
+        try std.testing.expect(close_enough);
+        try std.testing.expect(navmesh.player_nav.isReachable(
+            level.current.player_spawn.x,
+            level.current.player_spawn.z,
+            approach.x,
+            approach.z,
+        ));
     }
 }
 
