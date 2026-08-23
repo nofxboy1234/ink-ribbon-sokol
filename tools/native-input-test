@@ -20,7 +20,7 @@ STATE_FILE = Path("/tmp/ink-ribbon-native-input.json")
 LOG_FILE = Path("/tmp/ink-ribbon-native-input.log")
 WINDOW_TITLE = "Character Mover"
 ALLOWED_KEYS = {
-    "w", "a", "s", "d", "e", "f", "m", "p", "q", "r", "shift", "f1", "escape",
+    "w", "a", "s", "d", "e", "f", "i", "m", "p", "q", "r", "shift", "f1", "escape",
     "left", "right", "up", "down",
 }
 MAX_HOLD_SECONDS = 30.0
@@ -335,6 +335,23 @@ def screenshot(path_text: str) -> None:
     print(path)
 
 
+def click_at(x: int, y: int) -> None:
+    owned_pid()
+    wid, window_x, window_y, width, height = window_geometry()
+    if not 0 <= x < width or not 0 <= y < height:
+        fail(f"Click must be inside the game window ({width}x{height})")
+    driver = XTest()
+    try:
+        subprocess.run(["wmctrl", "-ia", wid], check=True)
+        driver.xtst.XTestFakeMotionEvent(driver.display, -1, window_x + x, window_y + y, 0)
+        driver.xtst.XTestFakeButtonEvent(driver.display, 1, 1, 0)
+        driver.xtst.XTestFakeButtonEvent(driver.display, 1, 0, 0)
+        driver.flush()
+        time.sleep(0.15)
+    finally:
+        driver.close()
+
+
 def status() -> None:
     pid = owned_pid()
     print(f"running pid={pid} window={window_id()}")
@@ -377,6 +394,7 @@ def usage() -> None:
         "  tools/native-input-test look DX DY\n"
         "  tools/native-input-test sequence KEY:SECONDS [...]\n"
         "  tools/native-input-test screenshot PATH\n"
+        "  tools/native-input-test click X Y\n"
         "  tools/native-input-test check\n"
         "  tools/native-input-test status\n"
         "  tools/native-input-test close",
@@ -407,6 +425,8 @@ def main() -> None:
         sequence(args)
     elif command == "screenshot" and len(args) == 1:
         screenshot(args[0])
+    elif command == "click" and len(args) == 2:
+        click_at(int(args[0]), int(args[1]))
     elif command == "check" and not args:
         check()
     elif command == "status" and not args:

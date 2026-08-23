@@ -11,6 +11,8 @@ const math = @import("math.zig");
 const level = @import("level.zig");
 const controller = @import("character_controller.zig");
 const combat = @import("combat.zig");
+const inventory = @import("inventory.zig");
+const player_condition = @import("player_condition.zig");
 const hunter = @import("hunter.zig");
 const deformation = @import("character_deformation.zig");
 const deformed_box = @import("deformed_box.zig");
@@ -57,7 +59,20 @@ const hunter_hit_flash_seconds: f32 = 0.09;
 const shot_recoil_radians: f32 = 0.008;
 
 // Transient centered HUD messages.
-const HudNotice = enum { none, caught, saved, save_failed, deleted, hunter_friendly, hunter_hostile };
+const HudNotice = enum {
+    none,
+    caught,
+    saved,
+    save_failed,
+    deleted,
+    hunter_friendly,
+    hunter_hostile,
+    ammo_found,
+    health_found,
+    inventory_full,
+    healed,
+    full_health,
+};
 
 // Top-down map view tuning.
 const map_pan_speed: f32 = 25.0; // metres/second the map pans with WASD
@@ -73,6 +88,20 @@ const map_route_danger_penalty: f32 = 4.0;
 const map_direction_color = rgb(0.741, 0.576, 0.976); // Dracula purple #BD93F9
 const map_direction_instance_count = 3;
 const map_save_capacity = 2;
+
+const PickupDef = struct {
+    position: Vec3,
+    item: inventory.Item,
+};
+
+// The first two pickups sit in the entrance path so the inventory interaction
+// is discoverable immediately; the third rewards exploring toward the hall.
+const pickup_defs = [_]PickupDef{
+    .{ .position = .{ .x = -1.0, .y = 0.18, .z = 9.2 }, .item = .{ .kind = .ammo, .amount = 30 } },
+    .{ .position = .{ .x = 1.0, .y = 0.18, .z = 8.0 }, .item = .{ .kind = .health, .amount = 1 } },
+    .{ .position = .{ .x = 0.0, .y = 0.18, .z = 6.5 }, .item = .{ .kind = .ammo, .amount = 24 } },
+};
+const pickup_radius: f32 = 0.85;
 
 const Instance = extern struct {
     // One GPU instance record: 3 transform axes (xyz) + origin (w), then color.
@@ -165,6 +194,12 @@ const MenuState = struct {
     slot: usize = 0,
 };
 
+const InventoryUi = struct {
+    active: bool = false,
+    moving_cell: ?usize = null,
+    popup_cell: ?usize = null,
+};
+
 // Top-down map overlay state. The route is rebuilt from the current actor poses
 // whenever the map opens, then remains fixed while the player is paused.
 const MapState = struct {
@@ -208,6 +243,7 @@ const RenderState = struct {
     map_save_instances: sg.Buffer = .{},
     hunter_instance: sg.Buffer = .{},
     impact_instances: sg.Buffer = .{},
+    pickup_instances: sg.Buffer = .{},
     route_instances: sg.Buffer = .{},
     capsule_instances: sg.Buffer = .{},
     level_instance_count: usize = 0,
@@ -218,6 +254,7 @@ const RenderState = struct {
     map_actor_pipeline: sg.Pipeline = .{},
     debug_pipeline: sg.Pipeline = .{},
     reticle_pipeline: sg.Pipeline = .{},
+    ui_rect_pipeline: sg.Pipeline = .{},
     shadow_pipeline: sg.Pipeline = .{},
     actor_shadow_pipeline: sg.Pipeline = .{},
     shadow_pass: sg.Pass = .{},
@@ -230,6 +267,7 @@ const RenderState = struct {
     capsule_sphere_range: sshape.ElementRange = .{},
     pass_action: sg.PassAction = .{},
     impact_instance_count: usize = 0,
+    pickup_instance_count: usize = 0,
 };
 
 const GameState = struct {
@@ -239,6 +277,9 @@ const GameState = struct {
     debug: DebugState = .{},
     map: MapState = .{},
     menu: MenuState = .{},
+    inventory_ui: InventoryUi = .{},
+    inventory: inventory.State = .{},
+    collected_pickups: u32 = 0,
     character_config: controller.Config = .{},
     character: controller.State = initialCharacter(),
     hunter_config: hunter.Config = .{},
@@ -246,6 +287,8 @@ const GameState = struct {
     combat_config: combat.Config = .{},
     combat: combat.State = .{},
     combat_visuals: CombatVisuals = .{},
+    condition_config: player_condition.Config = .{},
+    condition: player_condition.State = .{},
     deformation_config: deformation.Config = .{},
     player_deformation: deformation.State = .{},
     hunter_deformation: deformation.State = .{},
@@ -337,7 +380,7 @@ fn frame() callconv(.c) void {
     updateCombatVisuals(frame_time);
 
     // Menus freeze the round exactly like map mode does.
-    const gameplay_active = !game.map.active and game.menu.kind == .none;
+    const gameplay_active = !game.map.active and game.menu.kind == .none and !game.inventory_ui.active;
 
     const render_position = blk: {
         var ticks: usize = 0;
@@ -350,31 +393,43 @@ fn frame() callconv(.c) void {
                     &game.character,
                     &game.mover_scratch,
                     game.world,
-                    game.input.characterInput(),
+                    if (game.condition.canMove()) game.input.characterInput() else .{},
                     game.camera.basis,
                     @floatCast(fixed_dt),
                 );
-                const combat_events = combat.update(game.combat_config, &game.combat, .{
-                    .aiming = game.input.aiming,
-                    .firing = game.input.firing,
-                    .reload_pressed = game.input.reload_queued,
-                    .moving = game.input.moving(),
-                }, @floatCast(fixed_dt));
-                game.input.reload_queued = false;
-                for (combat_events.shot_focus[0..combat_events.shot_count]) |shot_focus| fireShot(shot_focus);
-            }
-            if (game.menu.kind == .none and (!game.map.active or !game.map.hunter_paused) and !game.combat.hunterKnockedDown()) {
-                hunter.update(
-                    game.hunter_config,
-                    &game.hunter,
-                    &game.mover_scratch,
-                    game.world,
-                    game.character.position,
-                    @floatCast(fixed_dt),
-                );
-                if (hunterContacted()) {
+                if (game.condition.canMove()) {
+                    const reserve_before = game.combat.reserve;
+                    const combat_events = combat.update(game.combat_config, &game.combat, .{
+                        .aiming = game.input.aiming,
+                        .firing = game.input.firing,
+                        .reload_pressed = game.input.reload_queued,
+                        .moving = game.input.moving(),
+                    }, @floatCast(fixed_dt));
+                    game.input.reload_queued = false;
+                    if (game.combat.reserve < reserve_before) {
+                        _ = game.inventory.consumeAmmo(reserve_before - game.combat.reserve);
+                    }
+                    for (combat_events.shot_focus[0..combat_events.shot_count]) |shot_focus| fireShot(shot_focus);
+                    collectNearbyPickup();
+                }
+                if (game.condition.update(game.condition_config, game.character.grounded, @floatCast(fixed_dt)) == .defeated) {
                     respawnAfterCatch();
                     break;
+                }
+            }
+            if (game.menu.kind == .none and !game.inventory_ui.active and (!game.map.active or !game.map.hunter_paused) and !game.combat.hunterKnockedDown()) {
+                if (game.condition.hunter_watch_timer > 0) {
+                    faceHunterTowardPlayer(@floatCast(fixed_dt));
+                } else {
+                    hunter.update(
+                        game.hunter_config,
+                        &game.hunter,
+                        &game.mover_scratch,
+                        game.world,
+                        game.character.position,
+                        @floatCast(fixed_dt),
+                    );
+                    if (hunterContacted()) punchPlayer();
                 }
             }
         }
@@ -392,7 +447,7 @@ fn frame() callconv(.c) void {
             game.character.position;
     };
 
-    if (gameplay_active and !game.input.aiming) updateQuickTurn(frame_time);
+    if (gameplay_active and game.condition.canMove() and !game.input.aiming) updateQuickTurn(frame_time);
 
     if (game.map.active) {
         // WASD pans the map camera around the level.
@@ -402,7 +457,7 @@ fn frame() callconv(.c) void {
         game.map.pan.x = std.math.clamp(game.map.pan.x, -map_pan_x_max, map_pan_x_max);
         game.map.pan.z = std.math.clamp(game.map.pan.z, -map_pan_z_max, map_pan_z_max);
         game.camera.view_projection = mapViewProjection();
-    } else if (game.menu.kind == .none) {
+    } else if (game.menu.kind == .none and !game.inventory_ui.active) {
         camera.update(
             game.camera_config,
             &game.camera,
@@ -431,6 +486,10 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
     switch (value.type) {
         .KEY_DOWN, .KEY_UP => {
             const down = value.type == .KEY_DOWN;
+            if (game.inventory_ui.active) {
+                if (down and !value.key_repeat and (value.key_code == .I or value.key_code == .ESCAPE)) closeInventory();
+                return;
+            }
             switch (value.key_code) {
                 .W => if (game.menu.kind != .none) {
                     if (down and !value.key_repeat) moveMenuSlot(-1);
@@ -485,6 +544,9 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     // gameplay doesn't resume with the character moving.
                     game.input = .{};
                 },
+                .I => if (down and !value.key_repeat and game.menu.kind == .none and !game.map.active and game.condition.canMove()) {
+                    openInventory();
+                },
                 .P => if (down and !value.key_repeat and game.map.active) {
                     game.map.hunter_paused = !game.map.hunter_paused;
                 },
@@ -527,7 +589,9 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
             }
         },
         .MOUSE_DOWN => if (value.mouse_button == .LEFT) {
-            if (game.map.active) {
+            if (game.inventory_ui.active) {
+                inventoryClick(value.mouse_x, value.mouse_y);
+            } else if (game.map.active) {
                 selectMapSaveAt(value.mouse_x, value.mouse_y);
             } else if (game.menu.kind == .none) {
                 sapp.lockMouse(true);
@@ -688,6 +752,9 @@ fn placePlayerFromSlot(slot: saves.Slot) void {
     game.camera.yaw = slot.yaw;
     game.quick_turn = .{};
     game.combat = combat.State.init(game.combat_config, slot.magazine, slot.reserve);
+    game.inventory = slot.inventory;
+    game.collected_pickups = slot.collected_pickups;
+    game.condition.reset(game.condition_config, slot.health);
     game.combat_visuals = .{};
     game.player_deformation = .{};
 }
@@ -705,12 +772,16 @@ fn spawnPlayerAndHunter() void {
         game.camera = .{};
         game.quick_turn = .{};
         game.combat = combat.State.init(game.combat_config, game.combat_config.magazine_capacity, game.combat_config.starting_reserve);
+        game.inventory = inventory.State.defaultLoadout(game.combat_config.starting_reserve);
+        game.collected_pickups = 0;
+        game.condition.reset(game.condition_config, game.condition_config.max_health);
     }
     game.player_deformation = .{};
     resetHunter(game.character.position);
     game.clock = .{};
     game.map = .{};
     game.menu = .{};
+    game.inventory_ui = .{};
     game.notice = .none;
     game.notice_timer = 0;
     game.input = .{};
@@ -732,16 +803,76 @@ fn resetHunter(player_pos: b3.b3Pos) void {
 
 // The hunter catches the player when their capsules touch horizontally.
 fn hunterContacted() bool {
-    if (game.hunter_friendly or game.combat.hunterKnockedDown()) return false;
+    if (game.hunter_friendly or game.combat.hunterKnockedDown() or !game.condition.canBeHit()) return false;
     const dx = game.hunter.position.x - game.character.position.x;
     const dz = game.hunter.position.z - game.character.position.z;
     const radius = game.hunter_config.contact_radius;
     return dx * dx + dz * dz < radius * radius;
 }
 
-// Caught: the player is sent back to their most recent save slot (or the
-// level start when nothing has been saved yet), and the hunter returns to his
-// own spawn room so the chase restarts fair.
+fn punchPlayer() void {
+    if (!game.condition.punch(game.condition_config)) return;
+    var dx = game.character.position.x - game.hunter.position.x;
+    var dz = game.character.position.z - game.hunter.position.z;
+    const length = @sqrt(dx * dx + dz * dz);
+    if (length > 0.001) {
+        dx /= length;
+        dz /= length;
+    } else {
+        dx = @sin(game.hunter.yaw);
+        dz = @cos(game.hunter.yaw);
+    }
+    game.character.velocity = .{
+        .x = dx * game.condition_config.launch_speed,
+        .y = game.condition_config.lift_speed,
+        .z = dz * game.condition_config.launch_speed,
+    };
+    game.character.grounded = false;
+    game.quick_turn = .{};
+    game.input = .{};
+    game.camera.aim_alpha = 0;
+    game.combat.focus = 0;
+    game.combat.aiming_last_tick = false;
+}
+
+// During the player's knockdown the hunter holds position and tracks them,
+// recreating the deliberate pause after Mr X's punch.
+fn faceHunterTowardPlayer(dt: f32) void {
+    game.hunter.previous_position = game.hunter.position;
+    const dx = game.character.position.x - game.hunter.position.x;
+    const dz = game.character.position.z - game.hunter.position.z;
+    const target = std.math.atan2(dx, dz);
+    var delta = @mod(target - game.hunter.yaw + std.math.pi, 2.0 * std.math.pi) - std.math.pi;
+    delta = std.math.clamp(delta, -game.hunter_config.turn_speed * dt, game.hunter_config.turn_speed * dt);
+    game.hunter.yaw += delta;
+}
+
+fn collectNearbyPickup() void {
+    const radius_squared = pickup_radius * pickup_radius;
+    for (pickup_defs, 0..) |pickup, index| {
+        const bit = @as(u32, 1) << @intCast(index);
+        if (game.collected_pickups & bit != 0) continue;
+        const dx = game.character.position.x - pickup.position.x;
+        const dz = game.character.position.z - pickup.position.z;
+        if (dx * dx + dz * dz > radius_squared) continue;
+        if (game.inventory.add(pickup.item) == null) {
+            game.notice = .inventory_full;
+            game.notice_timer = notice_seconds;
+            return;
+        }
+        game.collected_pickups |= bit;
+        if (pickup.item.kind == .ammo) {
+            game.combat.reserve +|= pickup.item.amount;
+            game.notice = .ammo_found;
+        } else {
+            game.notice = .health_found;
+        }
+        game.notice_timer = notice_seconds;
+    }
+}
+
+// Defeated: restore the most recent save (or the initial loadout) and move the
+// hunter home so the next chase starts fairly.
 fn respawnAfterCatch() void {
     if (latestSaveIndex()) |index| {
         placePlayerFromSlot(saves.slots[index]);
@@ -752,6 +883,9 @@ fn respawnAfterCatch() void {
         game.camera = .{};
         game.quick_turn = .{};
         game.combat = combat.State.init(game.combat_config, game.combat_config.magazine_capacity, game.combat_config.starting_reserve);
+        game.inventory = inventory.State.defaultLoadout(game.combat_config.starting_reserve);
+        game.collected_pickups = 0;
+        game.condition.reset(game.condition_config, game.condition_config.max_health);
     }
 
     game.player_deformation = .{};
@@ -759,6 +893,7 @@ fn respawnAfterCatch() void {
     game.notice = .caught;
     game.notice_timer = notice_seconds;
     game.input = .{};
+    game.inventory_ui = .{};
 }
 
 // True while the character stands within the interaction area of a typewriter.
@@ -784,6 +919,119 @@ fn openMenu(kind: MenuKind) void {
 fn closeMenu() void {
     game.menu.kind = .none;
     game.input = .{};
+}
+
+const InventoryLayout = struct {
+    left: f32,
+    top: f32,
+    cell: f32,
+    gap: f32,
+};
+
+const ScreenRect = struct {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+
+    fn contains(self: ScreenRect, x: f32, y: f32) bool {
+        return x >= self.x and y >= self.y and x <= self.x + self.w and y <= self.y + self.h;
+    }
+};
+
+fn inventoryLayout() InventoryLayout {
+    const gap: f32 = 10;
+    const cell = std.math.clamp(sapp.heightf() * 0.105, 58, 92);
+    const width = cell * @as(f32, @floatFromInt(inventory.columns)) + gap * @as(f32, @floatFromInt(inventory.columns - 1));
+    const height = cell * @as(f32, @floatFromInt(inventory.rows)) + gap * @as(f32, @floatFromInt(inventory.rows - 1));
+    return .{
+        .left = (sapp.widthf() - width) * 0.5,
+        .top = (sapp.heightf() - height) * 0.5 + 22,
+        .cell = cell,
+        .gap = gap,
+    };
+}
+
+fn inventoryCellRect(layout: InventoryLayout, cell: usize) ScreenRect {
+    const column = cell % inventory.columns;
+    const row = cell / inventory.columns;
+    return .{
+        .x = layout.left + @as(f32, @floatFromInt(column)) * (layout.cell + layout.gap),
+        .y = layout.top + @as(f32, @floatFromInt(row)) * (layout.cell + layout.gap),
+        .w = layout.cell,
+        .h = layout.cell,
+    };
+}
+
+fn inventoryCellAt(x: f32, y: f32) ?usize {
+    const layout = inventoryLayout();
+    for (0..inventory.cell_count) |cell| if (inventoryCellRect(layout, cell).contains(x, y)) return cell;
+    return null;
+}
+
+fn inventoryPopupRect(cell: usize) ScreenRect {
+    const item_rect = inventoryCellRect(inventoryLayout(), cell);
+    const width: f32 = 150;
+    const height: f32 = 82;
+    var x = item_rect.x + item_rect.w + 12;
+    if (x + width > sapp.widthf() - 12) x = item_rect.x - width - 12;
+    return .{ .x = x, .y = item_rect.y, .w = width, .h = height };
+}
+
+fn openInventory() void {
+    game.inventory_ui = .{ .active = true };
+    game.input = .{};
+    game.camera.aim_alpha = 0;
+    game.combat.focus = 0;
+    game.combat.aiming_last_tick = false;
+    sapp.lockMouse(false);
+}
+
+fn closeInventory() void {
+    game.inventory_ui = .{};
+    game.input = .{};
+    sapp.lockMouse(true);
+}
+
+fn inventoryClick(x: f32, y: f32) void {
+    if (game.inventory_ui.popup_cell) |popup_cell| {
+        const popup = inventoryPopupRect(popup_cell);
+        if (popup.contains(x, y)) {
+            if (y < popup.y + popup.h * 0.5) {
+                if (game.inventory.useHealth(
+                    popup_cell,
+                    &game.condition.health,
+                    game.condition_config.max_health,
+                    game.condition_config.heal_amount,
+                )) {
+                    game.notice = .healed;
+                } else {
+                    game.notice = .full_health;
+                }
+                game.notice_timer = notice_seconds;
+            } else {
+                game.inventory_ui.moving_cell = popup_cell;
+            }
+            game.inventory_ui.popup_cell = null;
+            return;
+        }
+        game.inventory_ui.popup_cell = null;
+    }
+
+    const cell = inventoryCellAt(x, y) orelse {
+        game.inventory_ui.moving_cell = null;
+        return;
+    };
+    if (game.inventory_ui.moving_cell) |from| {
+        _ = game.inventory.moveOrSwap(from, cell);
+        game.inventory_ui.moving_cell = null;
+        return;
+    }
+    switch (game.inventory.cells[cell].kind) {
+        .empty => {},
+        .ammo => game.inventory_ui.moving_cell = cell,
+        .health => game.inventory_ui.popup_cell = cell,
+    }
 }
 
 fn moveMenuSlot(delta: i32) void {
@@ -820,6 +1068,9 @@ fn confirmMenu() void {
                 .yaw = game.character.yaw,
                 .magazine = game.combat.magazine,
                 .reserve = game.combat.reserve,
+                .health = game.condition.health,
+                .inventory = game.inventory,
+                .collected_pickups = game.collected_pickups,
                 .timestamp = std.Io.Timestamp.now(app_io.io(), .real).toSeconds(),
             };
             if (saves.writeToCwd(app_io.io())) |_| {
@@ -1029,6 +1280,11 @@ fn initRenderer() void {
         .usage = .{ .stream_update = true },
         .label = "character-combat-impact-instances",
     });
+    game.render.pickup_instances = sg.makeBuffer(.{
+        .size = pickup_defs.len * @sizeOf(Instance),
+        .usage = .{ .stream_update = true },
+        .label = "character-pickup-instances",
+    });
     game.render.route_instances = sg.makeBuffer(.{
         .size = map_route_capacity * @sizeOf(Instance),
         .usage = .{ .stream_update = true },
@@ -1129,6 +1385,12 @@ fn initRenderer() void {
         .colors = blendingTargets(),
         .label = "character-aim-reticle-pipeline",
     });
+    game.render.ui_rect_pipeline = sg.makePipeline(.{
+        .shader = sg.makeShader(shd.uiRectShaderDesc(sg.queryBackend())),
+        .depth = .{ .write_enabled = false, .compare = .ALWAYS },
+        .colors = blendingTargets(),
+        .label = "character-inventory-rect-pipeline",
+    });
 
     // Depth-only 2048x2048 texture seen from the sun. Only depth is written,
     // so the shadow pixel format is DEPTH (no color).
@@ -1203,10 +1465,16 @@ fn initRenderer() void {
 
 fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
     // Rebuild the character's instance record from its interpolated position.
-    const instance = makeInstance(
-        .{ .x = position.x, .y = position.y, .z = position.z },
+    const fall = game.condition.fallAmount(game.condition_config);
+    const instance = makeYawPitchedInstance(
+        .{
+            .x = position.x,
+            .y = position.y - (character_half_extents.y - character_half_extents.z) * fall,
+            .z = position.z,
+        },
         character_half_extents,
         game.character.yaw,
+        fall * std.math.pi * 0.5,
         rgb(0.20, 0.694, 1.0), // Oxocarbon blue: #33B1FF
     );
     sg.updateBuffer(game.render.character_instance, sg.asRange(&instance));
@@ -1227,7 +1495,7 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
 
     // Interpolate during gameplay, but use the authoritative pose while paused
     // so the clock's cycling alpha cannot replay the hunter's last movement.
-    const hunter_render = if ((game.map.active and game.map.hunter_paused) or game.menu.kind != .none)
+    const hunter_render = if ((game.map.active and game.map.hunter_paused) or game.menu.kind != .none or game.inventory_ui.active or game.condition.hunter_watch_timer > 0)
         game.hunter.position
     else
         hunter.interpolatedPosition(game.hunter, game.clock.alpha());
@@ -1254,6 +1522,7 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
     );
     sg.updateBuffer(game.render.hunter_instance, sg.asRange(&hunter_instance));
     updateImpactInstances();
+    updatePickupInstances();
 
     const player_sample: deformation.Sample = .{
         .position = .{ .x = position.x, .y = position.y, .z = position.z },
@@ -1268,7 +1537,7 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         .height = hunter_half_extents.y * 2.0,
         .max_speed = game.hunter_config.far_speed,
     };
-    const player_pose = if (gameplay_active)
+    const player_pose = if (gameplay_active and game.condition.canMove())
         game.player_deformation.update(game.deformation_config, player_sample, frame_time)
     else blk: {
         game.player_deformation.reset(player_sample);
@@ -1368,6 +1637,12 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         sg.applyUniforms(shd.UB_deformed_display_vs_params, sg.asRange(&actor_vs_params));
         drawDeformedActor(game.render.hunter_instance, true);
     }
+    if (!game.map.active and game.render.pickup_instance_count > 0) {
+        const pickup_params: shd.RouteVsParams = .{ .view_projection = game.camera.view_projection };
+        sg.applyPipeline(game.render.route_pipeline);
+        sg.applyUniforms(shd.UB_route_vs_params, sg.asRange(&pickup_params));
+        drawInstances(game.render.pickup_instances, game.render.box_range, 0, game.render.pickup_instance_count, false);
+    }
     if (!game.map.active and game.render.impact_instance_count > 0) {
         const impact_params: shd.RouteVsParams = .{ .view_projection = game.camera.view_projection };
         sg.applyPipeline(game.render.route_pipeline);
@@ -1382,9 +1657,28 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         drawInstances(game.render.capsule_instances, game.render.capsule_sphere_range, @sizeOf(Instance), 2, true);
     }
     drawReticle();
+    drawInventoryRects();
     drawHud(position);
     sg.endPass();
     sg.commit();
+}
+
+fn updatePickupInstances() void {
+    var instances: [pickup_defs.len]Instance = undefined;
+    var count: usize = 0;
+    for (pickup_defs, 0..) |pickup, index| {
+        const bit = @as(u32, 1) << @intCast(index);
+        if (game.collected_pickups & bit != 0) continue;
+        const color = switch (pickup.item.kind) {
+            .ammo => rgb(0.15, 0.48, 1.0),
+            .health => rgb(0.18, 0.82, 0.37),
+            .empty => continue,
+        };
+        instances[count] = makeInstance(pickup.position, .{ .x = 0.18, .y = 0.18, .z = 0.18 }, 0, color);
+        count += 1;
+    }
+    if (count > 0) sg.updateBuffer(game.render.pickup_instances, sg.asRange(instances[0..count]));
+    game.render.pickup_instance_count = count;
 }
 
 fn updateImpactInstances() void {
@@ -1407,7 +1701,7 @@ fn updateImpactInstances() void {
 }
 
 fn drawReticle() void {
-    if (game.map.active or game.menu.kind != .none or game.camera.aim_alpha <= 0.01 or game.combat.reloading()) return;
+    if (game.map.active or game.menu.kind != .none or game.inventory_ui.active or game.camera.aim_alpha <= 0.01 or game.combat.reloading()) return;
     const scale = sapp.heightf() / 1080.0;
     const gap = (48.0 + (14.0 - 48.0) * game.combat.focus) * scale;
     const params: shd.ReticleFsParams = .{
@@ -1418,6 +1712,72 @@ fn drawReticle() void {
     sg.applyPipeline(game.render.reticle_pipeline);
     sg.applyUniforms(shd.UB_reticle_fs_params, sg.asRange(&params));
     sg.draw(0, 3, 1);
+}
+
+fn drawUiRect(rect: ScreenRect, fill: Vec4, border: Vec4, border_width: f32) void {
+    const params: shd.UiRectFsParams = .{
+        .viewport = .{ .x = sapp.widthf(), .y = sapp.heightf() },
+        .rect = .{ .x = rect.x, .y = rect.y, .z = rect.w, .w = rect.h },
+        .fill_color = fill,
+        .border_color = border,
+        .style = .{ .x = border_width },
+    };
+    sg.applyPipeline(game.render.ui_rect_pipeline);
+    sg.applyUniforms(shd.UB_ui_rect_fs_params, sg.asRange(&params));
+    sg.draw(0, 3, 1);
+}
+
+fn drawInventoryRects() void {
+    if (!game.inventory_ui.active) return;
+    drawUiRect(
+        .{ .x = 0, .y = 0, .w = sapp.widthf(), .h = sapp.heightf() },
+        .{ .x = 0.025, .y = 0.032, .z = 0.040, .w = 0.90 },
+        .{},
+        0,
+    );
+    const layout = inventoryLayout();
+    const grid_width = layout.cell * @as(f32, @floatFromInt(inventory.columns)) + layout.gap * @as(f32, @floatFromInt(inventory.columns - 1));
+    const grid_height = layout.cell * @as(f32, @floatFromInt(inventory.rows)) + layout.gap * @as(f32, @floatFromInt(inventory.rows - 1));
+    drawUiRect(
+        .{ .x = layout.left - 18, .y = layout.top - 18, .w = grid_width + 36, .h = grid_height + 36 },
+        .{ .x = 0.08, .y = 0.09, .z = 0.10, .w = 0.98 },
+        .{ .x = 0.34, .y = 0.36, .z = 0.37, .w = 1 },
+        2,
+    );
+    for (0..inventory.cell_count) |cell| {
+        const rect = inventoryCellRect(layout, cell);
+        const selected = game.inventory_ui.moving_cell == cell or game.inventory_ui.popup_cell == cell;
+        drawUiRect(
+            rect,
+            .{ .x = 0.12, .y = 0.13, .z = 0.14, .w = 1 },
+            if (selected) .{ .x = 0.95, .y = 0.78, .z = 0.25, .w = 1 } else .{ .x = 0.30, .y = 0.32, .z = 0.33, .w = 1 },
+            if (selected) 4 else 2,
+        );
+        const item = game.inventory.cells[cell];
+        if (!item.occupied()) continue;
+        const inset: f32 = 9;
+        const item_color: Vec4 = switch (item.kind) {
+            .ammo => .{ .x = 0.12, .y = 0.43, .z = 0.98, .w = 1 },
+            .health => .{ .x = 0.12, .y = 0.76, .z = 0.30, .w = 1 },
+            .empty => unreachable,
+        };
+        drawUiRect(
+            .{ .x = rect.x + inset, .y = rect.y + inset, .w = rect.w - inset * 2, .h = rect.h - inset * 2 },
+            item_color,
+            .{ .x = item_color.x + 0.12, .y = item_color.y + 0.12, .z = @min(item_color.z + 0.12, 1), .w = 1 },
+            2,
+        );
+    }
+    if (game.inventory_ui.popup_cell) |cell| {
+        const popup = inventoryPopupRect(cell);
+        drawUiRect(popup, .{ .x = 0.07, .y = 0.08, .z = 0.09, .w = 1 }, .{ .x = 0.68, .y = 0.70, .z = 0.70, .w = 1 }, 2);
+        drawUiRect(
+            .{ .x = popup.x + 2, .y = popup.y + popup.h * 0.5 - 1, .w = popup.w - 4, .h = 2 },
+            .{ .x = 0.32, .y = 0.34, .z = 0.35, .w = 1 },
+            .{},
+            0,
+        );
+    }
 }
 
 fn updateCapsuleInstances(position: b3.b3Pos) void {
@@ -1498,6 +1858,13 @@ fn drawHud(position: b3.b3Pos) void {
             sdtx.color3b(225, 235, 225);
         }
         sdtx.print("AMMO {d:>2} / {d:>3}", .{ game.combat.magazine, game.combat.reserve });
+        sdtx.pos(ammo_x, ammo_y - 2.4);
+        if (game.condition.health <= 35) {
+            sdtx.color3b(255, 76, 76);
+        } else {
+            sdtx.color3b(80, 250, 123);
+        }
+        sdtx.print("HEALTH {d:>3}%", .{@as(u8, @intFromFloat(@round(game.condition.health)))});
         if (game.combat.reloading()) {
             sdtx.pos(ammo_x, ammo_y - 1.2);
             sdtx.color3b(80, 250, 123);
@@ -1511,9 +1878,16 @@ fn drawHud(position: b3.b3Pos) void {
         .save_failed => drawNotice("SAVE FAILED", 255, 60, 60),
         .hunter_friendly => drawNotice("HUNTER FRIENDLY", 80, 250, 123),
         .hunter_hostile => drawNotice("HUNTER HOSTILE", 255, 85, 85),
+        .ammo_found => drawNotice("HANDGUN AMMO ADDED", 70, 135, 255),
+        .health_found => drawNotice("HEALING ITEM ADDED", 80, 250, 123),
+        .inventory_full => drawNotice("INVENTORY FULL", 255, 220, 120),
+        .healed => drawNotice("HEALTH RECOVERED", 80, 250, 123),
+        .full_health => drawNotice("HEALTH IS ALREADY FULL", 255, 220, 120),
         .none => {},
     }
-    if (game.menu.kind != .none) {
+    if (game.inventory_ui.active) {
+        drawInventoryText();
+    } else if (game.menu.kind != .none) {
         drawSaveMenu();
     } else if (!game.map.active and nearSaveFixture()) {
         const prompt = "PRESS SPACE TO SAVE";
@@ -1522,6 +1896,44 @@ fn drawHud(position: b3.b3Pos) void {
         sdtx.print(prompt, .{});
     }
     sdtx.draw();
+}
+
+fn drawInventoryText() void {
+    const layout = inventoryLayout();
+    sdtx.pos(layout.left / 8.0, layout.top / 8.0 - 5.2);
+    sdtx.color3b(230, 230, 225);
+    sdtx.print("INVENTORY", .{});
+    sdtx.pos(layout.left / 8.0, layout.top / 8.0 - 3.8);
+    sdtx.color3b(80, 250, 123);
+    sdtx.print("CONDITION  {d}%", .{@as(u8, @intFromFloat(@round(game.condition.health)))});
+    sdtx.pos(layout.left / 8.0, layout.top / 8.0 - 2.4);
+    sdtx.color3b(150, 155, 155);
+    sdtx.print("CLICK ITEM, THEN DESTINATION    I / ESC CLOSE", .{});
+
+    for (game.inventory.cells, 0..) |item, cell| {
+        if (!item.occupied()) continue;
+        const rect = inventoryCellRect(layout, cell);
+        sdtx.pos((rect.x + 13) / 8.0, (rect.y + rect.h - 20) / 8.0);
+        sdtx.color3b(255, 255, 255);
+        switch (item.kind) {
+            .ammo => sdtx.print("{d}", .{item.amount}),
+            .health => sdtx.print("HEAL", .{}),
+            .empty => {},
+        }
+    }
+    if (game.inventory_ui.moving_cell != null) {
+        sdtx.pos(layout.left / 8.0, (layout.top + layout.cell * 4 + layout.gap * 3 + 28) / 8.0);
+        sdtx.color3b(255, 220, 120);
+        sdtx.print("SELECT A DESTINATION CELL", .{});
+    }
+    if (game.inventory_ui.popup_cell) |cell| {
+        const popup = inventoryPopupRect(cell);
+        sdtx.color3b(235, 235, 230);
+        sdtx.pos((popup.x + 14) / 8.0, (popup.y + 13) / 8.0);
+        sdtx.print("USE", .{});
+        sdtx.pos((popup.x + 14) / 8.0, (popup.y + popup.h * 0.5 + 13) / 8.0);
+        sdtx.print("MOVE", .{});
+    }
 }
 
 // Centered transient HUD message on its own row near the top of the screen.
@@ -1659,6 +2071,22 @@ fn makePitchedInstance(center: Vec3, half: Vec3, pitch: f32, color: Vec4) Instan
         .x = .{ .x = scale.x, .w = center.x },
         .y = .{ .y = scale.y * c, .z = -scale.z * s, .w = center.y },
         .z = .{ .y = scale.y * s, .z = scale.z * c, .w = center.z },
+        .color = color,
+    };
+}
+
+// Full actor orientation used by the knockdown presentation: pitch happens in
+// character-local space, then yaw keeps the fall aligned with the actor.
+fn makeYawPitchedInstance(center: Vec3, half: Vec3, yaw: f32, pitch: f32, color: Vec4) Instance {
+    const scale = Vec3.scale(half, 2);
+    const cy = @cos(yaw);
+    const sy = @sin(yaw);
+    const cp = @cos(pitch);
+    const sp = @sin(pitch);
+    return .{
+        .x = .{ .x = cy * scale.x, .y = sy * sp * scale.y, .z = sy * cp * scale.z, .w = center.x },
+        .y = .{ .y = cp * scale.y, .z = -sp * scale.z, .w = center.y },
+        .z = .{ .x = -sy * scale.x, .y = cy * sp * scale.y, .z = cy * cp * scale.z, .w = center.z },
         .color = color,
     };
 }

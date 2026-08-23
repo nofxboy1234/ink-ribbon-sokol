@@ -1,11 +1,11 @@
 //! Persistent save slots for the typewriter save stations.
 //!
 //! Eight numbered slots in the spirit of Resident Evil 2 Remake. A slot
-//! records the player's position and heading inside the level; the world is
-//! static, so nothing else is needed to restore a moment. All slots live in
-//! one JSON file so a single read/write keeps them consistent.
+//! records pose, ammunition, health, inventory layout, and collected pickups.
+//! All slots live in one JSON file so a single read/write keeps them consistent.
 
 const std = @import("std");
+const inventory = @import("inventory.zig");
 
 pub const slot_count = 8;
 
@@ -17,6 +17,10 @@ pub const Slot = struct {
     yaw: f32 = 0,
     magazine: u16 = 24,
     reserve: u16 = 120,
+    health: f32 = 100,
+    inventory: inventory.State = .{},
+    // Bit N is set after authored world pickup N has been collected.
+    collected_pickups: u32 = 0,
     // Unix epoch seconds when the slot was written, for the slot list UI.
     timestamp: i64 = 0,
 };
@@ -25,7 +29,7 @@ pub var slots: [slot_count]Slot = @splat(.{});
 
 const file_name = "saves.json";
 const file_limit = 1 << 20;
-const current_version: u32 = 3;
+const current_version: u32 = 4;
 
 const FileFormat = struct {
     version: u32 = current_version,
@@ -42,8 +46,17 @@ pub fn loadFromDir(dir: std.Io.Dir, io: std.Io) void {
         .ignore_unknown_fields = true,
     }) catch return;
     defer parsed.deinit();
-    if ((parsed.value.version == 2 or parsed.value.version == current_version) and parsed.value.slots.len == slot_count) {
+    if ((parsed.value.version == 2 or parsed.value.version == 3 or parsed.value.version == current_version) and parsed.value.slots.len == slot_count) {
         slots = parsed.value.slots;
+        // Versions 2/3 predate the grid. Reconstruct their reserve ammunition
+        // as an inventory item and grant one healing item.
+        if (parsed.value.version < current_version) {
+            for (&slots) |*slot| if (slot.occupied) {
+                slot.inventory = inventory.State.defaultLoadout(slot.reserve);
+                slot.health = 100;
+                slot.collected_pickups = 0;
+            };
+        }
     }
 }
 
@@ -75,7 +88,19 @@ test "slots round-trip through disk" {
     const io = std.testing.io;
 
     slots = @splat(.{});
-    slots[2] = .{ .occupied = true, .x = 3.5, .y = 0.9, .z = -7.25, .yaw = 1.5708, .magazine = 7, .reserve = 61, .timestamp = 1755892800 };
+    slots[2] = .{
+        .occupied = true,
+        .x = 3.5,
+        .y = 0.9,
+        .z = -7.25,
+        .yaw = 1.5708,
+        .magazine = 7,
+        .reserve = 61,
+        .health = 42,
+        .inventory = inventory.State.defaultLoadout(61),
+        .collected_pickups = 0b101,
+        .timestamp = 1755892800,
+    };
     slots[7] = .{ .occupied = true, .x = -12, .y = 0.9, .z = 15, .yaw = -0.5 };
     try writeToDir(tmp.dir, io);
 
@@ -87,6 +112,9 @@ test "slots round-trip through disk" {
     try std.testing.expectEqual(@as(f32, 1.5708), slots[2].yaw);
     try std.testing.expectEqual(@as(u16, 7), slots[2].magazine);
     try std.testing.expectEqual(@as(u16, 61), slots[2].reserve);
+    try std.testing.expectEqual(@as(f32, 42), slots[2].health);
+    try std.testing.expectEqual(@as(u16, 61), slots[2].inventory.totalAmmo());
+    try std.testing.expectEqual(@as(u32, 0b101), slots[2].collected_pickups);
     try std.testing.expectEqual(@as(i64, 1755892800), slots[2].timestamp);
     try std.testing.expect(slots[7].occupied);
     try std.testing.expect(!slots[0].occupied);
@@ -143,4 +171,6 @@ test "version two saves migrate with a full default loadout" {
     try std.testing.expect(slots[0].occupied);
     try std.testing.expectEqual(@as(u16, 24), slots[0].magazine);
     try std.testing.expectEqual(@as(u16, 120), slots[0].reserve);
+    try std.testing.expectEqual(@as(u16, 120), slots[0].inventory.totalAmmo());
+    try std.testing.expectEqual(inventory.ItemKind.health, slots[0].inventory.cells[1].kind);
 }

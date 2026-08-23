@@ -380,3 +380,31 @@ void main() {
 @end
 
 @program reticle reticle_vs reticle_fs
+
+@fs ui_rect_fs
+layout(binding = 3) uniform ui_rect_fs_params {
+    vec4 viewport;     // resolution xy
+    vec4 rect;         // top-left x/y, width, height in pixels
+    vec4 fill_color;
+    vec4 border_color;
+    vec4 style;        // border width in x
+};
+
+in vec2 uv;
+out vec4 frag_color;
+
+void main() {
+    vec2 pixel = vec2(uv.x * viewport.x, (1.0 - uv.y) * viewport.y);
+    vec2 local = pixel - rect.xy;
+    float inside = step(0.0, local.x) * step(0.0, local.y)
+        * step(local.x, rect.z) * step(local.y, rect.w);
+    float border_width = style.x;
+    float inner = step(border_width, local.x) * step(border_width, local.y)
+        * step(local.x, rect.z - border_width)
+        * step(local.y, rect.w - border_width);
+    frag_color = mix(border_color, fill_color, inner);
+    frag_color.a *= inside;
+}
+@end
+
+@program ui_rect reticle_vs ui_rect_fs

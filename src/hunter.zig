@@ -53,7 +53,7 @@ pub const Config = struct {
     hearing_error: f32 = 2.5,
     // He only gives up after give_up_time without any new perception.
     give_up_time: f32 = 4.0,
-    // Physically touching the player ends the game.
+    // Physically touching the player puts him in punch range.
     contact_radius: f32 = 1.1,
     // Patrol wandering: new random destinations inside the level bounds.
     arrive_radius: f32 = 1.8,
