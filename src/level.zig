@@ -26,6 +26,66 @@ const wall_half_height: f32 = 2.65;
 const wall_half_width: f32 = 0.16;
 const slab_half_height: f32 = 0.20;
 
+pub const doorway_width: f32 = 2.0;
+pub const door_width: f32 = 1.48;
+pub const door_height: f32 = 3.15;
+pub const door_half_thickness: f32 = 0.07;
+
+pub const DoorAxis = enum { x, z };
+pub const DoorLock = enum { none, purple, pink, cyan };
+pub const DoorDef = struct {
+    position: Vec3,
+    axis: DoorAxis,
+    gap_half_width: f32,
+    clear_half_width: f32 = doorway_width * 0.5,
+    lock: DoorLock = .none,
+};
+
+pub const WindowDef = struct {
+    center: Vec3,
+    half_extents: Vec3,
+};
+
+// Thin glass overlays sit just inside selected exterior wall faces. The wall
+// remains the collision boundary; character.zig draws these with alpha
+// blending so they read as inset windows rather than holes in the building.
+pub const window_defs = [_]WindowDef{
+    .{ .center = .{ .x = -24.82, .y = 2.65, .z = -9.0 }, .half_extents = .{ .x = 0.035, .y = 0.78, .z = 1.15 } },
+    .{ .center = .{ .x = -24.82, .y = 2.65, .z = -3.0 }, .half_extents = .{ .x = 0.035, .y = 0.78, .z = 1.15 } },
+    .{ .center = .{ .x = -24.82, .y = 2.65, .z = 3.4 }, .half_extents = .{ .x = 0.035, .y = 0.78, .z = 1.15 } },
+    .{ .center = .{ .x = 25.82, .y = 2.65, .z = -8.7 }, .half_extents = .{ .x = 0.035, .y = 0.78, .z = 1.15 } },
+    .{ .center = .{ .x = 25.82, .y = 2.65, .z = -2.2 }, .half_extents = .{ .x = 0.035, .y = 0.78, .z = 1.15 } },
+    .{ .center = .{ .x = 25.82, .y = 2.65, .z = 5.0 }, .half_extents = .{ .x = 0.035, .y = 0.78, .z = 1.15 } },
+    .{ .center = .{ .x = -1.2, .y = 2.65, .z = 13.82 }, .half_extents = .{ .x = 1.05, .y = 0.78, .z = 0.035 } },
+    .{ .center = .{ .x = 14.5, .y = 2.65, .z = -18.82 }, .half_extents = .{ .x = 0.95, .y = 0.78, .z = 0.035 } },
+};
+
+// Each entry occupies an intentional gap between two authored wall runs. The
+// frame builder below narrows oversized gaps to a conventional door width and
+// fills the space above the leaf with a lintel.
+pub const door_defs = [_]DoorDef{
+    .{ .position = .{ .x = -19.7, .z = -12.1 }, .axis = .x, .gap_half_width = 0.8, .lock = .pink },
+    .{ .position = .{ .x = -19.3, .z = -5.5 }, .axis = .x, .gap_half_width = 0.8 },
+    .{ .position = .{ .x = -19.5, .z = -1.1 }, .axis = .x, .gap_half_width = 0.8 },
+    .{ .position = .{ .x = -17.4, .z = 2.2 }, .axis = .x, .gap_half_width = 0.8 },
+    .{ .position = .{ .x = -17.6, .z = 5.4 }, .axis = .x, .gap_half_width = 0.8 },
+    .{ .position = .{ .x = 12.5, .z = -0.2 }, .axis = .x, .gap_half_width = 0.7, .lock = .purple },
+    .{ .position = .{ .x = 9.5, .z = 2.0 }, .axis = .x, .gap_half_width = 0.8 },
+    .{ .position = .{ .x = 10.4, .z = 5.2 }, .axis = .x, .gap_half_width = 0.8 },
+    .{ .position = .{ .x = 20.8, .z = -3.15 }, .axis = .z, .gap_half_width = 1.35 },
+    .{ .position = .{ .x = 21.3, .z = 0.0 }, .axis = .x, .gap_half_width = 1.3 },
+    .{ .position = .{ .x = 22.6, .z = 3.2 }, .axis = .x, .gap_half_width = 0.8, .lock = .cyan },
+    .{ .position = .{ .x = -18.3, .z = -3.0 }, .axis = .z, .gap_half_width = 0.8 },
+    .{ .position = .{ .x = -16.2, .z = -7.5 }, .axis = .z, .gap_half_width = 0.8 },
+    .{ .position = .{ .x = -8.2, .z = -9.5 }, .axis = .z, .gap_half_width = 1.0 },
+    .{ .position = .{ .x = 16.8, .z = -2.7 }, .axis = .z, .gap_half_width = 1.3 },
+    .{ .position = .{ .x = 18.6, .z = 6.1 }, .axis = .z, .gap_half_width = 0.8 },
+    .{ .position = .{ .x = -1.0, .z = 5.7 }, .axis = .x, .gap_half_width = 1.2 },
+    // Appended for save-mask stability: explicit exit from the hunter's
+    // authored starting room into the east corridor.
+    .{ .position = .{ .x = 22.6, .z = -1.75 }, .axis = .z, .gap_half_width = 1.2, .clear_half_width = 1.2 },
+};
+
 pub const Box = struct {
     center: Vec3,
     half_extents: Vec3,
@@ -202,29 +262,16 @@ const interior_walls = [_]Wall{
 
 const Prop = struct { x: f32, z: f32, hx: f32, hy: f32, hz: f32, color: Vec4 };
 const props = [_]Prop{
-    // West offices and records: desks, archive shelves, and lockers.
+    // Purposeful, wall-adjacent furniture. The broad corridors and the center
+    // of the main hall are deliberately kept clear.
     .{ .x = -21.7, .z = -9.0, .hx = 1.5, .hy = 0.55, .hz = 0.55, .color = wood_color },
     .{ .x = -17.2, .z = -10.0, .hx = 0.40, .hy = 1.05, .hz = 1.20, .color = locker_color },
-    .{ .x = -21.2, .z = -3.4, .hx = 1.1, .hy = 0.55, .hz = 0.65, .color = wood_color },
-    .{ .x = -15.4, .z = -1.9, .hx = 1.2, .hy = 0.85, .hz = 0.38, .color = shelf_color },
     .{ .x = -21.2, .z = 4.0, .hx = 0.42, .hy = 1.05, .hz = 1.25, .color = locker_color },
     .{ .x = -15.1, .z = 6.7, .hx = 1.4, .hy = 0.55, .hz = 0.55, .color = wood_color },
-    .{ .x = -8.9, .z = 7.5, .hx = 0.45, .hy = 1.0, .hz = 1.4, .color = locker_color },
-    .{ .x = -10.0, .z = -5.0, .hx = 0.55, .hy = 0.65, .hz = 0.55, .color = crate_color },
-
-    // Main hall furniture leaves broad lanes around both sides.
-    .{ .x = -4.2, .z = -0.8, .hx = 0.55, .hy = 0.65, .hz = 1.35, .color = wood_color },
-    .{ .x = 2.2, .z = -0.8, .hx = 0.55, .hy = 0.65, .hz = 1.35, .color = wood_color },
     .{ .x = -4.5, .z = 8.0, .hx = 1.1, .hy = 0.50, .hz = 0.45, .color = wood_color },
-    .{ .x = 2.4, .z = 8.1, .hx = 0.40, .hy = 1.0, .hz = 0.75, .color = locker_color },
-
-    // East offices and the hunter's starting room.
     .{ .x = 6.8, .z = -7.0, .hx = 1.3, .hy = 0.55, .hz = 0.60, .color = wood_color },
-    .{ .x = 10.8, .z = -1.2, .hx = 0.38, .hy = 1.0, .hz = 1.35, .color = locker_color },
     .{ .x = 13.7, .z = 3.6, .hx = 1.25, .hy = 0.55, .hz = 0.55, .color = wood_color },
     .{ .x = 15.2, .z = 7.2, .hx = 0.40, .hy = 1.0, .hz = 1.15, .color = shelf_color },
-    .{ .x = 21.0, .z = 5.1, .hx = 0.45, .hy = 1.05, .hz = 1.15, .color = locker_color },
-    .{ .x = 23.8, .z = 7.6, .hx = 1.0, .hy = 0.60, .hz = 0.65, .color = crate_color },
     .{ .x = 24.2, .z = -5.2, .hx = 0.42, .hy = 1.0, .hz = 1.0, .color = locker_color },
 };
 
@@ -406,15 +453,25 @@ fn buildGeometry(result: *Level) void {
         }
     }
 
-    // Narrow shafts/courtyards visible as black holes in the source plan.
-    result.addBox(solid(-18.0, 0.65, -4.5, 0.55, 0.65, 1.0, void_color));
-    result.addBox(solid(3.55, 0.65, 3.0, 0.45, 0.65, 5.8, void_color));
-    result.addBox(solid(17.8, 0.65, -5.1, 2.8, 0.65, 1.0, void_color));
-    result.addBox(solid(19.8, 0.65, 1.5, 1.2, 0.65, 0.75, void_color));
+    // This apparent north-hall gap faces an exterior boundary less than a
+    // metre behind it, so it is a wall recess rather than a usable doorway.
+    result.addBox(wallX(-1.4, 0, -9.2, 0.8, wall_color));
+    // The crossing gaps around the north-east stair landing form another
+    // sub-metre wall channel, not a traversable room entrance.
+    result.addBox(wallZ(22.0, 0, -11.6, 0.8, wall_color));
+    result.addBox(wallZ(16.8, 0, -7.3, 0.8, wall_color));
+    result.addBox(wallZ(16.0, 0, -14.9, 0.8, wall_color));
+
+    // Enclose the hunter's starting room with one conventional doorway rather
+    // than relying on a broad, ambiguous wall opening.
+    result.addBox(wallZ(22.6, 0, -3.225, 0.275, wall_color));
+    result.addBox(wallZ(22.6, 0, -0.275, 0.275, wall_color));
 
     for (props) |item| {
         result.addBox(solid(item.x, item.hy, item.z, item.hx, item.hy, item.hz, item.color));
     }
+
+    for (door_defs) |door| addDoorFrame(result, door);
 
     // Main-hall save enclosure: a shallow U with one player-sized opening.
     result.addBox(wallX(-1.0, 0, 2.0, 2.7, wall_color));
@@ -482,6 +539,33 @@ fn addTypewriter(result: *Level, x: f32, z: f32) void {
     result.save_fixture_count += 1;
     result.addBox(solid(x, 0.55, z, 0.8, 0.55, 0.62, oxocarbon_pink));
     result.addBox(visual(x, 1.16, z, 0.28, 0.06, 0.18, typewriter_color));
+}
+
+fn addDoorFrame(result: *Level, door: DoorDef) void {
+    const clear_half = door.clear_half_width;
+    const wall_top = wall_half_height * 2.0;
+    const header_half_height = (wall_top - door_height) * 0.5;
+    const header_y = door_height + header_half_height;
+    const filler_half = @max(0, (door.gap_half_width - clear_half) * 0.5);
+    if (door.axis == .x) {
+        var header = solid(door.position.x, header_y, door.position.z, clear_half, header_half_height, wall_half_width, wall_color);
+        header.nav_block = false;
+        result.addBox(header);
+        if (filler_half > 0.001) {
+            const offset = clear_half + filler_half;
+            result.addBox(wallX(door.position.x - offset, 0, door.position.z, filler_half, wall_color));
+            result.addBox(wallX(door.position.x + offset, 0, door.position.z, filler_half, wall_color));
+        }
+    } else {
+        var header = solid(door.position.x, header_y, door.position.z, wall_half_width, header_half_height, clear_half, wall_color);
+        header.nav_block = false;
+        result.addBox(header);
+        if (filler_half > 0.001) {
+            const offset = clear_half + filler_half;
+            result.addBox(wallZ(door.position.x, 0, door.position.z - offset, filler_half, wall_color));
+            result.addBox(wallZ(door.position.x, 0, door.position.z + offset, filler_half, wall_color));
+        }
+    }
 }
 
 fn addRamp(result: *Level, x: f32, z: f32, hx: f32, hz: f32, pitch: f32) void {
@@ -566,11 +650,9 @@ const floor_color = rgba(0.18, 0.21, 0.23, 1);
 const wall_color = rgba(0.43, 0.44, 0.46, 1);
 const roof_color = rgba(0.13, 0.14, 0.15, 1);
 const wood_color = rgba(0.42, 0.37, 0.31, 1);
-const crate_color = rgba(0.55, 0.47, 0.33, 1);
 const shelf_color = rgba(0.33, 0.30, 0.27, 1);
 const locker_color = rgba(0.47, 0.51, 0.53, 1);
 const stair_color = rgba(0.36, 0.38, 0.40, 1);
-const void_color = rgba(0.035, 0.04, 0.045, 1);
 const oxocarbon_pink = rgba(1.0, 0.49, 0.71, 1);
 const typewriter_color = rgba(0.06, 0.06, 0.07, 1);
 

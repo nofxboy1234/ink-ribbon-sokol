@@ -10,6 +10,9 @@ pub const ItemKind = enum {
     empty,
     ammo,
     health,
+    key_purple,
+    key_pink,
+    key_cyan,
 };
 
 pub const Item = struct {
@@ -79,6 +82,22 @@ pub const State = struct {
         if (self.cells[cell].amount == 0) self.cells[cell] = .{};
         return true;
     }
+
+    pub fn has(self: State, kind: ItemKind) bool {
+        for (self.cells) |item| if (item.kind == kind and item.amount > 0) return true;
+        return false;
+    }
+
+    pub fn consumeOne(self: *State, kind: ItemKind) bool {
+        if (kind == .empty) return false;
+        for (&self.cells) |*item| {
+            if (item.kind != kind or item.amount == 0) continue;
+            item.amount -= 1;
+            if (item.amount == 0) item.* = .{};
+            return true;
+        }
+        return false;
+    }
 };
 
 test "items can move into empty cells and swap with occupied cells" {
@@ -109,4 +128,14 @@ test "health items heal once and are not wasted at full health" {
     try std.testing.expect(state.useHealth(1, &health, 100, 35));
     try std.testing.expectEqual(@as(f32, 87), health);
     try std.testing.expect(!state.cells[1].occupied());
+}
+
+test "key items can be found and consumed" {
+    var state: State = .{};
+    _ = state.add(.{ .kind = .key_purple, .amount = 1 });
+    try std.testing.expect(state.has(.key_purple));
+    try std.testing.expect(!state.has(.key_cyan));
+    try std.testing.expect(state.consumeOne(.key_purple));
+    try std.testing.expect(!state.has(.key_purple));
+    try std.testing.expect(!state.consumeOne(.key_purple));
 }

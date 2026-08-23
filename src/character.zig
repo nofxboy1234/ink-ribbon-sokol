@@ -74,9 +74,12 @@ const HudNotice = enum {
     hunter_hostile,
     ammo_found,
     health_found,
+    key_found,
     inventory_full,
     healed,
     full_health,
+    door_locked,
+    door_unlocked,
 };
 
 // Top-down map view tuning.
@@ -114,6 +117,11 @@ const pickup_defs = [_]PickupDef{
     .{ .position = .{ .x = 0.0, .y = 0.18, .z = -7.0 }, .item = .{ .kind = .ammo, .amount = 30 }, .name = "Handgun Ammo" },
     .{ .position = .{ .x = 2.0, .y = 0.18, .z = -7.0 }, .item = .{ .kind = .health, .amount = 1 }, .name = "First Aid Spray" },
     .{ .position = .{ .x = 8.2, .y = 0.18, .z = -2.0 }, .item = .{ .kind = .ammo, .amount = 36 }, .name = "Handgun Ammo" },
+    // Keys are appended so existing save-file pickup bits remain stable. Each
+    // small cube rests on a retained desk in a different part of the station.
+    .{ .position = .{ .x = -4.5, .y = 1.18, .z = 8.0 }, .item = .{ .kind = .key_purple, .amount = 1 }, .name = "Purple Key" },
+    .{ .position = .{ .x = -9.0, .y = 1.28, .z = -7.7 }, .item = .{ .kind = .key_pink, .amount = 1 }, .name = "Pink Key" },
+    .{ .position = .{ .x = 5.65, .y = 1.28, .z = -7.0 }, .item = .{ .kind = .key_cyan, .amount = 1 }, .name = "Cyan Key" },
 };
 
 const BreakableDef = struct {
@@ -133,7 +141,10 @@ const breakable_defs = [_]BreakableDef{
     .{ .position = .{ .x = -10.7, .y = 0.42, .z = -8.2 } },
 };
 const world_item_count = pickup_defs.len + breakable_defs.len;
+const world_render_count = world_item_count + level.door_defs.len;
 const interaction_radius: f32 = 2.0;
+const door_interaction_radius: f32 = 1.0;
+const door_open_speed: f32 = 2.8;
 const debris_capacity = breakable_defs.len * 8;
 const debris_seconds: f32 = 4.0;
 const action_duration: f32 = 0.68;
@@ -145,7 +156,7 @@ const breakable_half_extent: f32 = 0.42;
 const audio_buffer_frames = 1024;
 const audio_channel_count = 2;
 
-const InteractionKind = enum { pickup, breakable, box_drop };
+const InteractionKind = enum { pickup, breakable, box_drop, door };
 const InteractionTarget = struct {
     kind: InteractionKind,
     index: usize,
@@ -372,6 +383,7 @@ const RenderState = struct {
     impact_instances: sg.Buffer = .{},
     pickup_instances: sg.Buffer = .{},
     map_item_instances: sg.Buffer = .{},
+    window_instances: sg.Buffer = .{},
     debris_instances: sg.Buffer = .{},
     route_instances: sg.Buffer = .{},
     capsule_instances: sg.Buffer = .{},
@@ -380,6 +392,7 @@ const RenderState = struct {
     display_pipeline: sg.Pipeline = .{},
     actor_display_pipeline: sg.Pipeline = .{},
     route_pipeline: sg.Pipeline = .{},
+    window_pipeline: sg.Pipeline = .{},
     map_actor_pipeline: sg.Pipeline = .{},
     debug_pipeline: sg.Pipeline = .{},
     reticle_pipeline: sg.Pipeline = .{},
@@ -399,12 +412,14 @@ const RenderState = struct {
     impact_instance_count: usize = 0,
     pickup_instance_count: usize = 0,
     map_item_instance_count: usize = 0,
+    window_instance_count: usize = 0,
     debris_instance_count: usize = 0,
 };
 
 const GameState = struct {
     world: b3.b3WorldId = b3.b3_nullWorldId,
     breakable_bodies: [breakable_defs.len]b3.b3BodyId = @splat(b3.b3_nullBodyId),
+    door_bodies: [level.door_defs.len]b3.b3BodyId = @splat(b3.b3_nullBodyId),
     clock: Clock = .{},
     input: InputState = .{},
     debug: DebugState = .{},
@@ -418,6 +433,10 @@ const GameState = struct {
     box_drops_present: u32 = 0,
     box_drops_health: u32 = 0,
     collected_box_drops: u32 = 0,
+    unlocked_doors: u32 = 0,
+    opened_doors: u32 = 0,
+    door_swing_positive: u32 = 0,
+    door_open_amount: [level.door_defs.len]f32 = @splat(0),
     interaction_target: ?InteractionTarget = null,
     kick: KickState = .{},
     pickup_action: PickupAction = .{},
@@ -535,6 +554,7 @@ fn frame() callconv(.c) void {
 
     // Menus freeze the round exactly like map mode does.
     const gameplay_active = !game.map.active and game.menu.kind == .none and !game.inventory_ui.active;
+    if (gameplay_active) updateDoors(frame_time);
 
     const render_position = blk: {
         var ticks: usize = 0;
@@ -592,6 +612,7 @@ fn frame() callconv(.c) void {
                             game.character.position,
                             @floatCast(fixed_dt),
                         );
+                        openDoorInHunterPath();
                         updateHunterFootsteps();
                         if (hunterContacted()) punchPlayer();
                     }
@@ -858,6 +879,26 @@ fn updateHunterFootsteps() void {
     game.audio.playVolume(.hunter_step, volume);
 }
 
+fn openDoorInHunterPath() void {
+    var nearest: ?usize = null;
+    var nearest_distance: f32 = 1.65;
+    for (level.door_defs, 0..) |door, index| {
+        const bit = @as(u32, 1) << @intCast(index);
+        if (game.opened_doors & bit != 0 or !doorIsUnlocked(door, index)) continue;
+        const dx = door.position.x - game.hunter.position.x;
+        const dz = door.position.z - game.hunter.position.z;
+        const distance = std.math.hypot(dx, dz);
+        if (distance <= nearest_distance) {
+            nearest = index;
+            nearest_distance = distance;
+        }
+    }
+    // The navmesh decides which doorway the route crosses. Activation itself
+    // uses proximity because the next conservative grid waypoint can sit just
+    // before the leaf and briefly point away from it.
+    if (nearest) |index| beginDoorOpen(index, game.hunter.position);
+}
+
 fn fireShot(focus: f32) void {
     game.audio.play(.gunshot);
     const forward = game.camera.forward;
@@ -978,6 +1019,8 @@ fn initPhysics() void {
     for (level.current.boxSlice()) |box| if (box.collidable) addStaticBox(box);
     game.breakable_bodies = @splat(b3.b3_nullBodyId);
     for (breakable_defs, 0..) |box, index| game.breakable_bodies[index] = addBreakableBody(box);
+    game.door_bodies = @splat(b3.b3_nullBodyId);
+    for (level.door_defs, 0..) |door, index| game.door_bodies[index] = addDoorBody(door);
 }
 
 fn addStaticBox(box: level.Box) void {
@@ -1014,6 +1057,21 @@ fn addBreakableBody(box: BreakableDef) b3.b3BodyId {
     return body;
 }
 
+fn addDoorBody(door: level.DoorDef) b3.b3BodyId {
+    var body_def = b3.b3DefaultBodyDef();
+    body_def.position = .{ .x = door.position.x, .y = level.door_height * 0.5, .z = door.position.z };
+    const yaw: f32 = if (door.axis == .x) 0 else std.math.pi * 0.5;
+    const half_yaw = yaw * 0.5;
+    body_def.rotation = .{ .v = .{ .y = @sin(half_yaw) }, .s = @cos(half_yaw) };
+    const body = b3.b3CreateBody(game.world, &body_def);
+    var shape_def = b3.b3DefaultShapeDef();
+    shape_def.filter.categoryBits = controller.level_category;
+    shape_def.filter.maskBits = controller.player_query_category | camera.camera_query_category | controller.hunter_query_category;
+    var hull = b3.b3MakeBoxHull(level.door_width * 0.5, level.door_height * 0.5, level.door_half_thickness);
+    _ = b3.b3CreateHullShape(body, &shape_def, &hull.base);
+    return body;
+}
+
 fn setBreakableCollision(index: usize, enabled: bool) void {
     const body = game.breakable_bodies[index];
     if (!b3.b3Body_IsValid(body) or b3.b3Body_IsEnabled(body) == enabled) return;
@@ -1025,6 +1083,46 @@ fn syncBreakableCollision() void {
         const bit = @as(u32, 1) << @intCast(index);
         setBreakableCollision(index, game.broken_boxes & bit == 0);
     }
+}
+
+fn setDoorCollision(index: usize, enabled: bool) void {
+    const body = game.door_bodies[index];
+    if (!b3.b3Body_IsValid(body) or b3.b3Body_IsEnabled(body) == enabled) return;
+    if (enabled) b3.b3Body_Enable(body) else b3.b3Body_Disable(body);
+}
+
+fn restoreDoorState() void {
+    for (level.door_defs, 0..) |_, index| {
+        const bit = @as(u32, 1) << @intCast(index);
+        const open = game.opened_doors & bit != 0;
+        game.door_open_amount[index] = if (open) 1 else 0;
+        setDoorCollision(index, !open);
+    }
+}
+
+fn updateDoors(dt: f32) void {
+    for (level.door_defs, 0..) |door, index| {
+        const bit = @as(u32, 1) << @intCast(index);
+        if (game.opened_doors & bit != 0) {
+            game.door_open_amount[index] = @min(1, game.door_open_amount[index] + door_open_speed * dt);
+        } else if (game.door_open_amount[index] > 0) {
+            game.door_open_amount[index] = @max(0, game.door_open_amount[index] - door_open_speed * dt);
+            if (game.door_open_amount[index] == 0 and !doorwayOccupied(door)) setDoorCollision(index, true);
+        } else if (!doorwayOccupied(door)) {
+            setDoorCollision(index, true);
+        }
+    }
+}
+
+fn doorwayOccupied(door: level.DoorDef) bool {
+    return actorOverlapsDoorway(game.character.position, game.character_config.capsule_radius, door) or
+        actorOverlapsDoorway(game.hunter.position, game.hunter_config.capsule_radius, door);
+}
+
+fn actorOverlapsDoorway(position: b3.b3Pos, radius: f32, door: level.DoorDef) bool {
+    const along = if (door.axis == .x) @abs(position.x - door.position.x) else @abs(position.z - door.position.z);
+    const normal = if (door.axis == .x) @abs(position.z - door.position.z) else @abs(position.x - door.position.x);
+    return along < level.door_width * 0.5 + radius and normal < level.door_half_thickness + radius + 0.08;
 }
 
 fn breakableIndexForBody(body: b3.b3BodyId) ?usize {
@@ -1086,6 +1184,9 @@ fn placePlayerFromSlot(slot: saves.Slot) void {
     game.box_drops_present = slot.box_drops_present;
     game.box_drops_health = slot.box_drops_health;
     game.collected_box_drops = slot.collected_box_drops;
+    game.unlocked_doors = slot.unlocked_doors;
+    game.opened_doors = slot.opened_doors;
+    game.door_swing_positive = slot.door_swing_positive;
     game.condition.reset(game.condition_config, slot.health);
     game.combat_visuals = .{};
     game.player_deformation = .{};
@@ -1096,6 +1197,7 @@ fn placePlayerFromSlot(slot: saves.Slot) void {
     game.player_step_distance = 0;
     game.hunter_step_distance = 0;
     syncBreakableCollision();
+    restoreDoorState();
 }
 
 // Place both actors, then reset the round. The player resumes from the most
@@ -1118,6 +1220,9 @@ fn spawnPlayerAndHunter() void {
         game.box_drops_present = 0;
         game.box_drops_health = 0;
         game.collected_box_drops = 0;
+        game.unlocked_doors = 0;
+        game.opened_doors = 0;
+        game.door_swing_positive = 0;
         game.condition.reset(game.condition_config, game.condition_config.max_health);
     }
     game.player_deformation = .{};
@@ -1136,6 +1241,7 @@ fn spawnPlayerAndHunter() void {
     game.player_step_distance = 0;
     game.hunter_step_distance = 0;
     syncBreakableCollision();
+    restoreDoorState();
 }
 
 // Send the hunter back to his authored spawn room facing the player, with a
@@ -1208,6 +1314,7 @@ fn targetPosition(target: InteractionTarget) Vec3 {
         .pickup => pickup_defs[target.index].position,
         .breakable => breakable_defs[target.index].position,
         .box_drop => boxDropPosition(target.index),
+        .door => level.door_defs[target.index].position,
     };
 }
 
@@ -1216,6 +1323,7 @@ fn targetName(target: InteractionTarget) []const u8 {
         .pickup => pickup_defs[target.index].name,
         .breakable => breakable_defs[target.index].name,
         .box_drop => itemName(boxDropItem(target.index)),
+        .door => doorName(level.door_defs[target.index], target.index),
     };
 }
 
@@ -1224,9 +1332,13 @@ fn targetColor(target: InteractionTarget) Vec4 {
         .pickup, .box_drop => switch ((targetItem(target) orelse inventory.Item{}).kind) {
             .ammo => .{ .x = 0.12, .y = 0.43, .z = 0.98, .w = 1 },
             .health => .{ .x = 0.12, .y = 0.76, .z = 0.30, .w = 1 },
+            .key_purple => draculaPurple(),
+            .key_pink => draculaPink(),
+            .key_cyan => draculaCyan(),
             .empty => .{},
         },
         .breakable => .{ .x = 1.0, .y = 0.48, .z = 0.08, .w = 1 },
+        .door => doorDisplayColor(level.door_defs[target.index], target.index),
     };
 }
 
@@ -1234,6 +1346,7 @@ fn targetDiscoveryBit(target: InteractionTarget) u32 {
     const index = switch (target.kind) {
         .pickup => target.index,
         .breakable, .box_drop => pickup_defs.len + target.index,
+        .door => return 0,
     };
     return @as(u32, 1) << @intCast(index);
 }
@@ -1245,7 +1358,7 @@ fn targetItem(target: InteractionTarget) ?inventory.Item {
             const item = boxDropItem(target.index);
             break :blk if (item.occupied()) item else null;
         },
-        .breakable => null,
+        .breakable, .door => null,
     };
 }
 
@@ -1253,6 +1366,9 @@ fn itemName(item: inventory.Item) []const u8 {
     return switch (item.kind) {
         .ammo => "Handgun Ammo",
         .health => "First Aid Spray",
+        .key_purple => "Purple Key",
+        .key_pink => "Pink Key",
+        .key_cyan => "Cyan Key",
         .empty => "Item",
     };
 }
@@ -1261,7 +1377,59 @@ fn itemColor(item: inventory.Item) Vec4 {
     return switch (item.kind) {
         .ammo => rgb(0.15, 0.48, 1.0),
         .health => rgb(0.18, 0.82, 0.37),
+        .key_purple => draculaPurple(),
+        .key_pink => draculaPink(),
+        .key_cyan => draculaCyan(),
         .empty => .{},
+    };
+}
+
+fn draculaPurple() Vec4 {
+    return rgb(0.741, 0.576, 0.976);
+}
+
+fn draculaPink() Vec4 {
+    return rgb(1.0, 0.475, 0.776);
+}
+
+fn draculaCyan() Vec4 {
+    return rgb(0.545, 0.914, 0.992);
+}
+
+fn doorColor(door: level.DoorDef) Vec4 {
+    return switch (door.lock) {
+        .none => rgb(0.93, 0.94, 0.95),
+        .purple => draculaPurple(),
+        .pink => draculaPink(),
+        .cyan => draculaCyan(),
+    };
+}
+
+fn doorIsUnlocked(door: level.DoorDef, index: usize) bool {
+    if (door.lock == .none) return true;
+    return game.unlocked_doors & (@as(u32, 1) << @intCast(index)) != 0;
+}
+
+fn doorDisplayColor(door: level.DoorDef, index: usize) Vec4 {
+    return if (doorIsUnlocked(door, index)) rgb(0.93, 0.94, 0.95) else doorColor(door);
+}
+
+fn doorName(door: level.DoorDef, index: usize) []const u8 {
+    if (doorIsUnlocked(door, index)) return "Door";
+    return switch (door.lock) {
+        .none => "Door",
+        .purple => "Purple Door",
+        .pink => "Pink Door",
+        .cyan => "Cyan Door",
+    };
+}
+
+fn doorKey(lock: level.DoorLock) ?inventory.ItemKind {
+    return switch (lock) {
+        .none => null,
+        .purple => .key_purple,
+        .pink => .key_pink,
+        .cyan => .key_cyan,
     };
 }
 
@@ -1279,11 +1447,11 @@ fn boxDropItem(index: usize) inventory.Item {
         .{ .kind = .ammo, .amount = box_ammo_amount };
 }
 
-fn interactionScore(position: Vec3) ?f32 {
+fn interactionScore(position: Vec3, radius: f32) ?f32 {
     const dx = position.x - game.character.position.x;
     const dz = position.z - game.character.position.z;
     const distance_squared = dx * dx + dz * dz;
-    if (distance_squared > interaction_radius * interaction_radius) return null;
+    if (distance_squared > radius * radius) return null;
     const distance = @sqrt(distance_squared);
     if (distance < 0.001) return 10;
     const forward_length = @sqrt(game.camera.forward.x * game.camera.forward.x + game.camera.forward.z * game.camera.forward.z);
@@ -1299,7 +1467,7 @@ fn updateInteractionTarget() void {
     for (pickup_defs, 0..) |pickup, index| {
         const bit = @as(u32, 1) << @intCast(index);
         if (game.collected_pickups & bit != 0) continue;
-        const score = interactionScore(pickup.position) orelse continue;
+        const score = interactionScore(pickup.position, interaction_radius) orelse continue;
         if (score > best_score) {
             best = .{ .kind = .pickup, .index = index };
             best_score = score;
@@ -1311,9 +1479,16 @@ fn updateInteractionTarget() void {
         const item = boxDropItem(index);
         if (broken and !item.occupied()) continue;
         const position = if (broken) boxDropPosition(index) else box.position;
-        const score = interactionScore(position) orelse continue;
+        const score = interactionScore(position, interaction_radius) orelse continue;
         if (score > best_score) {
             best = .{ .kind = if (broken) .box_drop else .breakable, .index = index };
+            best_score = score;
+        }
+    }
+    for (level.door_defs, 0..) |door, index| {
+        const score = interactionScore(door.position, door_interaction_radius) orelse continue;
+        if (score > best_score) {
+            best = .{ .kind = .door, .index = index };
             best_score = score;
         }
     }
@@ -1353,7 +1528,51 @@ fn activateInteraction() void {
             game.input = .{};
             game.interaction_target = null;
         },
+        .door => interactDoor(target.index),
     }
+}
+
+fn interactDoor(index: usize) void {
+    const door = level.door_defs[index];
+    const bit = @as(u32, 1) << @intCast(index);
+    if (game.opened_doors & bit != 0) {
+        game.opened_doors &= ~bit;
+        game.character.velocity.x = 0;
+        game.character.velocity.z = 0;
+        game.interaction_target = null;
+        return;
+    }
+    if (game.unlocked_doors & bit == 0) {
+        if (doorKey(door.lock)) |key| {
+            if (!game.inventory.consumeOne(key)) {
+                game.notice = .door_locked;
+                game.notice_timer = notice_seconds;
+                return;
+            }
+            game.unlocked_doors |= bit;
+            game.notice = .door_unlocked;
+            game.notice_timer = notice_seconds;
+        }
+    }
+
+    beginDoorOpen(index, game.character.position);
+    game.character.velocity.x = 0;
+    game.character.velocity.z = 0;
+    game.interaction_target = null;
+}
+
+fn beginDoorOpen(index: usize, opener: b3.b3Pos) void {
+    const door = level.door_defs[index];
+    const bit = @as(u32, 1) << @intCast(index);
+    if (game.opened_doors & bit != 0) return;
+    const opener_side = if (door.axis == .x)
+        opener.z - door.position.z
+    else
+        opener.x - door.position.x;
+    if (opener_side >= 0) game.door_swing_positive |= bit else game.door_swing_positive &= ~bit;
+    game.opened_doors |= bit;
+    setDoorCollision(index, false);
+    game.audio.play(.door_open);
 }
 
 fn updateActionsAndDebris(dt: f32) void {
@@ -1411,7 +1630,7 @@ fn collectInteractionItem(target: InteractionTarget) void {
     switch (target.kind) {
         .pickup => if (game.collected_pickups & bit != 0) return,
         .box_drop => if (game.collected_box_drops & bit != 0) return,
-        .breakable => return,
+        .breakable, .door => return,
     }
     const item = targetItem(target) orelse return;
     if (game.inventory.add(item) == null) {
@@ -1422,13 +1641,15 @@ fn collectInteractionItem(target: InteractionTarget) void {
     switch (target.kind) {
         .pickup => game.collected_pickups |= bit,
         .box_drop => game.collected_box_drops |= bit,
-        .breakable => unreachable,
+        .breakable, .door => unreachable,
     }
     if (item.kind == .ammo) {
         game.combat.reserve +|= item.amount;
         game.notice = .ammo_found;
-    } else {
+    } else if (item.kind == .health) {
         game.notice = .health_found;
+    } else {
+        game.notice = .key_found;
     }
     game.audio.play(.pickup);
     game.notice_timer = notice_seconds;
@@ -1511,6 +1732,9 @@ fn respawnAfterCatch() void {
         game.box_drops_present = 0;
         game.box_drops_health = 0;
         game.collected_box_drops = 0;
+        game.unlocked_doors = 0;
+        game.opened_doors = 0;
+        game.door_swing_positive = 0;
         game.condition.reset(game.condition_config, game.condition_config.max_health);
     }
 
@@ -1527,6 +1751,7 @@ fn respawnAfterCatch() void {
     game.player_step_distance = 0;
     game.hunter_step_distance = 0;
     syncBreakableCollision();
+    restoreDoorState();
 }
 
 // True while the character stands within the interaction area of a typewriter.
@@ -1664,7 +1889,7 @@ fn inventoryClick(x: f32, y: f32) void {
     }
     switch (game.inventory.cells[cell].kind) {
         .empty => {},
-        .ammo => game.inventory_ui.moving_cell = cell,
+        .ammo, .key_purple, .key_pink, .key_cyan => game.inventory_ui.moving_cell = cell,
         .health => game.inventory_ui.popup_cell = cell,
     }
 }
@@ -1711,6 +1936,9 @@ fn confirmMenu() void {
                 .box_drops_present = game.box_drops_present,
                 .box_drops_health = game.box_drops_health,
                 .collected_box_drops = game.collected_box_drops,
+                .unlocked_doors = game.unlocked_doors,
+                .opened_doors = game.opened_doors,
+                .door_swing_positive = game.door_swing_positive,
                 .timestamp = std.Io.Timestamp.now(app_io.io(), .real).toSeconds(),
             };
             if (saves.writeToCwd(app_io.io())) |_| {
@@ -1851,6 +2079,20 @@ fn uploadLevelInstances() void {
     game.render.roof_instance_count = roof_count;
 }
 
+fn uploadWindowInstances() void {
+    var instances: [level.window_defs.len]Instance = undefined;
+    for (level.window_defs, 0..) |window, index| {
+        instances[index] = makeInstance(
+            window.center,
+            window.half_extents,
+            0,
+            .{ .x = 0.36, .y = 0.76, .z = 0.90, .w = 0.38 },
+        );
+    }
+    if (instances.len > 0) sg.updateBuffer(game.render.window_instances, sg.asRange(&instances));
+    game.render.window_instance_count = instances.len;
+}
+
 fn initRenderer() void {
     var vertices: [sshape.max_vertex_size * 4096]u8 = undefined;
     var indices: [4096]u16 = undefined;
@@ -1921,15 +2163,21 @@ fn initRenderer() void {
         .label = "character-combat-impact-instances",
     });
     game.render.pickup_instances = sg.makeBuffer(.{
-        .size = world_item_count * @sizeOf(Instance),
+        .size = world_render_count * @sizeOf(Instance),
         .usage = .{ .stream_update = true },
         .label = "character-pickup-instances",
     });
     game.render.map_item_instances = sg.makeBuffer(.{
-        .size = world_item_count * @sizeOf(Instance),
+        .size = world_render_count * @sizeOf(Instance),
         .usage = .{ .stream_update = true },
         .label = "character-map-item-instances",
     });
+    game.render.window_instances = sg.makeBuffer(.{
+        .size = level.window_defs.len * @sizeOf(Instance),
+        .usage = .{ .stream_update = true },
+        .label = "character-window-instances",
+    });
+    uploadWindowInstances();
     game.render.debris_instances = sg.makeBuffer(.{
         .size = debris_capacity * @sizeOf(Instance),
         .usage = .{ .stream_update = true },
@@ -2009,6 +2257,15 @@ fn initRenderer() void {
         .index_type = .UINT16,
         .cull_mode = .BACK,
         .label = "character-map-route-pipeline",
+    });
+    game.render.window_pipeline = sg.makePipeline(.{
+        .shader = route_shader,
+        .layout = route_layout,
+        .depth = .{ .write_enabled = false, .compare = .LESS_EQUAL },
+        .colors = blendingTargets(),
+        .index_type = .UINT16,
+        .cull_mode = .NONE,
+        .label = "character-window-pipeline",
     });
     game.render.map_actor_pipeline = sg.makePipeline(.{
         .shader = route_shader,
@@ -2289,6 +2546,12 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         drawInstances(game.render.character_instance, game.render.box_range, 0, 1, false);
         drawInstances(game.render.hunter_instance, game.render.box_range, 0, 1, false);
     } else {
+        if (game.render.window_instance_count > 0) {
+            const window_params: shd.RouteVsParams = .{ .view_projection = game.camera.view_projection };
+            sg.applyPipeline(game.render.window_pipeline);
+            sg.applyUniforms(shd.UB_route_vs_params, sg.asRange(&window_params));
+            drawInstances(game.render.window_instances, game.render.box_range, 0, game.render.window_instance_count, false);
+        }
         sg.applyPipeline(game.render.actor_display_pipeline);
         sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
         var actor_vs_params: shd.DeformedDisplayVsParams = .{
@@ -2340,7 +2603,7 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
 }
 
 fn updatePickupInstances() void {
-    var instances: [world_item_count]Instance = undefined;
+    var instances: [world_render_count]Instance = undefined;
     var count: usize = 0;
     for (pickup_defs, 0..) |pickup, index| {
         const bit = @as(u32, 1) << @intCast(index);
@@ -2371,10 +2634,14 @@ fn updatePickupInstances() void {
         }
         count += 1;
     }
+    for (level.door_defs, 0..) |door, index| {
+        instances[count] = makeDoorInstance(door, index);
+        count += 1;
+    }
     if (count > 0) sg.updateBuffer(game.render.pickup_instances, sg.asRange(instances[0..count]));
     game.render.pickup_instance_count = count;
 
-    var map_instances: [world_item_count]Instance = undefined;
+    var map_instances: [world_render_count]Instance = undefined;
     var map_count: usize = 0;
     for (pickup_defs, 0..) |pickup, index| {
         const collected_bit = @as(u32, 1) << @intCast(index);
@@ -2405,6 +2672,16 @@ fn updatePickupInstances() void {
         );
         map_count += 1;
     }
+    for (level.door_defs, 0..) |door, index| {
+        const pose = doorPose(door, index, level.floor_height + 0.26);
+        map_instances[map_count] = makeInstance(
+            pose.center,
+            .{ .x = level.door_width * 0.5, .y = 0.055, .z = 0.22 },
+            pose.yaw,
+            doorDisplayColor(door, index),
+        );
+        map_count += 1;
+    }
     if (map_count > 0) sg.updateBuffer(game.render.map_item_instances, sg.asRange(map_instances[0..map_count]));
     game.render.map_item_instance_count = map_count;
 
@@ -2423,6 +2700,37 @@ fn updatePickupInstances() void {
     }
     if (debris_count > 0) sg.updateBuffer(game.render.debris_instances, sg.asRange(debris_instances[0..debris_count]));
     game.render.debris_instance_count = debris_count;
+}
+
+fn makeDoorInstance(door: level.DoorDef, index: usize) Instance {
+    const pose = doorPose(door, index, level.door_height * 0.5);
+    return makeInstance(
+        pose.center,
+        .{ .x = level.door_width * 0.5, .y = level.door_height * 0.5, .z = level.door_half_thickness },
+        pose.yaw,
+        doorDisplayColor(door, index),
+    );
+}
+
+const DoorPose = struct { center: Vec3, yaw: f32 };
+
+fn doorPose(door: level.DoorDef, index: usize, y: f32) DoorPose {
+    const bit = @as(u32, 1) << @intCast(index);
+    const base_yaw: f32 = if (door.axis == .x) 0 else std.math.pi * 0.5;
+    const direction: f32 = if (game.door_swing_positive & bit != 0) 1 else -1;
+    const yaw = base_yaw + direction * std.math.pi * 0.5 * game.door_open_amount[index];
+    const half_width = level.door_width * 0.5;
+    const hinge = Vec3{
+        .x = door.position.x - @cos(base_yaw) * half_width,
+        .y = y,
+        .z = door.position.z + @sin(base_yaw) * half_width,
+    };
+    const center = Vec3{
+        .x = hinge.x + @cos(yaw) * half_width,
+        .y = hinge.y,
+        .z = hinge.z - @sin(yaw) * half_width,
+    };
+    return .{ .center = center, .yaw = yaw };
 }
 
 fn updateImpactInstances() void {
@@ -2584,6 +2892,9 @@ fn drawInventoryRects() void {
         const item_color: Vec4 = switch (item.kind) {
             .ammo => .{ .x = 0.12, .y = 0.43, .z = 0.98, .w = 1 },
             .health => .{ .x = 0.12, .y = 0.76, .z = 0.30, .w = 1 },
+            .key_purple => draculaPurple(),
+            .key_pink => draculaPink(),
+            .key_cyan => draculaCyan(),
             .empty => unreachable,
         };
         drawUiRect(
@@ -2717,9 +3028,12 @@ fn drawHud(position: b3.b3Pos) void {
         .hunter_hostile => drawNotice("HUNTER HOSTILE", 255, 85, 85),
         .ammo_found => drawNotice("HANDGUN AMMO ADDED", 70, 135, 255),
         .health_found => drawNotice("HEALING ITEM ADDED", 80, 250, 123),
+        .key_found => drawNotice("KEY ITEM ADDED", 189, 147, 249),
         .inventory_full => drawNotice("INVENTORY FULL", 255, 220, 120),
         .healed => drawNotice("HEALTH RECOVERED", 80, 250, 123),
         .full_health => drawNotice("HEALTH IS ALREADY FULL", 255, 220, 120),
+        .door_locked => drawNotice("DOOR IS LOCKED", 255, 121, 198),
+        .door_unlocked => drawNotice("KEY USED - DOOR UNLOCKED", 139, 233, 253),
         .none => {},
     }
     if (game.inventory_ui.active) {
@@ -2755,6 +3069,7 @@ fn drawInventoryText() void {
         switch (item.kind) {
             .ammo => sdtx.print("{d}", .{item.amount}),
             .health => sdtx.print("HEAL", .{}),
+            .key_purple, .key_pink, .key_cyan => sdtx.print("KEY", .{}),
             .empty => {},
         }
     }
@@ -3135,6 +3450,29 @@ test "authored world items occupy walkable player cells" {
     level.load();
     navmesh.buildLevel();
     for (pickup_defs, 0..) |pickup, index| {
+        const is_key = switch (pickup.item.kind) {
+            .key_purple, .key_pink, .key_cyan => true,
+            else => false,
+        };
+        if (is_key) {
+            const approach_cell = navmesh.player_nav.nearestWalkable(pickup.position.x, pickup.position.z, 4) orelse return error.TestUnexpectedResult;
+            const approach = navmesh.player_nav.worldAt(approach_cell);
+            const dx = approach.x - pickup.position.x;
+            const dz = approach.z - pickup.position.z;
+            if (dx * dx + dz * dz > interaction_radius * interaction_radius) {
+                std.debug.print("unapproachable key pickup {d}: ({d}, {d})\n", .{ index, pickup.position.x, pickup.position.z });
+                return error.TestUnexpectedResult;
+            }
+            const reachable = navmesh.player_nav.isReachable(
+                level.current.player_spawn.x,
+                level.current.player_spawn.z,
+                approach.x,
+                approach.z,
+            );
+            if (!reachable) std.debug.print("unreachable key pickup {d}: ({d}, {d})\n", .{ index, pickup.position.x, pickup.position.z });
+            try std.testing.expect(reachable);
+            continue;
+        }
         const cell = navmesh.player_nav.cellAt(pickup.position.x, pickup.position.z) orelse return error.TestUnexpectedResult;
         if (!navmesh.player_nav.isWalkable(cell)) std.debug.print("blocked pickup {d}: ({d}, {d})\n", .{ index, pickup.position.x, pickup.position.z });
         try std.testing.expect(navmesh.player_nav.isWalkable(cell));
@@ -3168,6 +3506,85 @@ test "breakable boxes can be approached from the reachable navmesh" {
             approach.z,
         ));
     }
+}
+
+test "every authored door has walkable clearance on both sides" {
+    level.load();
+    const approach_distance: f32 = 0.8;
+    const clearance_radius: f32 = 0.30;
+    for (level.door_defs, 0..) |door, index| {
+        for ([_]f32{ -1, 1 }) |side| {
+            const x = door.position.x + if (door.axis == .z) side * approach_distance else 0;
+            const z = door.position.z + if (door.axis == .x) side * approach_distance else 0;
+            var blocked = false;
+            for (level.current.boxSlice()) |box| {
+                if (!box.collidable or !box.nav_block or box.is_roof or box.hunter_block) continue;
+                if (box.center.y + box.half_extents.y <= 0.05) continue;
+                const dx = @max(@abs(x - box.center.x) - box.half_extents.x, 0);
+                const dz = @max(@abs(z - box.center.z) - box.half_extents.z, 0);
+                if (dx * dx + dz * dz < clearance_radius * clearance_radius) {
+                    std.debug.print("  blocked by box center ({d}, {d}) half ({d}, {d})\n", .{ box.center.x, box.center.z, box.half_extents.x, box.half_extents.z });
+                    blocked = true;
+                    break;
+                }
+            }
+            if (blocked) {
+                std.debug.print("door {d} opens toward blocked side at ({d}, {d})\n", .{ index, x, z });
+            }
+            try std.testing.expect(!blocked);
+        }
+    }
+}
+
+test "hunter starting room has an unlocked path door in opening range" {
+    level.load();
+    var found = false;
+    for (level.door_defs) |door| {
+        const dx = door.position.x - level.current.hunter_spawn.x;
+        const dz = door.position.z - level.current.hunter_spawn.z;
+        if (door.lock == .none and std.math.hypot(dx, dz) <= 1.65) found = true;
+    }
+    try std.testing.expect(found);
+}
+
+test "hunter opens and crosses its starting room door" {
+    level.load();
+    navmesh.buildLevel();
+    game = .{};
+    initPhysics();
+    defer {
+        b3.b3DestroyWorld(game.world);
+        game = .{};
+    }
+
+    const spawn = b3.b3Pos{ .x = level.current.hunter_spawn.x, .y = hunter_spawn_y, .z = level.current.hunter_spawn.z };
+    const goal = b3.b3Pos{ .x = level.current.player_spawn.x, .y = player_spawn_y, .z = level.current.player_spawn.z };
+    game.hunter = hunter.State.init(spawn);
+    game.hunter.acquired = true;
+    game.hunter.last_known = goal;
+    game.hunter.target = goal;
+    game.character.position = goal;
+    game.hunter.previous_player_position = goal;
+
+    var initial_path: [navmesh.level_cols * navmesh.level_rows]b3.b3Pos = undefined;
+    const initial_path_len = navmesh.level_nav.findPath(spawn.x, spawn.z, goal.x, goal.z, initial_path[0..]);
+    try std.testing.expect(initial_path_len > 0);
+
+    for (0..360) |_| {
+        hunter.update(
+            game.hunter_config,
+            &game.hunter,
+            &game.mover_scratch,
+            game.world,
+            goal,
+            1.0 / 60.0,
+        );
+        openDoorInHunterPath();
+        updateDoors(1.0 / 60.0);
+    }
+    const start_room_door = level.door_defs.len - 1;
+    try std.testing.expect(game.opened_doors & (@as(u32, 1) << @intCast(start_room_door)) != 0);
+    try std.testing.expect(game.hunter.position.x < 22.3);
 }
 
 test "hunter AI tests" {

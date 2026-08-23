@@ -21,6 +21,7 @@ pub const Event = enum {
     reload_complete,
     punch,
     body_fall,
+    door_open,
 };
 
 const voice_capacity = 32;
@@ -116,6 +117,7 @@ fn duration(event: Event) f32 {
         .reload_complete => 0.28,
         .punch => 0.30,
         .body_fall => 0.34,
+        .door_open => 0.62,
     };
 }
 
@@ -185,6 +187,14 @@ fn voiceSample(voice: Voice, sample_rate: f32) f32 {
             const thud = @sin(tau * 46.0 * time) * tail * tail * 0.34;
             const scrape = noise * tail * tail * 0.16;
             break :blk (thud + scrape) * fastAttack(progress, 0.04);
+        },
+        .door_open => blk: {
+            // A short latch click followed by a pitched wooden hinge creak.
+            const latch = pulse(time, 0.025, 0.022) * (noise * 0.22 + @sin(tau * 720.0 * time) * 0.12);
+            const creak_envelope = @sin(std.math.pi * progress);
+            const creak = (@sin(tau * (118.0 - 46.0 * progress) * time) * 0.12 + noise * 0.075) * creak_envelope;
+            const stop = pulse(time, 0.54, 0.055) * @sin(tau * 62.0 * time) * 0.16;
+            break :blk latch + creak + stop;
         },
     };
 }
