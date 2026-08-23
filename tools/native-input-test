@@ -20,7 +20,7 @@ STATE_FILE = Path("/tmp/ink-ribbon-native-input.json")
 LOG_FILE = Path("/tmp/ink-ribbon-native-input.log")
 WINDOW_TITLE = "Character Mover"
 ALLOWED_KEYS = {
-    "w", "a", "s", "d", "e", "f", "m", "p", "shift", "f1", "escape",
+    "w", "a", "s", "d", "e", "f", "m", "p", "q", "r", "shift", "f1", "escape",
     "left", "right", "up", "down",
 }
 MAX_HOLD_SECONDS = 30.0
@@ -132,6 +132,10 @@ class XTest:
         self.xtst.XTestFakeRelativeMotionEvent(self.display, dx, dy, 0)
         self.flush()
 
+    def set_left_mouse(self, down: bool) -> None:
+        self.xtst.XTestFakeButtonEvent(self.display, 1, int(down), 0)
+        self.flush()
+
 
 def parse_duration(text: str) -> float:
     try:
@@ -205,6 +209,61 @@ def hold(key: str, duration: float, focus: bool = True) -> None:
             time.sleep(duration)
         finally:
             driver.set_key(key, False)
+        time.sleep(0.15)
+    finally:
+        driver.close()
+
+
+def hold_left_mouse(duration: float) -> None:
+    owned_pid()
+    driver = XTest()
+    try:
+        driver.focus_game()
+        driver.set_left_mouse(True)
+        try:
+            time.sleep(duration)
+        finally:
+            driver.set_left_mouse(False)
+        time.sleep(0.15)
+    finally:
+        driver.close()
+
+
+def aim_and_fire(duration: float) -> None:
+    owned_pid()
+    driver = XTest()
+    try:
+        driver.focus_game()
+        driver.set_key("q", True)
+        try:
+            # Let the reference-style focus animation settle before firing.
+            time.sleep(1.1)
+            driver.set_left_mouse(True)
+            try:
+                time.sleep(duration)
+            finally:
+                driver.set_left_mouse(False)
+        finally:
+            driver.set_key("q", False)
+        time.sleep(0.15)
+    finally:
+        driver.close()
+
+
+def aim_and_move(key: str, duration: float) -> None:
+    if key not in {"w", "a", "s", "d"}:
+        fail("aim-move only accepts w, a, s, or d")
+    owned_pid()
+    driver = XTest()
+    try:
+        driver.focus_game()
+        driver.set_key("q", True)
+        driver.set_key(key, True)
+        try:
+            time.sleep(duration)
+        finally:
+            driver.set_key(key, False)
+            driver.set_key("q", False)
         time.sleep(0.15)
     finally:
         driver.close()
@@ -293,6 +352,9 @@ def usage() -> None:
         "usage:\n"
         "  tools/native-input-test launch\n"
         "  tools/native-input-test hold KEY SECONDS\n"
+        "  tools/native-input-test fire SECONDS\n"
+        "  tools/native-input-test aim-fire SECONDS\n"
+        "  tools/native-input-test aim-move KEY SECONDS\n"
         "  tools/native-input-test look DX DY\n"
         "  tools/native-input-test sequence KEY:SECONDS [...]\n"
         "  tools/native-input-test screenshot PATH\n"
@@ -312,6 +374,12 @@ def main() -> None:
         launch()
     elif command == "hold" and len(args) == 2:
         hold(parse_key(args[0]), parse_duration(args[1]))
+    elif command == "fire" and len(args) == 1:
+        hold_left_mouse(parse_duration(args[0]))
+    elif command == "aim-fire" and len(args) == 1:
+        aim_and_fire(parse_duration(args[0]))
+    elif command == "aim-move" and len(args) == 2:
+        aim_and_move(parse_key(args[0]), parse_duration(args[1]))
     elif command == "look" and len(args) == 2:
         look(parse_look_delta(args[0]), parse_look_delta(args[1]))
     elif command == "sequence":

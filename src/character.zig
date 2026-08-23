@@ -10,6 +10,7 @@ const sokol = @import("sokol");
 const math = @import("math.zig");
 const level = @import("level.zig");
 const controller = @import("character_controller.zig");
+const combat = @import("combat.zig");
 const hunter = @import("hunter.zig");
 const navmesh = @import("navmesh.zig");
 const saves = @import("saves.zig");
@@ -48,6 +49,10 @@ const save_interaction_radius: f32 = 2.0;
 
 // How long a HUD notice (catch / save result) stays on screen.
 const notice_seconds: f32 = 3;
+const impact_capacity = 32;
+const impact_seconds: f32 = 0.35;
+const hunter_hit_flash_seconds: f32 = 0.09;
+const shot_recoil_radians: f32 = 0.008;
 
 // Transient centered HUD messages.
 const HudNotice = enum { none, caught, saved, save_failed, deleted, hunter_friendly, hunter_hostile };
@@ -105,7 +110,14 @@ const InputState = struct {
     left: bool = false,
     right: bool = false,
     run: bool = false,
+    aiming: bool = false,
+    firing: bool = false,
+    reload_queued: bool = false,
     mouse_delta: math.Vec2 = .{},
+
+    fn moving(self: InputState) bool {
+        return self.forward or self.back or self.left or self.right;
+    }
 
     // Turn held keys into a movement intent. x is strafe (right-left),
     // y is forward-back (positive = toward where the camera looks).
@@ -116,13 +128,25 @@ const InputState = struct {
         };
         // Running is armed by Shift but only applies while a direction is held;
         // releasing the direction keys falls back to walking and disarms it.
-        const running = self.run and (move.x != 0 or move.y != 0);
+        const running = self.run and !self.aiming and (move.x != 0 or move.y != 0);
         if (!running) self.run = false;
         return .{
             .move = move,
             .run = running,
+            .aiming = self.aiming,
         };
     }
+};
+
+const Impact = struct {
+    position: Vec3 = .{},
+    timer: f32 = 0,
+};
+
+const CombatVisuals = struct {
+    impacts: [impact_capacity]Impact = @splat(.{}),
+    next_impact: usize = 0,
+    hunter_hit_flash: f32 = 0,
 };
 
 const DebugState = struct {
@@ -178,6 +202,7 @@ const RenderState = struct {
     map_direction_instances: sg.Buffer = .{},
     map_save_instances: sg.Buffer = .{},
     hunter_instance: sg.Buffer = .{},
+    impact_instances: sg.Buffer = .{},
     route_instances: sg.Buffer = .{},
     capsule_instances: sg.Buffer = .{},
     level_instance_count: usize = 0,
@@ -186,6 +211,7 @@ const RenderState = struct {
     route_pipeline: sg.Pipeline = .{},
     map_actor_pipeline: sg.Pipeline = .{},
     debug_pipeline: sg.Pipeline = .{},
+    reticle_pipeline: sg.Pipeline = .{},
     shadow_pipeline: sg.Pipeline = .{},
     shadow_pass: sg.Pass = .{},
     shadow_view: sg.View = .{},
@@ -196,6 +222,7 @@ const RenderState = struct {
     capsule_cylinder_range: sshape.ElementRange = .{},
     capsule_sphere_range: sshape.ElementRange = .{},
     pass_action: sg.PassAction = .{},
+    impact_instance_count: usize = 0,
 };
 
 const GameState = struct {
@@ -209,6 +236,9 @@ const GameState = struct {
     character: controller.State = initialCharacter(),
     hunter_config: hunter.Config = .{},
     hunter: hunter.State = initialHunter(),
+    combat_config: combat.Config = .{},
+    combat: combat.State = .{},
+    combat_visuals: CombatVisuals = .{},
     hunter_friendly: bool = false,
     // Current transient HUD message and its remaining seconds.
     notice: HudNotice = .none,
@@ -293,6 +323,7 @@ fn frame() callconv(.c) void {
         game.notice_timer = @max(0, game.notice_timer - frame_time);
         if (game.notice_timer == 0) game.notice = .none;
     }
+    updateCombatVisuals(frame_time);
 
     // Menus freeze the round exactly like map mode does.
     const gameplay_active = !game.map.active and game.menu.kind == .none;
@@ -312,9 +343,17 @@ fn frame() callconv(.c) void {
                     game.camera.basis,
                     @floatCast(fixed_dt),
                 );
-                updateQuickTurn(@floatCast(fixed_dt));
+                if (!game.input.aiming) updateQuickTurn(@floatCast(fixed_dt));
+                const combat_events = combat.update(game.combat_config, &game.combat, .{
+                    .aiming = game.input.aiming,
+                    .firing = game.input.firing,
+                    .reload_pressed = game.input.reload_queued,
+                    .moving = game.input.moving(),
+                }, @floatCast(fixed_dt));
+                game.input.reload_queued = false;
+                for (combat_events.shot_focus[0..combat_events.shot_count]) |shot_focus| fireShot(shot_focus);
             }
-            if (game.menu.kind == .none and (!game.map.active or !game.map.hunter_paused)) {
+            if (game.menu.kind == .none and (!game.map.active or !game.map.hunter_paused) and !game.combat.hunterKnockedDown()) {
                 hunter.update(
                     game.hunter_config,
                     &game.hunter,
@@ -357,6 +396,7 @@ fn frame() callconv(.c) void {
             &game.camera,
             render_position,
             game.input.mouse_delta,
+            game.input.aiming,
             game.world,
             frame_time,
             sapp.widthf() / @max(sapp.heightf(), 1),
@@ -401,6 +441,16 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     // held and is never toggled off by Shift again.
                     game.input.run = true;
                 },
+                .Q => if (game.menu.kind == .none and !game.map.active) {
+                    game.input.aiming = down;
+                    if (down) {
+                        game.input.run = false;
+                        game.quick_turn.active = false;
+                    }
+                },
+                .R => if (down and !value.key_repeat and game.menu.kind == .none and !game.map.active) {
+                    game.input.reload_queued = true;
+                },
                 .F1 => if (down and !value.key_repeat) {
                     game.debug.draw_physics = !game.debug.draw_physics;
                 },
@@ -414,6 +464,9 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     if (game.map.active) {
                         game.map.hunter_paused = true;
                         rebuildMapRoute();
+                        game.camera.aim_alpha = 0;
+                        game.combat.focus = 0;
+                        game.combat.aiming_last_tick = false;
                     }
                     sapp.lockMouse(!game.map.active);
                     // Drop held keys so the map doesn't immediately pan and
@@ -445,7 +498,7 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 .E => if (down and !value.key_repeat) {
                     // Turn toward the held backward/diagonal direction using
                     // the shortest clockwise or counter-clockwise arc.
-                    if (game.input.back and !game.quick_turn.active) {
+                    if (game.input.back and !game.input.aiming and !game.quick_turn.active) {
                         beginQuickTurn();
                     }
                 },
@@ -453,16 +506,26 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     if (game.menu.kind != .none) {
                         closeMenu();
                     } else {
+                        game.input.aiming = false;
+                        game.input.firing = false;
                         sapp.lockMouse(false);
                     }
                 },
                 else => {},
             }
         },
-        .MOUSE_DOWN => if (game.map.active and value.mouse_button == .LEFT) {
-            selectMapSaveAt(value.mouse_x, value.mouse_y);
-        } else {
+        .MOUSE_DOWN => if (value.mouse_button == .LEFT) {
+            if (game.map.active) {
+                selectMapSaveAt(value.mouse_x, value.mouse_y);
+            } else if (game.menu.kind == .none) {
+                sapp.lockMouse(true);
+                game.input.firing = true;
+            }
+        } else if (!game.map.active and game.menu.kind == .none) {
             sapp.lockMouse(true);
+        },
+        .MOUSE_UP => if (value.mouse_button == .LEFT) {
+            game.input.firing = false;
         },
         .MOUSE_MOVE => if (sapp.mouseLocked()) {
             game.input.mouse_delta.x += value.mouse_dx;
@@ -474,6 +537,72 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
         },
         else => {},
     }
+}
+
+fn updateCombatVisuals(dt: f32) void {
+    game.combat_visuals.hunter_hit_flash = @max(0, game.combat_visuals.hunter_hit_flash - dt);
+    for (&game.combat_visuals.impacts) |*impact| impact.timer = @max(0, impact.timer - dt);
+}
+
+fn fireShot(focus: f32) void {
+    const forward = game.camera.forward;
+    const right = Vec3.normalized(Vec3.cross(forward, .{ .y = 1 }));
+    const up = Vec3.normalized(Vec3.cross(right, forward));
+    const spread = 0.035 + (0.0015 - 0.035) * focus;
+    const spread_x = game.combat.randomSigned() * spread;
+    const spread_y = game.combat.randomSigned() * spread;
+    const direction = Vec3.normalized(Vec3.add(forward, Vec3.add(Vec3.scale(right, spread_x), Vec3.scale(up, spread_y))));
+    const translation = Vec3.scale(direction, game.combat_config.shot_range);
+    const ray_translation = b3.b3Vec3{ .x = translation.x, .y = translation.y, .z = translation.z };
+    const origin = b3.b3Pos{ .x = game.camera.eye.x, .y = game.camera.eye.y, .z = game.camera.eye.z };
+
+    var filter = b3.b3DefaultQueryFilter();
+    filter.maskBits = controller.level_category;
+    const level_hit = b3.b3World_CastRayClosest(game.world, origin, ray_translation, filter);
+    const level_fraction = if (level_hit.hit) level_hit.fraction else 1.0;
+
+    const hunter_local_origin = b3.b3Vec3{
+        .x = origin.x - game.hunter.position.x,
+        .y = origin.y - game.hunter.position.y,
+        .z = origin.z - game.hunter.position.z,
+    };
+    const hunter_capsule = b3.b3Capsule{
+        .center1 = .{ .y = -game.hunter_config.capsule_half_segment },
+        .center2 = .{ .y = game.hunter_config.capsule_half_segment },
+        .radius = game.hunter_config.capsule_radius,
+    };
+    var ray_input: b3.b3RayCastInput = .{
+        .origin = hunter_local_origin,
+        .translation = ray_translation,
+        .maxFraction = level_fraction,
+    };
+    const hunter_hit = b3.b3RayCastCapsule(&hunter_capsule, &ray_input);
+    if (hunter_hit.hit and !game.combat.hunterKnockedDown()) {
+        _ = game.combat.applyHunterHit(game.combat_config, focus);
+        game.combat_visuals.hunter_hit_flash = hunter_hit_flash_seconds;
+    } else if (level_hit.hit) {
+        addImpact(.{ .x = level_hit.point.x, .y = level_hit.point.y, .z = level_hit.point.z }, level_hit.normal);
+    }
+    alertHunterToGunshot();
+    camera.addRecoil(&game.camera, shot_recoil_radians);
+}
+
+fn addImpact(point: Vec3, normal: b3.b3Vec3) void {
+    const index = game.combat_visuals.next_impact;
+    game.combat_visuals.impacts[index] = .{
+        .position = Vec3.add(point, Vec3.scale(.{ .x = normal.x, .y = normal.y, .z = normal.z }, 0.02)),
+        .timer = impact_seconds,
+    };
+    game.combat_visuals.next_impact = (index + 1) % impact_capacity;
+}
+
+fn alertHunterToGunshot() void {
+    if (game.combat.hunterKnockedDown()) return;
+    game.hunter.acquired = false;
+    game.hunter.investigating = true;
+    game.hunter.investigate_timer = game.hunter_config.search_time;
+    game.hunter.last_known = game.character.position;
+    game.hunter.repath_timer = 0;
 }
 
 fn initPhysics() void {
@@ -546,6 +675,8 @@ fn placePlayerFromSlot(slot: saves.Slot) void {
     game.camera = .{};
     game.camera.yaw = slot.yaw;
     game.quick_turn = .{};
+    game.combat = combat.State.init(game.combat_config, slot.magazine, slot.reserve);
+    game.combat_visuals = .{};
 }
 
 // Place both actors, then reset the round. The player resumes from the most
@@ -560,6 +691,7 @@ fn spawnPlayerAndHunter() void {
         game.character.yaw = std.math.pi;
         game.camera = .{};
         game.quick_turn = .{};
+        game.combat = combat.State.init(game.combat_config, game.combat_config.magazine_capacity, game.combat_config.starting_reserve);
     }
     resetHunter(game.character.position);
     game.clock = .{};
@@ -578,11 +710,14 @@ fn resetHunter(player_pos: b3.b3Pos) void {
     game.hunter.yaw = std.math.atan2(player_pos.x - hunter_spawn.x, player_pos.z - hunter_spawn.z);
     game.hunter.target = hunter.randomPatrolTarget(game.hunter_config, game.hunter.position);
     game.hunter.repath_timer = 0;
+    game.combat.hunter_health = game.combat_config.hunter_health;
+    game.combat.knockdown_timer = 0;
+    game.combat_visuals.hunter_hit_flash = 0;
 }
 
 // The hunter catches the player when their capsules touch horizontally.
 fn hunterContacted() bool {
-    if (game.hunter_friendly) return false;
+    if (game.hunter_friendly or game.combat.hunterKnockedDown()) return false;
     const dx = game.hunter.position.x - game.character.position.x;
     const dz = game.hunter.position.z - game.character.position.z;
     const radius = game.hunter_config.contact_radius;
@@ -601,6 +736,7 @@ fn respawnAfterCatch() void {
         game.character.yaw = std.math.pi;
         game.camera = .{};
         game.quick_turn = .{};
+        game.combat = combat.State.init(game.combat_config, game.combat_config.magazine_capacity, game.combat_config.starting_reserve);
     }
 
     resetHunter(game.character.position);
@@ -624,6 +760,9 @@ fn openMenu(kind: MenuKind) void {
     game.menu = .{ .kind = kind, .slot = 0 };
     // Drop held keys so gameplay doesn't resume with the character moving.
     game.input = .{};
+    game.camera.aim_alpha = 0;
+    game.combat.focus = 0;
+    game.combat.aiming_last_tick = false;
 }
 
 fn closeMenu() void {
@@ -663,6 +802,8 @@ fn confirmMenu() void {
                 .y = game.character.position.y,
                 .z = game.character.position.z,
                 .yaw = game.character.yaw,
+                .magazine = game.combat.magazine,
+                .reserve = game.combat.reserve,
                 .timestamp = std.Io.Timestamp.now(app_io.io(), .real).toSeconds(),
             };
             if (saves.writeToCwd(app_io.io())) |_| {
@@ -857,6 +998,11 @@ fn initRenderer() void {
         .usage = .{ .stream_update = true },
         .label = "character-hunter-instance",
     });
+    game.render.impact_instances = sg.makeBuffer(.{
+        .size = impact_capacity * @sizeOf(Instance),
+        .usage = .{ .stream_update = true },
+        .label = "character-combat-impact-instances",
+    });
     game.render.route_instances = sg.makeBuffer(.{
         .size = map_route_capacity * @sizeOf(Instance),
         .usage = .{ .stream_update = true },
@@ -922,6 +1068,13 @@ fn initRenderer() void {
         .index_type = .UINT16,
         .cull_mode = .BACK,
         .label = "character-capsule-debug-pipeline",
+    });
+
+    game.render.reticle_pipeline = sg.makePipeline(.{
+        .shader = sg.makeShader(shd.reticleShaderDesc(sg.queryBackend())),
+        .depth = .{ .write_enabled = false, .compare = .ALWAYS },
+        .colors = blendingTargets(),
+        .label = "character-aim-reticle-pipeline",
     });
 
     // Depth-only 2048x2048 texture seen from the sun. Only depth is written,
@@ -1004,13 +1157,29 @@ fn draw(position: b3.b3Pos) void {
         game.hunter.position
     else
         hunter.interpolatedPosition(game.hunter, game.clock.alpha());
+    const knocked_down = game.combat.hunterKnockedDown();
+    const hunter_center = if (knocked_down)
+        Vec3{ .x = hunter_render.x, .y = hunter_render.y - hunter_half_extents.y + 0.28, .z = hunter_render.z }
+    else
+        Vec3{ .x = hunter_render.x, .y = hunter_render.y, .z = hunter_render.z };
+    const hunter_extents = if (knocked_down)
+        Vec3{ .x = hunter_half_extents.y, .y = 0.28, .z = hunter_half_extents.x }
+    else
+        hunter_half_extents;
+    const hunter_render_color = if (game.combat_visuals.hunter_hit_flash > 0)
+        rgb(1.0, 0.78, 0.24)
+    else if (knocked_down)
+        rgb(0.32, 0.045, 0.05)
+    else
+        hunter_color;
     const hunter_instance = makeInstance(
-        .{ .x = hunter_render.x, .y = hunter_render.y, .z = hunter_render.z },
-        hunter_half_extents,
+        hunter_center,
+        hunter_extents,
         game.hunter.yaw,
-        hunter_color,
+        hunter_render_color,
     );
     sg.updateBuffer(game.render.hunter_instance, sg.asRange(&hunter_instance));
+    updateImpactInstances();
 
     // Pass 1: render everything from the sun's viewpoint, depth-only, to the
     // shadow map. The character draws as a second single-instance call. The
@@ -1074,6 +1243,12 @@ fn draw(position: b3.b3Pos) void {
     if (!game.map.active) {
         drawInstances(game.render.roof_instance, game.render.box_range, 0, game.render.roof_instance_count, true);
     }
+    if (!game.map.active and game.render.impact_instance_count > 0) {
+        const impact_params: shd.RouteVsParams = .{ .view_projection = game.camera.view_projection };
+        sg.applyPipeline(game.render.route_pipeline);
+        sg.applyUniforms(shd.UB_route_vs_params, sg.asRange(&impact_params));
+        drawInstances(game.render.impact_instances, game.render.capsule_sphere_range, 0, game.render.impact_instance_count, false);
+    }
     sg.applyPipeline(game.render.debug_pipeline);
     sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));
     sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
@@ -1081,9 +1256,43 @@ fn draw(position: b3.b3Pos) void {
         drawInstances(game.render.capsule_instances, game.render.capsule_cylinder_range, 0, 1, true);
         drawInstances(game.render.capsule_instances, game.render.capsule_sphere_range, @sizeOf(Instance), 2, true);
     }
+    drawReticle();
     drawHud(position);
     sg.endPass();
     sg.commit();
+}
+
+fn updateImpactInstances() void {
+    var instances: [impact_capacity]Instance = undefined;
+    var count: usize = 0;
+    for (game.combat_visuals.impacts) |impact| {
+        if (impact.timer <= 0) continue;
+        const life = impact.timer / impact_seconds;
+        const radius = 0.004 + 0.008 * life;
+        instances[count] = makeScaledInstance(
+            impact.position,
+            .{ .x = radius, .y = radius, .z = radius },
+            0,
+            rgb(1.0, 0.72, 0.18),
+        );
+        count += 1;
+    }
+    if (count > 0) sg.updateBuffer(game.render.impact_instances, sg.asRange(instances[0..count]));
+    game.render.impact_instance_count = count;
+}
+
+fn drawReticle() void {
+    if (game.map.active or game.menu.kind != .none or game.camera.aim_alpha <= 0.01 or game.combat.reloading()) return;
+    const scale = sapp.heightf() / 1080.0;
+    const gap = (48.0 + (14.0 - 48.0) * game.combat.focus) * scale;
+    const params: shd.ReticleFsParams = .{
+        .resolution = .{ .x = sapp.widthf(), .y = sapp.heightf() },
+        .color = .{ .x = 0.27, .y = 1.0, .z = 0.29, .w = 0.92 * game.camera.aim_alpha },
+        .geometry = .{ .x = gap, .y = 26.0 * scale, .z = 3.0 * scale, .w = 3.0 * scale },
+    };
+    sg.applyPipeline(game.render.reticle_pipeline);
+    sg.applyUniforms(shd.UB_reticle_fs_params, sg.asRange(&params));
+    sg.draw(0, 3, 1);
 }
 
 fn updateCapsuleInstances(position: b3.b3Pos) void {
@@ -1154,6 +1363,20 @@ fn drawHud(position: b3.b3Pos) void {
             sdtx.pos(1.0, 2.2);
             sdtx.color3b(80, 250, 123);
             sdtx.print("HUNTER FRIENDLY (F toggles)", .{});
+        }
+        const ammo_x = @max(1.0, sapp.widthf() / 8.0 - 16.0);
+        const ammo_y = @max(1.0, sapp.heightf() / 8.0 - 2.0);
+        sdtx.pos(ammo_x, ammo_y);
+        if (game.combat.magazine == 0) {
+            sdtx.color3b(255, 76, 76);
+        } else {
+            sdtx.color3b(225, 235, 225);
+        }
+        sdtx.print("AMMO {d:>2} / {d:>3}", .{ game.combat.magazine, game.combat.reserve });
+        if (game.combat.reloading()) {
+            sdtx.pos(ammo_x, ammo_y - 1.2);
+            sdtx.color3b(80, 250, 123);
+            sdtx.print("RELOADING", .{});
         }
     }
     switch (game.notice) {
@@ -1410,4 +1633,8 @@ test "keyboard quick turn chooses shortest backward direction" {
 
 test "hunter AI tests" {
     std.testing.refAllDecls(@import("hunter.zig"));
+}
+
+test "combat tests" {
+    std.testing.refAllDecls(@import("combat.zig"));
 }

@@ -10,8 +10,13 @@ pub const camera_query_category: u64 = 1 << 2;
 
 pub const Config = struct {
     pivot_height: f32 = 1.35,
-    distance: f32 = 3.4,
-    shoulder_offset: f32 = 0.65,
+    hip_distance: f32 = 3.4,
+    aim_distance: f32 = 2.25,
+    hip_shoulder_offset: f32 = 0.65,
+    aim_shoulder_offset: f32 = 0.78,
+    hip_fov_degrees: f32 = 58,
+    aim_fov_degrees: f32 = 50,
+    aim_transition_rate: f32 = 12,
     pitch_min: f32 = -0.65,
     pitch_max: f32 = 0.75,
     sensitivity: f32 = 0.0025,
@@ -28,6 +33,9 @@ pub const State = struct {
     eye: Vec3 = .{},
     view_projection: Mat4 = Mat4.identity(),
     basis: controller.Basis = .{},
+    forward: Vec3 = .{ .z = -1 },
+    aim_alpha: f32 = 0,
+    recoil_pitch: f32 = 0,
     initialized: bool = false,
 };
 
@@ -36,6 +44,7 @@ pub fn update(
     state: *State,
     target: b3.b3Pos,
     mouse_delta: math.Vec2,
+    aiming: bool,
     world: b3.b3WorldId,
     frame_dt: f32,
     aspect: f32,
@@ -47,6 +56,10 @@ pub fn update(
         config.pitch_max,
     );
 
+    const aim_target: f32 = if (aiming) 1.0 else 0.0;
+    state.aim_alpha += (aim_target - state.aim_alpha) * exponentialAlpha(config.aim_transition_rate, frame_dt);
+    state.recoil_pitch *= @exp(-10.0 * frame_dt);
+    if (@abs(state.recoil_pitch) < 0.00001) state.recoil_pitch = 0;
     const target_pivot: Vec3 = .{ .x = target.x, .y = target.y + config.pivot_height, .z = target.z };
     const follow_alpha = exponentialAlpha(config.follow_rate, frame_dt);
     if (!state.initialized) {
@@ -64,15 +77,18 @@ pub fn update(
         .right = .{ .x = right.x, .y = 0, .z = right.z },
     };
 
-    const cos_pitch = @cos(state.pitch);
-    const back: Vec3 = .{
-        .x = -@sin(state.yaw) * cos_pitch,
-        .y = @sin(state.pitch),
-        .z = -@cos(state.yaw) * cos_pitch,
+    const rendered_pitch = std.math.clamp(state.pitch + state.recoil_pitch, config.pitch_min, config.pitch_max);
+    const cos_pitch = @cos(rendered_pitch);
+    state.forward = .{
+        .x = @sin(state.yaw) * cos_pitch,
+        .y = -@sin(rendered_pitch),
+        .z = @cos(state.yaw) * cos_pitch,
     };
+    const distance = lerpScalar(config.hip_distance, config.aim_distance, state.aim_alpha);
+    const shoulder_offset = lerpScalar(config.hip_shoulder_offset, config.aim_shoulder_offset, state.aim_alpha);
     const desired_eye = Vec3.add(
-        Vec3.add(state.pivot, Vec3.scale(right, config.shoulder_offset)),
-        Vec3.scale(back, config.distance),
+        Vec3.add(state.pivot, Vec3.scale(right, shoulder_offset)),
+        Vec3.scale(state.forward, -distance),
     );
     const safe_eye = collideCamera(config, world, state.pivot, desired_eye);
     const rate = if (distanceSquared(state.pivot, safe_eye) < distanceSquared(state.pivot, state.eye))
@@ -84,9 +100,14 @@ pub fn update(
     else
         lerp(state.eye, safe_eye, exponentialAlpha(rate, frame_dt));
 
-    const view = Mat4.lookAtRh(state.eye, state.pivot, .{ .y = 1 });
-    const projection = Mat4.perspectiveFovRh(math.degreesToRadians(58), aspect, 0.08, 100);
+    const view = Mat4.lookAtRh(state.eye, Vec3.add(state.eye, state.forward), .{ .y = 1 });
+    const fov = lerpScalar(config.hip_fov_degrees, config.aim_fov_degrees, state.aim_alpha);
+    const projection = Mat4.perspectiveFovRh(math.degreesToRadians(fov), aspect, 0.08, 100);
     state.view_projection = Mat4.mul(view, projection);
+}
+
+pub fn addRecoil(state: *State, amount: f32) void {
+    state.recoil_pitch = @max(-0.12, state.recoil_pitch - amount);
 }
 
 fn collideCamera(config: Config, world: b3.b3WorldId, pivot: Vec3, desired: Vec3) Vec3 {
@@ -134,6 +155,10 @@ fn lerp(a: Vec3, b: Vec3, alpha: f32) Vec3 {
         .y = a.y + (b.y - a.y) * alpha,
         .z = a.z + (b.z - a.z) * alpha,
     };
+}
+
+fn lerpScalar(a: f32, b: f32, alpha: f32) f32 {
+    return a + (b - a) * alpha;
 }
 
 fn distanceSquared(a: Vec3, b: Vec3) f32 {

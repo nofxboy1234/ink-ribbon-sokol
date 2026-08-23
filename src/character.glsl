@@ -2,6 +2,7 @@
 @ctype mat4 math.Mat4
 @ctype vec3 math.Vec3
 @ctype vec4 math.Vec4
+@ctype vec2 math.Vec2
 
 @block shadow_util
 // 5x5 PCF (percentage-closer filtering): average shadow lookups over a
@@ -187,3 +188,53 @@ void main() {
 @end
 
 @program route route_vs route_fs
+
+@vs reticle_vs
+@glsl_options fixup_clipspace
+out vec2 uv;
+
+void main() {
+    vec2 positions[3] = vec2[3](
+        vec2(-1.0, -1.0),
+        vec2( 3.0, -1.0),
+        vec2(-1.0,  3.0)
+    );
+    vec2 position = positions[gl_VertexIndex];
+    uv = position * 0.5 + 0.5;
+    gl_Position = vec4(position, 0.0, 1.0);
+}
+@end
+
+@fs reticle_fs
+layout(binding = 2) uniform reticle_fs_params {
+    vec2 resolution;
+    vec4 color;
+    vec4 geometry; // inner gap, bar length, thickness, dot radius (pixels)
+};
+
+in vec2 uv;
+out vec4 frag_color;
+
+float box_mask(vec2 point, vec2 half_size) {
+    vec2 delta = abs(point) - half_size;
+    float distance = length(max(delta, 0.0)) + min(max(delta.x, delta.y), 0.0);
+    return 1.0 - smoothstep(-0.5, 1.0, distance);
+}
+
+void main() {
+    vec2 point = (uv - 0.5) * resolution;
+    float gap = geometry.x;
+    float length_px = geometry.y;
+    float thickness = geometry.z;
+    float dot_radius = geometry.w;
+    float horizontal_offset = gap + length_px * 0.5;
+    float vertical_offset = gap + length_px * 0.5;
+    float mask = 1.0 - smoothstep(dot_radius - 0.75, dot_radius + 0.75, length(point));
+    mask = max(mask, box_mask(point - vec2(-horizontal_offset, 0.0), vec2(length_px * 0.5, thickness * 0.5)));
+    mask = max(mask, box_mask(point - vec2( horizontal_offset, 0.0), vec2(length_px * 0.5, thickness * 0.5)));
+    mask = max(mask, box_mask(point - vec2(0.0, -vertical_offset), vec2(thickness * 0.5, length_px * 0.5)));
+    frag_color = vec4(color.rgb, color.a * mask);
+}
+@end
+
+@program reticle reticle_vs reticle_fs

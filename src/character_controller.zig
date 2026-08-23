@@ -11,11 +11,13 @@ pub const Basis = struct {
 pub const Input = struct {
     move: Vec2 = .{},
     run: bool = false,
+    aiming: bool = false,
 };
 
 pub const Config = struct {
     walk_speed: f32 = 3.0,
     run_speed: f32 = 5.0,
+    aim_speed: f32 = 1.8,
     acceleration: f32 = 24.0,
     friction: f32 = 12.0,
     gravity: f32 = 15.0,
@@ -67,7 +69,12 @@ pub fn update(
 
     const move = normalizedInput(input.move);
     const wish = add(scale(basis.forward, move.y), scale(basis.right, move.x));
-    const wish_speed = if (input.run) config.run_speed else config.walk_speed;
+    const wish_speed = if (input.aiming)
+        config.aim_speed
+    else if (input.run)
+        config.run_speed
+    else
+        config.walk_speed;
     const target = scale(wish, wish_speed);
 
     state.velocity.x = approach(state.velocity.x, target.x, horizontalRate(config, move, dt));
@@ -84,12 +91,12 @@ pub fn update(
     // away from the camera (camera-forward) for any input direction, so the
     // camera-relative translation below reads as strafing; while running the
     // body turns toward the camera-relative movement direction instead.
-    if (lengthSquared(wish) > 0.0001) {
-        const target_yaw = if (input.run)
+    if (input.aiming or lengthSquared(wish) > 0.0001) {
+        const target_yaw = if (input.run and !input.aiming)
             std.math.atan2(wish.x, wish.z)
         else
             std.math.atan2(basis.forward.x, basis.forward.z);
-        const rate = if (input.run) config.run_turn_speed else config.turn_speed;
+        const rate = if (input.run and !input.aiming) config.run_turn_speed else config.turn_speed;
         state.yaw = approachAngle(state.yaw, target_yaw, rate * dt);
     }
 

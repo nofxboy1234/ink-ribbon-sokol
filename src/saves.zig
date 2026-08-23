@@ -15,6 +15,8 @@ pub const Slot = struct {
     y: f32 = 0,
     z: f32 = 0,
     yaw: f32 = 0,
+    magazine: u16 = 24,
+    reserve: u16 = 120,
     // Unix epoch seconds when the slot was written, for the slot list UI.
     timestamp: i64 = 0,
 };
@@ -23,7 +25,7 @@ pub var slots: [slot_count]Slot = @splat(.{});
 
 const file_name = "saves.json";
 const file_limit = 1 << 20;
-const current_version: u32 = 2;
+const current_version: u32 = 3;
 
 const FileFormat = struct {
     version: u32 = current_version,
@@ -40,7 +42,7 @@ pub fn loadFromDir(dir: std.Io.Dir, io: std.Io) void {
         .ignore_unknown_fields = true,
     }) catch return;
     defer parsed.deinit();
-    if (parsed.value.version == current_version and parsed.value.slots.len == slot_count) {
+    if ((parsed.value.version == 2 or parsed.value.version == current_version) and parsed.value.slots.len == slot_count) {
         slots = parsed.value.slots;
     }
 }
@@ -73,7 +75,7 @@ test "slots round-trip through disk" {
     const io = std.testing.io;
 
     slots = @splat(.{});
-    slots[2] = .{ .occupied = true, .x = 3.5, .y = 0.9, .z = -7.25, .yaw = 1.5708, .timestamp = 1755892800 };
+    slots[2] = .{ .occupied = true, .x = 3.5, .y = 0.9, .z = -7.25, .yaw = 1.5708, .magazine = 7, .reserve = 61, .timestamp = 1755892800 };
     slots[7] = .{ .occupied = true, .x = -12, .y = 0.9, .z = 15, .yaw = -0.5 };
     try writeToDir(tmp.dir, io);
 
@@ -83,6 +85,8 @@ test "slots round-trip through disk" {
     try std.testing.expectEqual(@as(f32, 3.5), slots[2].x);
     try std.testing.expectEqual(@as(f32, -7.25), slots[2].z);
     try std.testing.expectEqual(@as(f32, 1.5708), slots[2].yaw);
+    try std.testing.expectEqual(@as(u16, 7), slots[2].magazine);
+    try std.testing.expectEqual(@as(u16, 61), slots[2].reserve);
     try std.testing.expectEqual(@as(i64, 1755892800), slots[2].timestamp);
     try std.testing.expect(slots[7].occupied);
     try std.testing.expect(!slots[0].occupied);
@@ -126,4 +130,17 @@ test "old level saves are ignored" {
 
     loadFromDir(tmp.dir, std.testing.io);
     for (slots) |slot| try std.testing.expect(!slot.occupied);
+}
+
+test "version two saves migrate with a full default loadout" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data =
+        \\{"version":2,"slots":[{"occupied":true,"x":1,"y":0.9,"z":2,"yaw":3},{},{},{},{},{},{},{}]}
+    ;
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = file_name, .data = data });
+    loadFromDir(tmp.dir, std.testing.io);
+    try std.testing.expect(slots[0].occupied);
+    try std.testing.expectEqual(@as(u16, 24), slots[0].magazine);
+    try std.testing.expectEqual(@as(u16, 120), slots[0].reserve);
 }
