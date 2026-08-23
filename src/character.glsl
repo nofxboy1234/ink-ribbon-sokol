@@ -35,7 +35,8 @@ ActorVertex deform_actor_vertex(
     vec4 inst_y,
     vec4 inst_z,
     vec4 deformation,
-    vec4 lower_motion
+    vec4 lower_motion,
+    vec4 action_motion
 ) {
     vec3 world_axis_x = vec3(inst_x.x, inst_y.x, inst_z.x);
     vec3 world_axis_y = vec3(inst_x.y, inst_y.y, inst_z.y);
@@ -78,6 +79,13 @@ ActorVertex deform_actor_vertex(
         + twisted_depth * (position.z * scale_z * bulge);
     actor_position.y += foot_roll * position.x * scale_x
         + foot_pitch * position.z * scale_z;
+    // A kick pulls only the lower-right corner forward, creating a simple
+    // foot-like protrusion without adding a skeletal mesh to the block actor.
+    float right_foot = smoothstep(-0.05, 0.5, position.x) * lower_weight;
+    float kick = action_motion.x * right_foot;
+    actor_position += twisted_depth * (kick * scale_z * 1.15)
+        + twisted_side * (kick * scale_x * 0.12);
+    actor_position.y += kick * scale_y * 0.08;
     vec3 foot_up = normalize(tangent
         - twisted_side * foot_roll
         - twisted_depth * foot_pitch);
@@ -130,6 +138,7 @@ layout(binding = 0) uniform deformed_shadow_vs_params {
     mat4 light_view_projection;
     vec4 deformation; // bend x/z, height-progressive twist, squash
     vec4 lower_motion; // foot roll/pitch, lower counter-twist, splay
+    vec4 action_motion; // kick amount in x
 };
 
 layout(location = 0) in vec3 position;
@@ -140,7 +149,7 @@ layout(location = 3) in vec4 inst_z;
 void main() {
     ActorVertex vertex = deform_actor_vertex(
         position, vec3(0.0, 1.0, 0.0), inst_x, inst_y, inst_z,
-        deformation, lower_motion
+        deformation, lower_motion, action_motion
     );
     gl_Position = light_view_projection * vec4(vertex.position, 1.0);
 }
@@ -192,6 +201,7 @@ layout(binding = 0) uniform deformed_display_vs_params {
     mat4 light_view_projection;
     vec4 deformation; // bend x/z, height-progressive twist, squash
     vec4 lower_motion; // foot roll/pitch, lower counter-twist, splay
+    vec4 action_motion; // kick amount in x
 };
 
 layout(location = 0) in vec3 position;
@@ -209,7 +219,7 @@ out vec3 world_normal;
 
 void main() {
     ActorVertex vertex = deform_actor_vertex(
-        position, normal, inst_x, inst_y, inst_z, deformation, lower_motion
+        position, normal, inst_x, inst_y, inst_z, deformation, lower_motion, action_motion
     );
     vec4 wp = vec4(vertex.position, 1.0);
     world_position = vertex.position;
@@ -408,3 +418,30 @@ void main() {
 @end
 
 @program ui_rect reticle_vs ui_rect_fs
+
+@fs hud_circle_fs
+layout(binding = 4) uniform hud_circle_fs_params {
+    vec4 viewport; // resolution xy
+    vec4 geometry; // center xy, radius, line thickness
+    vec4 color;
+    vec4 style; // draw X when x > 0.5
+};
+
+in vec2 uv;
+out vec4 frag_color;
+
+void main() {
+    vec2 pixel = vec2(uv.x * viewport.x, (1.0 - uv.y) * viewport.y);
+    vec2 delta = pixel - geometry.xy;
+    float ring_distance = abs(length(delta) - geometry.z);
+    float ring = 1.0 - smoothstep(geometry.w - 0.75, geometry.w + 0.75, ring_distance);
+    float diagonal_a = abs(delta.x - delta.y) * 0.70710678;
+    float diagonal_b = abs(delta.x + delta.y) * 0.70710678;
+    float cross_bounds = step(max(abs(delta.x), abs(delta.y)), geometry.z * 0.48);
+    float cross = (1.0 - smoothstep(geometry.w - 0.5, geometry.w + 0.5, min(diagonal_a, diagonal_b)))
+        * cross_bounds * step(0.5, style.x);
+    frag_color = vec4(color.rgb, color.a * max(ring, cross));
+}
+@end
+
+@program hud_circle reticle_vs hud_circle_fs

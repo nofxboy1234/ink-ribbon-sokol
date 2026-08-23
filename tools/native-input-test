@@ -11,6 +11,7 @@ import signal
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 
@@ -20,7 +21,7 @@ STATE_FILE = Path("/tmp/ink-ribbon-native-input.json")
 LOG_FILE = Path("/tmp/ink-ribbon-native-input.log")
 WINDOW_TITLE = "Character Mover"
 ALLOWED_KEYS = {
-    "w", "a", "s", "d", "e", "f", "i", "m", "p", "q", "r", "shift", "f1", "escape",
+    "w", "a", "s", "d", "e", "f", "i", "m", "p", "q", "r", "x", "shift", "f1", "escape",
     "left", "right", "up", "down",
 }
 MAX_HOLD_SECONDS = 30.0
@@ -164,7 +165,7 @@ def parse_look_delta(text: str) -> int:
     return value
 
 
-def launch() -> None:
+def launch(fresh: bool = False) -> None:
     try:
         pid = owned_pid()
     except SystemExit:
@@ -176,9 +177,10 @@ def launch() -> None:
     if not BINARY.is_file():
         fail(f"Native build succeeded without producing {BINARY}")
     log = LOG_FILE.open("ab")
+    run_directory = Path(tempfile.mkdtemp(prefix="ink-ribbon-fresh-")) if fresh else ROOT
     process = subprocess.Popen(
         [str(BINARY)],
-        cwd=ROOT,
+        cwd=run_directory,
         stdin=subprocess.DEVNULL,
         stdout=log,
         stderr=subprocess.STDOUT,
@@ -386,6 +388,7 @@ def usage() -> None:
     print(
         "usage:\n"
         "  tools/native-input-test launch\n"
+        "  tools/native-input-test launch-fresh\n"
         "  tools/native-input-test hold KEY SECONDS\n"
         "  tools/native-input-test fire SECONDS\n"
         "  tools/native-input-test aim-fire SECONDS\n"
@@ -409,6 +412,8 @@ def main() -> None:
     command, *args = sys.argv[1:]
     if command == "launch" and not args:
         launch()
+    elif command == "launch-fresh" and not args:
+        launch(fresh=True)
     elif command == "hold" and len(args) == 2:
         hold(parse_key(args[0]), parse_duration(args[1]))
     elif command == "fire" and len(args) == 1:

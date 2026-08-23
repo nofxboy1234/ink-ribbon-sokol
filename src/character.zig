@@ -92,16 +92,54 @@ const map_save_capacity = 2;
 const PickupDef = struct {
     position: Vec3,
     item: inventory.Item,
+    name: []const u8,
 };
 
 // The first two pickups sit in the entrance path so the inventory interaction
 // is discoverable immediately; the third rewards exploring toward the hall.
 const pickup_defs = [_]PickupDef{
-    .{ .position = .{ .x = -1.0, .y = 0.18, .z = 9.2 }, .item = .{ .kind = .ammo, .amount = 30 } },
-    .{ .position = .{ .x = 1.0, .y = 0.18, .z = 8.0 }, .item = .{ .kind = .health, .amount = 1 } },
-    .{ .position = .{ .x = 0.0, .y = 0.18, .z = 6.5 }, .item = .{ .kind = .ammo, .amount = 24 } },
+    .{ .position = .{ .x = -1.0, .y = 0.18, .z = 9.2 }, .item = .{ .kind = .ammo, .amount = 30 }, .name = "Handgun Ammo" },
+    .{ .position = .{ .x = 1.0, .y = 0.18, .z = 8.0 }, .item = .{ .kind = .health, .amount = 1 }, .name = "First Aid Spray" },
+    .{ .position = .{ .x = 0.0, .y = 0.18, .z = 6.5 }, .item = .{ .kind = .ammo, .amount = 24 }, .name = "Handgun Ammo" },
 };
-const pickup_radius: f32 = 0.85;
+
+const BreakableDef = struct {
+    position: Vec3,
+    name: []const u8 = "Wooden Item Box",
+};
+
+const breakable_defs = [_]BreakableDef{
+    .{ .position = .{ .x = -1.55, .y = 0.42, .z = 7.4 } },
+    .{ .position = .{ .x = 1.45, .y = 0.42, .z = 6.3 } },
+    .{ .position = .{ .x = -2.4, .y = 0.42, .z = 3.4 } },
+};
+const world_item_count = pickup_defs.len + breakable_defs.len;
+const interaction_radius: f32 = 2.0;
+const debris_capacity = breakable_defs.len * 8;
+const debris_seconds: f32 = 4.0;
+
+const InteractionKind = enum { pickup, breakable };
+const InteractionTarget = struct {
+    kind: InteractionKind,
+    index: usize,
+};
+
+const KickState = struct {
+    active: bool = false,
+    timer: f32 = 0,
+    target: usize = 0,
+    broke_box: bool = false,
+};
+
+const Debris = struct {
+    active: bool = false,
+    position: Vec3 = .{},
+    velocity: Vec3 = .{},
+    yaw: f32 = 0,
+    pitch: f32 = 0,
+    angular_velocity: f32 = 0,
+    timer: f32 = 0,
+};
 
 const Instance = extern struct {
     // One GPU instance record: 3 transform axes (xyz) + origin (w), then color.
@@ -214,6 +252,7 @@ const MapState = struct {
     route_segment_count: usize = 0,
     route_upload_pending: bool = false,
     route_status: MapRouteStatus = .none,
+    cursor: math.Vec2 = .{},
 };
 
 // Smooth directional quick-turn (RE2R): the character and camera swing toward
@@ -244,6 +283,8 @@ const RenderState = struct {
     hunter_instance: sg.Buffer = .{},
     impact_instances: sg.Buffer = .{},
     pickup_instances: sg.Buffer = .{},
+    map_item_instances: sg.Buffer = .{},
+    debris_instances: sg.Buffer = .{},
     route_instances: sg.Buffer = .{},
     capsule_instances: sg.Buffer = .{},
     level_instance_count: usize = 0,
@@ -255,6 +296,7 @@ const RenderState = struct {
     debug_pipeline: sg.Pipeline = .{},
     reticle_pipeline: sg.Pipeline = .{},
     ui_rect_pipeline: sg.Pipeline = .{},
+    hud_circle_pipeline: sg.Pipeline = .{},
     shadow_pipeline: sg.Pipeline = .{},
     actor_shadow_pipeline: sg.Pipeline = .{},
     shadow_pass: sg.Pass = .{},
@@ -268,6 +310,8 @@ const RenderState = struct {
     pass_action: sg.PassAction = .{},
     impact_instance_count: usize = 0,
     pickup_instance_count: usize = 0,
+    map_item_instance_count: usize = 0,
+    debris_instance_count: usize = 0,
 };
 
 const GameState = struct {
@@ -280,6 +324,11 @@ const GameState = struct {
     inventory_ui: InventoryUi = .{},
     inventory: inventory.State = .{},
     collected_pickups: u32 = 0,
+    discovered_items: u32 = 0,
+    broken_boxes: u32 = 0,
+    interaction_target: ?InteractionTarget = null,
+    kick: KickState = .{},
+    debris: [debris_capacity]Debris = @splat(.{}),
     character_config: controller.Config = .{},
     character: controller.State = initialCharacter(),
     hunter_config: hunter.Config = .{},
@@ -393,11 +442,11 @@ fn frame() callconv(.c) void {
                     &game.character,
                     &game.mover_scratch,
                     game.world,
-                    if (game.condition.canMove()) game.input.characterInput() else .{},
+                    if (game.condition.canMove() and !game.kick.active) game.input.characterInput() else .{},
                     game.camera.basis,
                     @floatCast(fixed_dt),
                 );
-                if (game.condition.canMove()) {
+                if (game.condition.canMove() and !game.kick.active) {
                     const reserve_before = game.combat.reserve;
                     const combat_events = combat.update(game.combat_config, &game.combat, .{
                         .aiming = game.input.aiming,
@@ -410,8 +459,8 @@ fn frame() callconv(.c) void {
                         _ = game.inventory.consumeAmmo(reserve_before - game.combat.reserve);
                     }
                     for (combat_events.shot_focus[0..combat_events.shot_count]) |shot_focus| fireShot(shot_focus);
-                    collectNearbyPickup();
                 }
+                updateKickAndDebris(@floatCast(fixed_dt));
                 if (game.condition.update(game.condition_config, game.character.grounded, @floatCast(fixed_dt)) == .defeated) {
                     respawnAfterCatch();
                     break;
@@ -447,7 +496,7 @@ fn frame() callconv(.c) void {
             game.character.position;
     };
 
-    if (gameplay_active and game.condition.canMove() and !game.input.aiming) updateQuickTurn(frame_time);
+    if (gameplay_active and game.condition.canMove() and !game.kick.active and !game.input.aiming) updateQuickTurn(frame_time);
 
     if (game.map.active) {
         // WASD pans the map camera around the level.
@@ -469,6 +518,11 @@ fn frame() callconv(.c) void {
             sapp.widthf() / @max(sapp.heightf(), 1),
         );
         game.input.mouse_delta = .{};
+    }
+    if (gameplay_active and game.condition.canMove() and !game.kick.active) {
+        updateInteractionTarget();
+    } else {
+        game.interaction_target = null;
     }
     uploadMapRoute();
     draw(render_position, frame_time, gameplay_active);
@@ -534,18 +588,23 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     game.map.active = !game.map.active;
                     if (game.map.active) {
                         game.map.hunter_paused = true;
+                        game.map.cursor = .{ .x = sapp.widthf() * 0.5, .y = sapp.heightf() * 0.5 };
                         rebuildMapRoute();
                         game.camera.aim_alpha = 0;
                         game.combat.focus = 0;
                         game.combat.aiming_last_tick = false;
                     }
                     sapp.lockMouse(!game.map.active);
+                    sapp.showMouse(!game.map.active);
                     // Drop held keys so the map doesn't immediately pan and
                     // gameplay doesn't resume with the character moving.
                     game.input = .{};
                 },
                 .I => if (down and !value.key_repeat and game.menu.kind == .none and !game.map.active and game.condition.canMove()) {
                     openInventory();
+                },
+                .X => if (down and !value.key_repeat and game.menu.kind == .none and !game.map.active and game.condition.canMove() and !game.kick.active) {
+                    activateInteraction();
                 },
                 .P => if (down and !value.key_repeat and game.map.active) {
                     game.map.hunter_paused = !game.map.hunter_paused;
@@ -603,13 +662,16 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
         .MOUSE_UP => if (value.mouse_button == .LEFT) {
             game.input.firing = false;
         },
-        .MOUSE_MOVE => if (sapp.mouseLocked()) {
+        .MOUSE_MOVE => if (game.map.active) {
+            game.map.cursor = .{ .x = value.mouse_x, .y = value.mouse_y };
+        } else if (sapp.mouseLocked()) {
             game.input.mouse_delta.x += value.mouse_dx;
             game.input.mouse_delta.y += value.mouse_dy;
         },
         .UNFOCUSED => {
             game.input = .{};
             sapp.lockMouse(false);
+            sapp.showMouse(true);
         },
         else => {},
     }
@@ -751,12 +813,19 @@ fn placePlayerFromSlot(slot: saves.Slot) void {
     game.camera = .{};
     game.camera.yaw = slot.yaw;
     game.quick_turn = .{};
+    game.kick = .{};
+    game.interaction_target = null;
     game.combat = combat.State.init(game.combat_config, slot.magazine, slot.reserve);
     game.inventory = slot.inventory;
     game.collected_pickups = slot.collected_pickups;
+    game.discovered_items = slot.discovered_items;
+    game.broken_boxes = slot.broken_boxes;
     game.condition.reset(game.condition_config, slot.health);
     game.combat_visuals = .{};
     game.player_deformation = .{};
+    game.interaction_target = null;
+    game.kick = .{};
+    game.debris = @splat(.{});
 }
 
 // Place both actors, then reset the round. The player resumes from the most
@@ -774,6 +843,8 @@ fn spawnPlayerAndHunter() void {
         game.combat = combat.State.init(game.combat_config, game.combat_config.magazine_capacity, game.combat_config.starting_reserve);
         game.inventory = inventory.State.defaultLoadout(game.combat_config.starting_reserve);
         game.collected_pickups = 0;
+        game.discovered_items = 0;
+        game.broken_boxes = 0;
         game.condition.reset(game.condition_config, game.condition_config.max_health);
     }
     game.player_deformation = .{};
@@ -782,6 +853,9 @@ fn spawnPlayerAndHunter() void {
     game.map = .{};
     game.menu = .{};
     game.inventory_ui = .{};
+    game.interaction_target = null;
+    game.kick = .{};
+    game.debris = @splat(.{});
     game.notice = .none;
     game.notice_timer = 0;
     game.input = .{};
@@ -829,6 +903,8 @@ fn punchPlayer() void {
     };
     game.character.grounded = false;
     game.quick_turn = .{};
+    game.kick = .{};
+    game.interaction_target = null;
     game.input = .{};
     game.camera.aim_alpha = 0;
     game.combat.focus = 0;
@@ -847,28 +923,182 @@ fn faceHunterTowardPlayer(dt: f32) void {
     game.hunter.yaw += delta;
 }
 
-fn collectNearbyPickup() void {
-    const radius_squared = pickup_radius * pickup_radius;
+fn targetPosition(target: InteractionTarget) Vec3 {
+    return switch (target.kind) {
+        .pickup => pickup_defs[target.index].position,
+        .breakable => breakable_defs[target.index].position,
+    };
+}
+
+fn targetName(target: InteractionTarget) []const u8 {
+    return switch (target.kind) {
+        .pickup => pickup_defs[target.index].name,
+        .breakable => breakable_defs[target.index].name,
+    };
+}
+
+fn targetColor(target: InteractionTarget) Vec4 {
+    return switch (target.kind) {
+        .pickup => switch (pickup_defs[target.index].item.kind) {
+            .ammo => .{ .x = 0.12, .y = 0.43, .z = 0.98, .w = 1 },
+            .health => .{ .x = 0.12, .y = 0.76, .z = 0.30, .w = 1 },
+            .empty => .{},
+        },
+        .breakable => .{ .x = 1.0, .y = 0.48, .z = 0.08, .w = 1 },
+    };
+}
+
+fn targetDiscoveryBit(target: InteractionTarget) u32 {
+    const index = switch (target.kind) {
+        .pickup => target.index,
+        .breakable => pickup_defs.len + target.index,
+    };
+    return @as(u32, 1) << @intCast(index);
+}
+
+fn interactionScore(position: Vec3) ?f32 {
+    const dx = position.x - game.character.position.x;
+    const dz = position.z - game.character.position.z;
+    const distance_squared = dx * dx + dz * dz;
+    if (distance_squared > interaction_radius * interaction_radius) return null;
+    const distance = @sqrt(distance_squared);
+    if (distance < 0.001) return 10;
+    const forward_length = @sqrt(game.camera.forward.x * game.camera.forward.x + game.camera.forward.z * game.camera.forward.z);
+    if (forward_length < 0.001) return null;
+    const alignment = (dx * game.camera.forward.x + dz * game.camera.forward.z) / (distance * forward_length);
+    if (alignment < 0.05) return null;
+    return alignment * 4.0 - distance * 0.12;
+}
+
+fn updateInteractionTarget() void {
+    var best: ?InteractionTarget = null;
+    var best_score: f32 = -std.math.inf(f32);
     for (pickup_defs, 0..) |pickup, index| {
         const bit = @as(u32, 1) << @intCast(index);
         if (game.collected_pickups & bit != 0) continue;
-        const dx = game.character.position.x - pickup.position.x;
-        const dz = game.character.position.z - pickup.position.z;
-        if (dx * dx + dz * dz > radius_squared) continue;
-        if (game.inventory.add(pickup.item) == null) {
-            game.notice = .inventory_full;
-            game.notice_timer = notice_seconds;
-            return;
+        const score = interactionScore(pickup.position) orelse continue;
+        if (score > best_score) {
+            best = .{ .kind = .pickup, .index = index };
+            best_score = score;
         }
-        game.collected_pickups |= bit;
-        if (pickup.item.kind == .ammo) {
-            game.combat.reserve +|= pickup.item.amount;
-            game.notice = .ammo_found;
-        } else {
-            game.notice = .health_found;
-        }
-        game.notice_timer = notice_seconds;
     }
+    for (breakable_defs, 0..) |box, index| {
+        const bit = @as(u32, 1) << @intCast(index);
+        if (game.broken_boxes & bit != 0) continue;
+        const score = interactionScore(box.position) orelse continue;
+        if (score > best_score) {
+            best = .{ .kind = .breakable, .index = index };
+            best_score = score;
+        }
+    }
+    game.interaction_target = best;
+    if (best) |target| game.discovered_items |= targetDiscoveryBit(target);
+}
+
+fn activateInteraction() void {
+    const target = game.interaction_target orelse return;
+    switch (target.kind) {
+        .pickup => {
+            const pickup = pickup_defs[target.index];
+            if (game.inventory.add(pickup.item) == null) {
+                game.notice = .inventory_full;
+                game.notice_timer = notice_seconds;
+                return;
+            }
+            game.collected_pickups |= @as(u32, 1) << @intCast(target.index);
+            if (pickup.item.kind == .ammo) {
+                game.combat.reserve +|= pickup.item.amount;
+                game.notice = .ammo_found;
+            } else {
+                game.notice = .health_found;
+            }
+            game.notice_timer = notice_seconds;
+            game.interaction_target = null;
+        },
+        .breakable => {
+            const box = breakable_defs[target.index];
+            const dx = box.position.x - game.character.position.x;
+            const dz = box.position.z - game.character.position.z;
+            game.character.yaw = std.math.atan2(dx, dz);
+            game.character.velocity.x = 0;
+            game.character.velocity.z = 0;
+            game.kick = .{ .active = true, .target = target.index };
+            game.input = .{};
+            game.interaction_target = null;
+        },
+    }
+}
+
+fn updateKickAndDebris(dt: f32) void {
+    if (game.kick.active) {
+        game.kick.timer += dt;
+        if (!game.kick.broke_box and game.kick.timer >= 0.30) {
+            game.kick.broke_box = true;
+            game.broken_boxes |= @as(u32, 1) << @intCast(game.kick.target);
+            spawnBoxDebris(game.kick.target);
+        }
+        if (game.kick.timer >= 0.68) game.kick = .{};
+    }
+
+    for (&game.debris) |*piece| {
+        if (!piece.active) continue;
+        piece.timer -= dt;
+        if (piece.timer <= 0) {
+            piece.* = .{};
+            continue;
+        }
+        piece.velocity.y -= 12.0 * dt;
+        piece.position = Vec3.add(piece.position, Vec3.scale(piece.velocity, dt));
+        if (piece.position.y < 0.07) {
+            piece.position.y = 0.07;
+            if (@abs(piece.velocity.y) > 0.45) {
+                piece.velocity.y = -piece.velocity.y * 0.34;
+            } else {
+                piece.velocity.y = 0;
+            }
+            piece.velocity.x *= 0.82;
+            piece.velocity.z *= 0.82;
+            piece.angular_velocity *= 0.78;
+        }
+        piece.yaw += piece.angular_velocity * dt;
+        piece.pitch += piece.angular_velocity * 0.73 * dt;
+    }
+}
+
+fn spawnBoxDebris(box_index: usize) void {
+    const origin = breakable_defs[box_index].position;
+    for (0..8) |piece_index| {
+        const angle = @as(f32, @floatFromInt(piece_index)) * std.math.pi * 0.25;
+        const direction = Vec3{ .x = @sin(angle), .z = @cos(angle) };
+        var slot: ?*Debris = null;
+        for (&game.debris) |*candidate| if (!candidate.active) {
+            slot = candidate;
+            break;
+        };
+        const piece = slot orelse return;
+        const speed = 1.4 + @as(f32, @floatFromInt(piece_index % 3)) * 0.35;
+        piece.* = .{
+            .active = true,
+            .position = .{
+                .x = origin.x + direction.x * 0.12,
+                .y = origin.y + 0.10 + @as(f32, @floatFromInt(piece_index % 2)) * 0.14,
+                .z = origin.z + direction.z * 0.12,
+            },
+            .velocity = .{
+                .x = direction.x * speed,
+                .y = 2.8 + @as(f32, @floatFromInt(piece_index % 4)) * 0.38,
+                .z = direction.z * speed,
+            },
+            .yaw = angle,
+            .angular_velocity = 3.5 + @as(f32, @floatFromInt(piece_index)) * 0.31,
+            .timer = debris_seconds,
+        };
+    }
+}
+
+fn kickAmount() f32 {
+    if (!game.kick.active) return 0;
+    return @sin(std.math.pi * std.math.clamp(game.kick.timer / 0.68, 0, 1));
 }
 
 // Defeated: restore the most recent save (or the initial loadout) and move the
@@ -885,6 +1115,8 @@ fn respawnAfterCatch() void {
         game.combat = combat.State.init(game.combat_config, game.combat_config.magazine_capacity, game.combat_config.starting_reserve);
         game.inventory = inventory.State.defaultLoadout(game.combat_config.starting_reserve);
         game.collected_pickups = 0;
+        game.discovered_items = 0;
+        game.broken_boxes = 0;
         game.condition.reset(game.condition_config, game.condition_config.max_health);
     }
 
@@ -894,6 +1126,9 @@ fn respawnAfterCatch() void {
     game.notice_timer = notice_seconds;
     game.input = .{};
     game.inventory_ui = .{};
+    game.interaction_target = null;
+    game.kick = .{};
+    game.debris = @splat(.{});
 }
 
 // True while the character stands within the interaction area of a typewriter.
@@ -985,6 +1220,7 @@ fn openInventory() void {
     game.combat.focus = 0;
     game.combat.aiming_last_tick = false;
     sapp.lockMouse(false);
+    sapp.showMouse(true);
 }
 
 fn closeInventory() void {
@@ -1071,6 +1307,8 @@ fn confirmMenu() void {
                 .health = game.condition.health,
                 .inventory = game.inventory,
                 .collected_pickups = game.collected_pickups,
+                .discovered_items = game.discovered_items,
+                .broken_boxes = game.broken_boxes,
                 .timestamp = std.Io.Timestamp.now(app_io.io(), .real).toSeconds(),
             };
             if (saves.writeToCwd(app_io.io())) |_| {
@@ -1281,9 +1519,19 @@ fn initRenderer() void {
         .label = "character-combat-impact-instances",
     });
     game.render.pickup_instances = sg.makeBuffer(.{
-        .size = pickup_defs.len * @sizeOf(Instance),
+        .size = world_item_count * @sizeOf(Instance),
         .usage = .{ .stream_update = true },
         .label = "character-pickup-instances",
+    });
+    game.render.map_item_instances = sg.makeBuffer(.{
+        .size = world_item_count * @sizeOf(Instance),
+        .usage = .{ .stream_update = true },
+        .label = "character-map-item-instances",
+    });
+    game.render.debris_instances = sg.makeBuffer(.{
+        .size = debris_capacity * @sizeOf(Instance),
+        .usage = .{ .stream_update = true },
+        .label = "character-breakable-debris-instances",
     });
     game.render.route_instances = sg.makeBuffer(.{
         .size = map_route_capacity * @sizeOf(Instance),
@@ -1390,6 +1638,12 @@ fn initRenderer() void {
         .depth = .{ .write_enabled = false, .compare = .ALWAYS },
         .colors = blendingTargets(),
         .label = "character-inventory-rect-pipeline",
+    });
+    game.render.hud_circle_pipeline = sg.makePipeline(.{
+        .shader = sg.makeShader(shd.hudCircleShaderDesc(sg.queryBackend())),
+        .depth = .{ .write_enabled = false, .compare = .ALWAYS },
+        .colors = blendingTargets(),
+        .label = "character-hud-circle-pipeline",
     });
 
     // Depth-only 2048x2048 texture seen from the sun. Only depth is written,
@@ -1568,11 +1822,13 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
             .light_view_projection = game.render.light_view_projection,
             .deformation = poseVector(player_pose),
             .lower_motion = footVector(player_pose),
+            .action_motion = actionVector(),
         };
         sg.applyUniforms(shd.UB_deformed_shadow_vs_params, sg.asRange(&actor_shadow_params));
         drawDeformedActor(game.render.character_instance, false);
         actor_shadow_params.deformation = poseVector(hunter_pose);
         actor_shadow_params.lower_motion = footVector(hunter_pose);
+        actor_shadow_params.action_motion = .{};
         sg.applyUniforms(shd.UB_deformed_shadow_vs_params, sg.asRange(&actor_shadow_params));
         drawDeformedActor(game.render.hunter_instance, false);
     }
@@ -1614,6 +1870,9 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
             drawInstances(game.render.route_instances, game.render.box_range, 0, game.map.route_segment_count, false);
         }
         drawInstances(game.render.map_save_instances, game.render.box_range, 0, level.current.save_target_count, false);
+        if (game.render.map_item_instance_count > 0) {
+            drawInstances(game.render.map_item_instances, game.render.box_range, 0, game.render.map_item_instance_count, false);
+        }
         drawInstances(game.render.map_direction_instances, game.render.box_range, 0, map_direction_instance_count, false);
 
         // Map actors use flat instance colors while still writing depth.
@@ -1629,11 +1888,13 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
             .light_view_projection = game.render.light_view_projection,
             .deformation = poseVector(player_pose),
             .lower_motion = footVector(player_pose),
+            .action_motion = actionVector(),
         };
         sg.applyUniforms(shd.UB_deformed_display_vs_params, sg.asRange(&actor_vs_params));
         drawDeformedActor(game.render.character_instance, true);
         actor_vs_params.deformation = poseVector(hunter_pose);
         actor_vs_params.lower_motion = footVector(hunter_pose);
+        actor_vs_params.action_motion = .{};
         sg.applyUniforms(shd.UB_deformed_display_vs_params, sg.asRange(&actor_vs_params));
         drawDeformedActor(game.render.hunter_instance, true);
     }
@@ -1642,6 +1903,12 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         sg.applyPipeline(game.render.route_pipeline);
         sg.applyUniforms(shd.UB_route_vs_params, sg.asRange(&pickup_params));
         drawInstances(game.render.pickup_instances, game.render.box_range, 0, game.render.pickup_instance_count, false);
+    }
+    if (!game.map.active and game.render.debris_instance_count > 0) {
+        const debris_params: shd.RouteVsParams = .{ .view_projection = game.camera.view_projection };
+        sg.applyPipeline(game.render.route_pipeline);
+        sg.applyUniforms(shd.UB_route_vs_params, sg.asRange(&debris_params));
+        drawInstances(game.render.debris_instances, game.render.box_range, 0, game.render.debris_instance_count, false);
     }
     if (!game.map.active and game.render.impact_instance_count > 0) {
         const impact_params: shd.RouteVsParams = .{ .view_projection = game.camera.view_projection };
@@ -1658,13 +1925,14 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
     }
     drawReticle();
     drawInventoryRects();
+    drawHudShapes();
     drawHud(position);
     sg.endPass();
     sg.commit();
 }
 
 fn updatePickupInstances() void {
-    var instances: [pickup_defs.len]Instance = undefined;
+    var instances: [world_item_count]Instance = undefined;
     var count: usize = 0;
     for (pickup_defs, 0..) |pickup, index| {
         const bit = @as(u32, 1) << @intCast(index);
@@ -1677,8 +1945,69 @@ fn updatePickupInstances() void {
         instances[count] = makeInstance(pickup.position, .{ .x = 0.18, .y = 0.18, .z = 0.18 }, 0, color);
         count += 1;
     }
+    for (breakable_defs, 0..) |box, index| {
+        const bit = @as(u32, 1) << @intCast(index);
+        if (game.broken_boxes & bit != 0) continue;
+        instances[count] = makeInstance(
+            box.position,
+            .{ .x = 0.42, .y = 0.42, .z = 0.42 },
+            0,
+            rgb(1.0, 0.42, 0.06),
+        );
+        count += 1;
+    }
     if (count > 0) sg.updateBuffer(game.render.pickup_instances, sg.asRange(instances[0..count]));
     game.render.pickup_instance_count = count;
+
+    var map_instances: [world_item_count]Instance = undefined;
+    var map_count: usize = 0;
+    for (pickup_defs, 0..) |pickup, index| {
+        const collected_bit = @as(u32, 1) << @intCast(index);
+        const discovered_bit = collected_bit;
+        if (game.collected_pickups & collected_bit != 0 or game.discovered_items & discovered_bit == 0) continue;
+        const color = switch (pickup.item.kind) {
+            .ammo => rgb(0.15, 0.48, 1.0),
+            .health => rgb(0.18, 0.82, 0.37),
+            .empty => continue,
+        };
+        map_instances[map_count] = makeInstance(
+            .{ .x = pickup.position.x, .y = level.floor_height + 0.22, .z = pickup.position.z },
+            .{ .x = 0.28, .y = 0.06, .z = 0.28 },
+            0,
+            color,
+        );
+        map_count += 1;
+    }
+    for (breakable_defs, 0..) |box, index| {
+        const broken_bit = @as(u32, 1) << @intCast(index);
+        const discovered_bit = @as(u32, 1) << @intCast(pickup_defs.len + index);
+        if (game.broken_boxes & broken_bit != 0 or game.discovered_items & discovered_bit == 0) continue;
+        map_instances[map_count] = makeInstance(
+            .{ .x = box.position.x, .y = level.floor_height + 0.22, .z = box.position.z },
+            .{ .x = 0.28, .y = 0.06, .z = 0.28 },
+            0,
+            rgb(1.0, 0.42, 0.06),
+        );
+        map_count += 1;
+    }
+    if (map_count > 0) sg.updateBuffer(game.render.map_item_instances, sg.asRange(map_instances[0..map_count]));
+    game.render.map_item_instance_count = map_count;
+
+    var debris_instances: [debris_capacity]Instance = undefined;
+    var debris_count: usize = 0;
+    for (game.debris) |piece| {
+        if (!piece.active) continue;
+        debris_instances[debris_count] = makeYawPitchedInstance(
+            piece.position,
+            .{ .x = 0.11, .y = 0.07, .z = 0.09 },
+            piece.yaw,
+            piece.pitch,
+            rgb(1.0, 0.38, 0.045),
+        );
+        debris_count += 1;
+    }
+    if (debris_count > 0) sg.updateBuffer(game.render.debris_instances, sg.asRange(debris_instances[0..debris_count]));
+    game.render.debris_instance_count = debris_count;
 }
 
 fn updateImpactInstances() void {
@@ -1725,6 +2054,84 @@ fn drawUiRect(rect: ScreenRect, fill: Vec4, border: Vec4, border_width: f32) voi
     sg.applyPipeline(game.render.ui_rect_pipeline);
     sg.applyUniforms(shd.UB_ui_rect_fs_params, sg.asRange(&params));
     sg.draw(0, 3, 1);
+}
+
+fn drawHudCircle(center: math.Vec2, radius: f32, thickness: f32, color: Vec4, with_x: bool) void {
+    const params: shd.HudCircleFsParams = .{
+        .viewport = .{ .x = sapp.widthf(), .y = sapp.heightf() },
+        .geometry = .{ .x = center.x, .y = center.y, .z = radius, .w = thickness },
+        .color = color,
+        .style = .{ .x = fbool(with_x) },
+    };
+    sg.applyPipeline(game.render.hud_circle_pipeline);
+    sg.applyUniforms(shd.UB_hud_circle_fs_params, sg.asRange(&params));
+    sg.draw(0, 3, 1);
+}
+
+fn interactionPromptCenter() math.Vec2 {
+    return .{ .x = sapp.widthf() * 0.5 - 150, .y = sapp.heightf() * 0.79 };
+}
+
+fn mapHoverName() ?[]const u8 {
+    if (!game.map.active) return null;
+    const world = mapWorldAtScreen(game.map.cursor.x, game.map.cursor.y);
+    for (pickup_defs, 0..) |pickup, index| {
+        const item_bit = @as(u32, 1) << @intCast(index);
+        if (game.discovered_items & item_bit == 0 or game.collected_pickups & item_bit != 0) continue;
+        const dx = world.x - pickup.position.x;
+        const dz = world.z - pickup.position.z;
+        if (dx * dx + dz * dz <= 0.8 * 0.8) return pickup.name;
+    }
+    for (breakable_defs, 0..) |box, index| {
+        const discovered_bit = @as(u32, 1) << @intCast(pickup_defs.len + index);
+        const broken_bit = @as(u32, 1) << @intCast(index);
+        if (game.discovered_items & discovered_bit == 0 or game.broken_boxes & broken_bit != 0) continue;
+        const dx = world.x - box.position.x;
+        const dz = world.z - box.position.z;
+        if (dx * dx + dz * dz <= 0.9 * 0.9) return box.name;
+    }
+    for (level.current.save_fixtures[0..level.current.save_fixture_count]) |fixture| {
+        const dx = world.x - fixture.x;
+        const dz = world.z - fixture.z;
+        if (dx * dx + dz * dz <= 1.0) return "Typewriter";
+    }
+    return null;
+}
+
+fn mapTooltipRect() ScreenRect {
+    const width: f32 = 176;
+    const height: f32 = 32;
+    return .{
+        .x = std.math.clamp(game.map.cursor.x + 20, 8, @max(8, sapp.widthf() - width - 8)),
+        .y = std.math.clamp(game.map.cursor.y + 18, 8, @max(8, sapp.heightf() - height - 8)),
+        .w = width,
+        .h = height,
+    };
+}
+
+fn drawHudShapes() void {
+    if (game.map.active) {
+        if (mapHoverName() != null) {
+            drawUiRect(
+                mapTooltipRect(),
+                .{ .x = 0.035, .y = 0.042, .z = 0.048, .w = 0.94 },
+                .{ .x = 0.74, .y = 0.76, .z = 0.77, .w = 1 },
+                2,
+            );
+        }
+        drawHudCircle(game.map.cursor, 11, 2, .{ .x = 1, .y = 1, .z = 1, .w = 0.95 }, false);
+        return;
+    }
+    const target = game.interaction_target orelse return;
+    const center = interactionPromptCenter();
+    drawHudCircle(center, 15, 2.2, .{ .x = 1, .y = 1, .z = 1, .w = 0.98 }, true);
+    const color = targetColor(target);
+    drawUiRect(
+        .{ .x = center.x + 27, .y = center.y - 10, .w = 20, .h = 20 },
+        color,
+        .{ .x = 0.9, .y = 0.9, .z = 0.88, .w = 1 },
+        1.5,
+    );
 }
 
 fn drawInventoryRects() void {
@@ -1839,6 +2246,12 @@ fn drawHud(position: b3.b3Pos) void {
             },
             else => {},
         }
+        if (mapHoverName()) |name| {
+            const tooltip = mapTooltipRect();
+            sdtx.pos((tooltip.x + 10) / 8.0, (tooltip.y + 8) / 8.0);
+            sdtx.color3b(245, 245, 240);
+            sdtx.print("{s}", .{name});
+        }
     } else {
         if (game.debug.draw_physics) {
             sdtx.pos(1.0, 1.0);
@@ -1869,6 +2282,12 @@ fn drawHud(position: b3.b3Pos) void {
             sdtx.pos(ammo_x, ammo_y - 1.2);
             sdtx.color3b(80, 250, 123);
             sdtx.print("RELOADING", .{});
+        }
+        if (game.interaction_target) |target| {
+            const center = interactionPromptCenter();
+            sdtx.pos((center.x + 57) / 8.0, (center.y - 5) / 8.0);
+            sdtx.color3b(248, 248, 244);
+            sdtx.print("{s}", .{targetName(target)});
         }
     }
     switch (game.notice) {
@@ -1997,6 +2416,10 @@ fn poseVector(pose: deformation.Pose) Vec4 {
 
 fn footVector(pose: deformation.Pose) Vec4 {
     return .{ .x = pose.foot_roll, .y = pose.foot_pitch, .z = pose.foot_twist, .w = pose.foot_splay };
+}
+
+fn actionVector() Vec4 {
+    return .{ .x = kickAmount() };
 }
 
 fn drawDeformedActor(instance_buffer: sg.Buffer, with_shadow_texture: bool) void {
