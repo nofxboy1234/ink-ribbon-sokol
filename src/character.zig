@@ -136,8 +136,11 @@ const debris_capacity = breakable_defs.len * 8;
 const debris_seconds: f32 = 4.0;
 const action_duration: f32 = 0.68;
 const action_contact_time: f32 = 0.30;
+const box_item_chance: f32 = 0.60;
+const box_health_share: f32 = 0.25;
+const box_ammo_amount: u16 = 20;
 
-const InteractionKind = enum { pickup, breakable };
+const InteractionKind = enum { pickup, breakable, box_drop };
 const InteractionTarget = struct {
     kind: InteractionKind,
     index: usize,
@@ -158,7 +161,7 @@ const PickupAction = struct {
 
     active: bool = false,
     timer: f32 = 0,
-    target: usize = 0,
+    target: InteractionTarget = .{ .kind = .pickup, .index = 0 },
     committed: bool = false,
 
     fn advance(self: *PickupAction, dt: f32) Events {
@@ -406,6 +409,9 @@ const GameState = struct {
     collected_pickups: u32 = 0,
     discovered_items: u32 = 0,
     broken_boxes: u32 = 0,
+    box_drops_present: u32 = 0,
+    box_drops_health: u32 = 0,
+    collected_box_drops: u32 = 0,
     interaction_target: ?InteractionTarget = null,
     kick: KickState = .{},
     pickup_action: PickupAction = .{},
@@ -927,6 +933,9 @@ fn placePlayerFromSlot(slot: saves.Slot) void {
     game.collected_pickups = slot.collected_pickups;
     game.discovered_items = slot.discovered_items;
     game.broken_boxes = slot.broken_boxes;
+    game.box_drops_present = slot.box_drops_present;
+    game.box_drops_health = slot.box_drops_health;
+    game.collected_box_drops = slot.collected_box_drops;
     game.condition.reset(game.condition_config, slot.health);
     game.combat_visuals = .{};
     game.player_deformation = .{};
@@ -953,6 +962,9 @@ fn spawnPlayerAndHunter() void {
         game.collected_pickups = 0;
         game.discovered_items = 0;
         game.broken_boxes = 0;
+        game.box_drops_present = 0;
+        game.box_drops_health = 0;
+        game.collected_box_drops = 0;
         game.condition.reset(game.condition_config, game.condition_config.max_health);
     }
     game.player_deformation = .{};
@@ -1038,6 +1050,7 @@ fn targetPosition(target: InteractionTarget) Vec3 {
     return switch (target.kind) {
         .pickup => pickup_defs[target.index].position,
         .breakable => breakable_defs[target.index].position,
+        .box_drop => boxDropPosition(target.index),
     };
 }
 
@@ -1045,12 +1058,13 @@ fn targetName(target: InteractionTarget) []const u8 {
     return switch (target.kind) {
         .pickup => pickup_defs[target.index].name,
         .breakable => breakable_defs[target.index].name,
+        .box_drop => itemName(boxDropItem(target.index)),
     };
 }
 
 fn targetColor(target: InteractionTarget) Vec4 {
     return switch (target.kind) {
-        .pickup => switch (pickup_defs[target.index].item.kind) {
+        .pickup, .box_drop => switch ((targetItem(target) orelse inventory.Item{}).kind) {
             .ammo => .{ .x = 0.12, .y = 0.43, .z = 0.98, .w = 1 },
             .health => .{ .x = 0.12, .y = 0.76, .z = 0.30, .w = 1 },
             .empty => .{},
@@ -1062,9 +1076,50 @@ fn targetColor(target: InteractionTarget) Vec4 {
 fn targetDiscoveryBit(target: InteractionTarget) u32 {
     const index = switch (target.kind) {
         .pickup => target.index,
-        .breakable => pickup_defs.len + target.index,
+        .breakable, .box_drop => pickup_defs.len + target.index,
     };
     return @as(u32, 1) << @intCast(index);
+}
+
+fn targetItem(target: InteractionTarget) ?inventory.Item {
+    return switch (target.kind) {
+        .pickup => pickup_defs[target.index].item,
+        .box_drop => blk: {
+            const item = boxDropItem(target.index);
+            break :blk if (item.occupied()) item else null;
+        },
+        .breakable => null,
+    };
+}
+
+fn itemName(item: inventory.Item) []const u8 {
+    return switch (item.kind) {
+        .ammo => "Handgun Ammo",
+        .health => "First Aid Spray",
+        .empty => "Item",
+    };
+}
+
+fn itemColor(item: inventory.Item) Vec4 {
+    return switch (item.kind) {
+        .ammo => rgb(0.15, 0.48, 1.0),
+        .health => rgb(0.18, 0.82, 0.37),
+        .empty => .{},
+    };
+}
+
+fn boxDropPosition(index: usize) Vec3 {
+    const box = breakable_defs[index].position;
+    return .{ .x = box.x, .y = 0.18, .z = box.z };
+}
+
+fn boxDropItem(index: usize) inventory.Item {
+    const bit = @as(u32, 1) << @intCast(index);
+    if (game.box_drops_present & bit == 0 or game.collected_box_drops & bit != 0) return .{};
+    return if (game.box_drops_health & bit != 0)
+        .{ .kind = .health, .amount = 1 }
+    else
+        .{ .kind = .ammo, .amount = box_ammo_amount };
 }
 
 fn interactionScore(position: Vec3) ?f32 {
@@ -1095,10 +1150,13 @@ fn updateInteractionTarget() void {
     }
     for (breakable_defs, 0..) |box, index| {
         const bit = @as(u32, 1) << @intCast(index);
-        if (game.broken_boxes & bit != 0) continue;
-        const score = interactionScore(box.position) orelse continue;
+        const broken = game.broken_boxes & bit != 0;
+        const item = boxDropItem(index);
+        if (broken and !item.occupied()) continue;
+        const position = if (broken) boxDropPosition(index) else box.position;
+        const score = interactionScore(position) orelse continue;
         if (score > best_score) {
-            best = .{ .kind = .breakable, .index = index };
+            best = .{ .kind = if (broken) .box_drop else .breakable, .index = index };
             best_score = score;
         }
     }
@@ -1109,20 +1167,21 @@ fn updateInteractionTarget() void {
 fn activateInteraction() void {
     const target = game.interaction_target orelse return;
     switch (target.kind) {
-        .pickup => {
-            const pickup = pickup_defs[target.index];
+        .pickup, .box_drop => {
+            const item = targetItem(target) orelse return;
             var inventory_preview = game.inventory;
-            if (inventory_preview.add(pickup.item) == null) {
+            if (inventory_preview.add(item) == null) {
                 game.notice = .inventory_full;
                 game.notice_timer = notice_seconds;
                 return;
             }
-            const dx = pickup.position.x - game.character.position.x;
-            const dz = pickup.position.z - game.character.position.z;
+            const position = targetPosition(target);
+            const dx = position.x - game.character.position.x;
+            const dz = position.z - game.character.position.z;
             game.character.yaw = std.math.atan2(dx, dz);
             game.character.velocity.x = 0;
             game.character.velocity.z = 0;
-            game.pickup_action = .{ .active = true, .target = target.index };
+            game.pickup_action = .{ .active = true, .target = target };
             game.input = .{};
             game.interaction_target = null;
         },
@@ -1142,7 +1201,7 @@ fn activateInteraction() void {
 
 fn updateActionsAndDebris(dt: f32) void {
     const pickup_events = game.pickup_action.advance(dt);
-    if (pickup_events.collect) collectPickup(game.pickup_action.target);
+    if (pickup_events.collect) collectInteractionItem(game.pickup_action.target);
     if (pickup_events.finished) game.pickup_action = .{};
 
     if (game.kick.active) {
@@ -1150,6 +1209,7 @@ fn updateActionsAndDebris(dt: f32) void {
         if (!game.kick.broke_box and game.kick.timer >= 0.30) {
             game.kick.broke_box = true;
             game.broken_boxes |= @as(u32, 1) << @intCast(game.kick.target);
+            revealBoxDrop(game.kick.target);
             spawnBoxDebris(game.kick.target);
         }
         if (game.kick.timer >= action_duration) game.kick = .{};
@@ -1180,23 +1240,49 @@ fn updateActionsAndDebris(dt: f32) void {
     }
 }
 
-fn collectPickup(index: usize) void {
-    const bit = @as(u32, 1) << @intCast(index);
-    if (game.collected_pickups & bit != 0) return;
-    const pickup = pickup_defs[index];
-    if (game.inventory.add(pickup.item) == null) {
+fn collectInteractionItem(target: InteractionTarget) void {
+    const bit = @as(u32, 1) << @intCast(target.index);
+    switch (target.kind) {
+        .pickup => if (game.collected_pickups & bit != 0) return,
+        .box_drop => if (game.collected_box_drops & bit != 0) return,
+        .breakable => return,
+    }
+    const item = targetItem(target) orelse return;
+    if (game.inventory.add(item) == null) {
         game.notice = .inventory_full;
         game.notice_timer = notice_seconds;
         return;
     }
-    game.collected_pickups |= bit;
-    if (pickup.item.kind == .ammo) {
-        game.combat.reserve +|= pickup.item.amount;
+    switch (target.kind) {
+        .pickup => game.collected_pickups |= bit,
+        .box_drop => game.collected_box_drops |= bit,
+        .breakable => unreachable,
+    }
+    if (item.kind == .ammo) {
+        game.combat.reserve +|= item.amount;
         game.notice = .ammo_found;
     } else {
         game.notice = .health_found;
     }
     game.notice_timer = notice_seconds;
+}
+
+fn revealBoxDrop(index: usize) void {
+    const item = rollBoxDrop(randomUnit(), randomUnit());
+    if (!item.occupied()) return;
+    const bit = @as(u32, 1) << @intCast(index);
+    game.box_drops_present |= bit;
+    if (item.kind == .health) game.box_drops_health |= bit;
+}
+
+fn rollBoxDrop(item_roll: f32, kind_roll: f32) inventory.Item {
+    if (item_roll >= box_item_chance) return .{};
+    if (kind_roll < box_health_share) return .{ .kind = .health, .amount = 1 };
+    return .{ .kind = .ammo, .amount = box_ammo_amount };
+}
+
+fn randomUnit() f32 {
+    return (game.combat.randomSigned() + 1.0) * 0.5;
 }
 
 fn spawnBoxDebris(box_index: usize) void {
@@ -1255,6 +1341,9 @@ fn respawnAfterCatch() void {
         game.collected_pickups = 0;
         game.discovered_items = 0;
         game.broken_boxes = 0;
+        game.box_drops_present = 0;
+        game.box_drops_health = 0;
+        game.collected_box_drops = 0;
         game.condition.reset(game.condition_config, game.condition_config.max_health);
     }
 
@@ -1448,6 +1537,9 @@ fn confirmMenu() void {
                 .collected_pickups = game.collected_pickups,
                 .discovered_items = game.discovered_items,
                 .broken_boxes = game.broken_boxes,
+                .box_drops_present = game.box_drops_present,
+                .box_drops_health = game.box_drops_health,
+                .collected_box_drops = game.collected_box_drops,
                 .timestamp = std.Io.Timestamp.now(app_io.io(), .real).toSeconds(),
             };
             if (saves.writeToCwd(app_io.io())) |_| {
@@ -2082,23 +2174,30 @@ fn updatePickupInstances() void {
     for (pickup_defs, 0..) |pickup, index| {
         const bit = @as(u32, 1) << @intCast(index);
         if (game.collected_pickups & bit != 0) continue;
-        const color = switch (pickup.item.kind) {
-            .ammo => rgb(0.15, 0.48, 1.0),
-            .health => rgb(0.18, 0.82, 0.37),
-            .empty => continue,
-        };
+        if (!pickup.item.occupied()) continue;
+        const color = itemColor(pickup.item);
         instances[count] = makeInstance(pickup.position, .{ .x = 0.18, .y = 0.18, .z = 0.18 }, 0, color);
         count += 1;
     }
     for (breakable_defs, 0..) |box, index| {
         const bit = @as(u32, 1) << @intCast(index);
-        if (game.broken_boxes & bit != 0) continue;
-        instances[count] = makeInstance(
-            box.position,
-            .{ .x = 0.42, .y = 0.42, .z = 0.42 },
-            0,
-            rgb(1.0, 0.42, 0.06),
-        );
+        if (game.broken_boxes & bit == 0) {
+            instances[count] = makeInstance(
+                box.position,
+                .{ .x = 0.42, .y = 0.42, .z = 0.42 },
+                0,
+                rgb(1.0, 0.42, 0.06),
+            );
+        } else {
+            const item = boxDropItem(index);
+            if (!item.occupied()) continue;
+            instances[count] = makeInstance(
+                boxDropPosition(index),
+                .{ .x = 0.18, .y = 0.18, .z = 0.18 },
+                0,
+                itemColor(item),
+            );
+        }
         count += 1;
     }
     if (count > 0) sg.updateBuffer(game.render.pickup_instances, sg.asRange(instances[0..count]));
@@ -2110,11 +2209,8 @@ fn updatePickupInstances() void {
         const collected_bit = @as(u32, 1) << @intCast(index);
         const discovered_bit = collected_bit;
         if (game.collected_pickups & collected_bit != 0 or !mapItemVisible(discovered_bit)) continue;
-        const color = switch (pickup.item.kind) {
-            .ammo => rgb(0.15, 0.48, 1.0),
-            .health => rgb(0.18, 0.82, 0.37),
-            .empty => continue,
-        };
+        if (!pickup.item.occupied()) continue;
+        const color = itemColor(pickup.item);
         map_instances[map_count] = makeInstance(
             .{ .x = pickup.position.x, .y = level.floor_height + 0.22, .z = pickup.position.z },
             .{ .x = 0.28, .y = 0.06, .z = 0.28 },
@@ -2126,12 +2222,15 @@ fn updatePickupInstances() void {
     for (breakable_defs, 0..) |box, index| {
         const broken_bit = @as(u32, 1) << @intCast(index);
         const discovered_bit = @as(u32, 1) << @intCast(pickup_defs.len + index);
-        if (game.broken_boxes & broken_bit != 0 or !mapItemVisible(discovered_bit)) continue;
+        if (!mapItemVisible(discovered_bit)) continue;
+        const broken = game.broken_boxes & broken_bit != 0;
+        const drop = boxDropItem(index);
+        if (broken and !drop.occupied()) continue;
         map_instances[map_count] = makeInstance(
             .{ .x = box.position.x, .y = level.floor_height + 0.22, .z = box.position.z },
             .{ .x = 0.28, .y = 0.06, .z = 0.28 },
             0,
-            rgb(1.0, 0.42, 0.06),
+            if (broken) itemColor(drop) else rgb(1.0, 0.42, 0.06),
         );
         map_count += 1;
     }
@@ -2230,10 +2329,13 @@ fn mapHoverName() ?[]const u8 {
     for (breakable_defs, 0..) |box, index| {
         const discovered_bit = @as(u32, 1) << @intCast(pickup_defs.len + index);
         const broken_bit = @as(u32, 1) << @intCast(index);
-        if (!mapItemVisible(discovered_bit) or game.broken_boxes & broken_bit != 0) continue;
+        if (!mapItemVisible(discovered_bit)) continue;
+        const broken = game.broken_boxes & broken_bit != 0;
+        const drop = boxDropItem(index);
+        if (broken and !drop.occupied()) continue;
         const dx = world.x - box.position.x;
         const dz = world.z - box.position.z;
-        if (dx * dx + dz * dz <= 0.9 * 0.9) return box.name;
+        if (dx * dx + dz * dz <= 0.9 * 0.9) return if (broken) itemName(drop) else box.name;
     }
     for (level.current.save_fixtures[0..level.current.save_fixture_count]) |fixture| {
         const dx = world.x - fixture.x;
@@ -2813,7 +2915,7 @@ test "hunter knockdown eases into and out of the recovery bend" {
 }
 
 test "pickup action commits at contact and finishes after retracting" {
-    var action = PickupAction{ .active = true, .target = 3 };
+    var action = PickupAction{ .active = true, .target = .{ .kind = .box_drop, .index = 3 } };
     var events = action.advance(action_contact_time - 0.01);
     try std.testing.expect(!events.collect);
     try std.testing.expect(action.amount() > 0);
@@ -2821,13 +2923,24 @@ test "pickup action commits at contact and finishes after retracting" {
     events = action.advance(0.02);
     try std.testing.expect(events.collect);
     try std.testing.expect(!events.finished);
-    try std.testing.expectEqual(@as(usize, 3), action.target);
+    try std.testing.expectEqual(InteractionKind.box_drop, action.target.kind);
+    try std.testing.expectEqual(@as(usize, 3), action.target.index);
 
     events = action.advance(action_duration);
     try std.testing.expect(!events.collect);
     try std.testing.expect(events.finished);
     try std.testing.expect(!action.active);
     try std.testing.expectEqual(@as(f32, 0), action.amount());
+}
+
+test "box drop roll can produce nothing ammo or health" {
+    try std.testing.expectEqual(inventory.ItemKind.empty, rollBoxDrop(box_item_chance, 0).kind);
+    const health = rollBoxDrop(0, box_health_share - 0.01);
+    try std.testing.expectEqual(inventory.ItemKind.health, health.kind);
+    try std.testing.expectEqual(@as(u16, 1), health.amount);
+    const ammo = rollBoxDrop(box_item_chance - 0.01, box_health_share);
+    try std.testing.expectEqual(inventory.ItemKind.ammo, ammo.kind);
+    try std.testing.expectEqual(box_ammo_amount, ammo.amount);
 }
 
 test "authored world items occupy walkable player cells" {
