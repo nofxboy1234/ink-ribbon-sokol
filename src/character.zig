@@ -1298,10 +1298,12 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         var actor_shadow_params: shd.DeformedShadowVsParams = .{
             .light_view_projection = game.render.light_view_projection,
             .deformation = poseVector(player_pose),
+            .lower_motion = footVector(player_pose),
         };
         sg.applyUniforms(shd.UB_deformed_shadow_vs_params, sg.asRange(&actor_shadow_params));
         drawDeformedActor(game.render.character_instance, false);
         actor_shadow_params.deformation = poseVector(hunter_pose);
+        actor_shadow_params.lower_motion = footVector(hunter_pose);
         sg.applyUniforms(shd.UB_deformed_shadow_vs_params, sg.asRange(&actor_shadow_params));
         drawDeformedActor(game.render.hunter_instance, false);
     }
@@ -1357,10 +1359,12 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
             .view_projection = game.camera.view_projection,
             .light_view_projection = game.render.light_view_projection,
             .deformation = poseVector(player_pose),
+            .lower_motion = footVector(player_pose),
         };
         sg.applyUniforms(shd.UB_deformed_display_vs_params, sg.asRange(&actor_vs_params));
         drawDeformedActor(game.render.character_instance, true);
         actor_vs_params.deformation = poseVector(hunter_pose);
+        actor_vs_params.lower_motion = footVector(hunter_pose);
         sg.applyUniforms(shd.UB_deformed_display_vs_params, sg.asRange(&actor_vs_params));
         drawDeformedActor(game.render.hunter_instance, true);
     }
@@ -1577,6 +1581,10 @@ fn formatTimestamp(buffer: []u8, timestamp: i64) []const u8 {
 
 fn poseVector(pose: deformation.Pose) Vec4 {
     return .{ .x = pose.bend_x, .y = pose.bend_z, .z = pose.twist, .w = pose.squash };
+}
+
+fn footVector(pose: deformation.Pose) Vec4 {
+    return .{ .x = pose.foot_roll, .y = pose.foot_pitch, .z = pose.foot_twist, .w = pose.foot_splay };
 }
 
 fn drawDeformedActor(instance_buffer: sg.Buffer, with_shadow_texture: bool) void {

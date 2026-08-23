@@ -34,7 +34,8 @@ ActorVertex deform_actor_vertex(
     vec4 inst_x,
     vec4 inst_y,
     vec4 inst_z,
-    vec4 deformation
+    vec4 deformation,
+    vec4 lower_motion
 ) {
     vec3 world_axis_x = vec3(inst_x.x, inst_y.x, inst_z.x);
     vec3 world_axis_y = vec3(inst_x.y, inst_y.y, inst_z.y);
@@ -59,17 +60,29 @@ ActorVertex deform_actor_vertex(
     vec3 side = normalize(vec3(1.0, 0.0, 0.0) - tangent * tangent.x);
     vec3 depth = normalize(cross(side, tangent));
 
-    float twist = deformation.z * height;
+    // Tofu's "feet" are the lower corners of the block. Rock that lower
+    // third around its center, with a small counter-twist and splay. The
+    // center of the bottom remains planted, avoiding visible root sliding.
+    float lower_weight = 1.0 - smoothstep(0.0, 0.34, height);
+    float foot_roll = lower_motion.x * lower_weight;
+    float foot_pitch = lower_motion.y * lower_weight;
+    float twist = deformation.z * height + lower_motion.z * lower_weight;
     float twist_cos = cos(twist);
     float twist_sin = sin(twist);
     vec3 twisted_side = side * twist_cos - depth * twist_sin;
     vec3 twisted_depth = depth * twist_cos + side * twist_sin;
-    float bulge = 1.0 + squash * sin(height * 3.14159265) * 0.5;
+    float bulge = 1.0 + squash * sin(height * 3.14159265) * 0.5
+        + lower_motion.w * lower_weight;
     vec3 actor_position = centerline
         + twisted_side * (position.x * scale_x * bulge)
         + twisted_depth * (position.z * scale_z * bulge);
+    actor_position.y += foot_roll * position.x * scale_x
+        + foot_pitch * position.z * scale_z;
+    vec3 foot_up = normalize(tangent
+        - twisted_side * foot_roll
+        - twisted_depth * foot_pitch);
     vec3 actor_normal = normalize(
-        twisted_side * normal.x + tangent * normal.y + twisted_depth * normal.z
+        twisted_side * normal.x + foot_up * normal.y + twisted_depth * normal.z
     );
 
     ActorVertex result;
@@ -116,6 +129,7 @@ void main() {}
 layout(binding = 0) uniform deformed_shadow_vs_params {
     mat4 light_view_projection;
     vec4 deformation; // bend x/z, height-progressive twist, squash
+    vec4 lower_motion; // foot roll/pitch, lower counter-twist, splay
 };
 
 layout(location = 0) in vec3 position;
@@ -124,7 +138,10 @@ layout(location = 2) in vec4 inst_y;
 layout(location = 3) in vec4 inst_z;
 
 void main() {
-    ActorVertex vertex = deform_actor_vertex(position, vec3(0.0, 1.0, 0.0), inst_x, inst_y, inst_z, deformation);
+    ActorVertex vertex = deform_actor_vertex(
+        position, vec3(0.0, 1.0, 0.0), inst_x, inst_y, inst_z,
+        deformation, lower_motion
+    );
     gl_Position = light_view_projection * vec4(vertex.position, 1.0);
 }
 @end
@@ -174,6 +191,7 @@ layout(binding = 0) uniform deformed_display_vs_params {
     mat4 view_projection;
     mat4 light_view_projection;
     vec4 deformation; // bend x/z, height-progressive twist, squash
+    vec4 lower_motion; // foot roll/pitch, lower counter-twist, splay
 };
 
 layout(location = 0) in vec3 position;
@@ -190,7 +208,9 @@ out vec3 world_position;
 out vec3 world_normal;
 
 void main() {
-    ActorVertex vertex = deform_actor_vertex(position, normal, inst_x, inst_y, inst_z, deformation);
+    ActorVertex vertex = deform_actor_vertex(
+        position, normal, inst_x, inst_y, inst_z, deformation, lower_motion
+    );
     vec4 wp = vec4(vertex.position, 1.0);
     world_position = vertex.position;
     world_normal = vertex.normal;

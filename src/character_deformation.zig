@@ -12,13 +12,23 @@ const Vec3 = math.Vec3;
 
 pub const Config = struct {
     max_bend: f32 = 0.32,
-    max_twist: f32 = 0.40,
+    max_twist: f32 = 0.55,
     max_squash: f32 = 0.05,
     gait_bend: f32 = 0.14,
     gait_twist: f32 = 0.08,
     movement_lean: f32 = 0.10,
     acceleration_lag: f32 = 0.12,
-    turn_lag: f32 = 0.045,
+    turn_lag: f32 = 0.070,
+    foot_roll: f32 = 0.11,
+    foot_pitch: f32 = 0.075,
+    foot_twist: f32 = 0.09,
+    foot_splay: f32 = 0.045,
+    foot_turn_lag: f32 = 0.012,
+    max_foot_rock: f32 = 0.14,
+    max_foot_twist: f32 = 0.18,
+    max_foot_splay: f32 = 0.055,
+    foot_spring_hz: f32 = 6.5,
+    foot_damping: f32 = 0.68,
     idle_bend: f32 = 0.025,
     idle_hz: f32 = 0.7,
     spring_hz: f32 = 3.5,
@@ -27,6 +37,7 @@ pub const Config = struct {
     aim_max_bend: f32 = 0.06,
     aim_max_twist: f32 = 0.10,
     aim_max_squash: f32 = 0.015,
+    aim_foot_scale: f32 = 0.65,
     aim_spring_hz: f32 = 6.0,
     aim_damping: f32 = 0.90,
     acceleration_reference: f32 = 24.0,
@@ -45,6 +56,10 @@ pub const Pose = extern struct {
     bend_z: f32 = 0,
     twist: f32 = 0,
     squash: f32 = 0,
+    foot_roll: f32 = 0,
+    foot_pitch: f32 = 0,
+    foot_twist: f32 = 0,
+    foot_splay: f32 = 0,
 };
 
 const Spring = struct {
@@ -77,6 +92,10 @@ pub const State = struct {
     bend_z: Spring = .{},
     twist: Spring = .{},
     squash: Spring = .{},
+    foot_roll: Spring = .{},
+    foot_pitch: Spring = .{},
+    foot_twist: Spring = .{},
+    foot_splay: Spring = .{},
 
     pub fn reset(self: *State, sample: Sample) void {
         self.* = .{
@@ -112,6 +131,7 @@ pub const State = struct {
         const gait_double = @sin(self.gait_phase * 2.0);
         const idle = @sin(self.idle_time * 2.0 * std.math.pi * config.idle_hz) * config.idle_bend;
         const dynamic_scale: f32 = if (sample.aiming) config.aim_scale else 1.0;
+        const foot_scale: f32 = if (sample.aiming) config.aim_foot_scale else 1.0;
         const damping = if (sample.aiming) config.aim_damping else config.damping;
         const spring_hz = if (sample.aiming) config.aim_spring_hz else config.spring_hz;
 
@@ -138,11 +158,40 @@ pub const State = struct {
             -config.max_squash,
             config.max_squash,
         );
+        // The reference block does not have literal legs. Its lower corners
+        // alternately load and unload like feet, while the upper mass trails.
+        // Drive that lower pivot from gait at a snappier frequency than the
+        // body spring so it remains readable from a high camera angle.
+        const foot_activity = @sqrt(activity);
+        const target_foot_roll = std.math.clamp(
+            foot_scale * gait * config.foot_roll * foot_activity,
+            -config.max_foot_rock,
+            config.max_foot_rock,
+        );
+        const target_foot_pitch = std.math.clamp(
+            foot_scale * gait_double * config.foot_pitch * foot_activity,
+            -config.max_foot_rock,
+            config.max_foot_rock,
+        );
+        const target_foot_twist = std.math.clamp(
+            foot_scale * (-gait * config.foot_twist * foot_activity - yaw_rate * config.foot_turn_lag),
+            -config.max_foot_twist,
+            config.max_foot_twist,
+        );
+        const target_foot_splay = std.math.clamp(
+            foot_scale * gait_double * config.foot_splay * foot_activity,
+            -config.max_foot_splay,
+            config.max_foot_splay,
+        );
 
         self.bend_x.update(target_x, spring_hz, damping, dt);
         self.bend_z.update(target_z, spring_hz, damping, dt);
         self.twist.update(target_twist, spring_hz, damping, dt);
         self.squash.update(target_squash, spring_hz, damping, dt);
+        self.foot_roll.update(target_foot_roll, config.foot_spring_hz, config.foot_damping, dt);
+        self.foot_pitch.update(target_foot_pitch, config.foot_spring_hz, config.foot_damping, dt);
+        self.foot_twist.update(target_foot_twist, config.foot_spring_hz, config.foot_damping, dt);
+        self.foot_splay.update(target_foot_splay, config.foot_spring_hz, config.foot_damping, dt);
 
         self.last_position = sample.position;
         self.last_velocity = velocity;
@@ -152,6 +201,10 @@ pub const State = struct {
             clampVectorLength(&result.bend_x, &result.bend_z, config.aim_max_bend);
             result.twist = std.math.clamp(result.twist, -config.aim_max_twist, config.aim_max_twist);
             result.squash = std.math.clamp(result.squash, -config.aim_max_squash, config.aim_max_squash);
+            result.foot_roll = std.math.clamp(result.foot_roll, -config.max_foot_rock * config.aim_foot_scale, config.max_foot_rock * config.aim_foot_scale);
+            result.foot_pitch = std.math.clamp(result.foot_pitch, -config.max_foot_rock * config.aim_foot_scale, config.max_foot_rock * config.aim_foot_scale);
+            result.foot_twist = std.math.clamp(result.foot_twist, -config.max_foot_twist * config.aim_foot_scale, config.max_foot_twist * config.aim_foot_scale);
+            result.foot_splay = std.math.clamp(result.foot_splay, -config.max_foot_splay * config.aim_foot_scale, config.max_foot_splay * config.aim_foot_scale);
         }
         return result;
     }
@@ -165,6 +218,10 @@ pub const State = struct {
             .bend_z = bend_z,
             .twist = std.math.clamp(self.twist.value, -config.max_twist, config.max_twist),
             .squash = std.math.clamp(self.squash.value, -config.max_squash, config.max_squash),
+            .foot_roll = std.math.clamp(self.foot_roll.value, -config.max_foot_rock, config.max_foot_rock),
+            .foot_pitch = std.math.clamp(self.foot_pitch.value, -config.max_foot_rock, config.max_foot_rock),
+            .foot_twist = std.math.clamp(self.foot_twist.value, -config.max_foot_twist, config.max_foot_twist),
+            .foot_splay = std.math.clamp(self.foot_splay.value, -config.max_foot_splay, config.max_foot_splay),
         };
     }
 };
@@ -219,6 +276,7 @@ test "aiming suppresses movement deformation" {
     try std.testing.expect(@abs(aimed_pose.bend_z) < @abs(free_pose.bend_z));
     try std.testing.expect(@sqrt(aimed_pose.bend_x * aimed_pose.bend_x + aimed_pose.bend_z * aimed_pose.bend_z) <= config.aim_max_bend);
     try std.testing.expect(@abs(aimed_pose.twist) <= config.aim_max_twist);
+    try std.testing.expect(@abs(aimed_pose.foot_roll) < @abs(free_pose.foot_roll));
 }
 
 test "entering aim immediately caps a carried locomotion bend" {
@@ -234,6 +292,10 @@ test "entering aim immediately caps a carried locomotion bend" {
     try std.testing.expect(@sqrt(aimed.bend_x * aimed.bend_x + aimed.bend_z * aimed.bend_z) <= config.aim_max_bend);
     try std.testing.expect(@abs(aimed.twist) <= config.aim_max_twist);
     try std.testing.expect(@abs(aimed.squash) <= config.aim_max_squash);
+    try std.testing.expect(@abs(aimed.foot_roll) <= config.max_foot_rock * config.aim_foot_scale);
+    try std.testing.expect(@abs(aimed.foot_pitch) <= config.max_foot_rock * config.aim_foot_scale);
+    try std.testing.expect(@abs(aimed.foot_twist) <= config.max_foot_twist * config.aim_foot_scale);
+    try std.testing.expect(@abs(aimed.foot_splay) <= config.max_foot_splay * config.aim_foot_scale);
 }
 
 test "deformation is bounded during a rapid turn" {
@@ -241,12 +303,33 @@ test "deformation is bounded during a rapid turn" {
     var state: State = .{};
     state.reset(sampleAt(0, 0, 0, false));
     var pose: Pose = .{};
+    var peak_twist: f32 = 0;
     for (0..20) |index| {
         const yaw = std.math.pi * @as(f32, @floatFromInt(index + 1)) / 20.0;
         pose = state.update(config, sampleAt(0, 0, yaw, false), 1.0 / 60.0);
+        peak_twist = @max(peak_twist, @abs(pose.twist));
     }
     try std.testing.expect(@abs(pose.twist) <= config.max_twist);
     try std.testing.expect(@sqrt(pose.bend_x * pose.bend_x + pose.bend_z * pose.bend_z) <= config.max_bend);
+    try std.testing.expect(peak_twist > 0.35);
+    try std.testing.expect(@abs(pose.foot_twist) <= config.max_foot_twist);
+}
+
+test "walking rocks the lower corners like feet" {
+    const config: Config = .{};
+    var state: State = .{};
+    state.reset(sampleAt(0, 0, 0, false));
+    var z: f32 = 0;
+    var peak_rock: f32 = 0;
+    var peak_splay: f32 = 0;
+    for (0..60) |_| {
+        z += 4.0 / 60.0;
+        const pose = state.update(config, sampleAt(0, z, 0, false), 1.0 / 60.0);
+        peak_rock = @max(peak_rock, @sqrt(pose.foot_roll * pose.foot_roll + pose.foot_pitch * pose.foot_pitch));
+        peak_splay = @max(peak_splay, @abs(pose.foot_splay));
+    }
+    try std.testing.expect(peak_rock > 0.05);
+    try std.testing.expect(peak_splay > 0.015);
 }
 
 test "render-rate chunks converge to the same walking pose" {
@@ -269,4 +352,8 @@ test "render-rate chunks converge to the same walking pose" {
     try std.testing.expectApproxEqAbs(coarse_pose.bend_z, fine_pose.bend_z, 0.015);
     try std.testing.expectApproxEqAbs(coarse_pose.twist, fine_pose.twist, 0.015);
     try std.testing.expectApproxEqAbs(coarse_pose.squash, fine_pose.squash, 0.015);
+    try std.testing.expectApproxEqAbs(coarse_pose.foot_roll, fine_pose.foot_roll, 0.02);
+    try std.testing.expectApproxEqAbs(coarse_pose.foot_pitch, fine_pose.foot_pitch, 0.02);
+    try std.testing.expectApproxEqAbs(coarse_pose.foot_twist, fine_pose.foot_twist, 0.02);
+    try std.testing.expectApproxEqAbs(coarse_pose.foot_splay, fine_pose.foot_splay, 0.02);
 }
