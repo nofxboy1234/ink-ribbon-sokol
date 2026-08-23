@@ -12,6 +12,8 @@ const level = @import("level.zig");
 const controller = @import("character_controller.zig");
 const combat = @import("combat.zig");
 const hunter = @import("hunter.zig");
+const deformation = @import("character_deformation.zig");
+const deformed_box = @import("deformed_box.zig");
 const navmesh = @import("navmesh.zig");
 const saves = @import("saves.zig");
 const camera = @import("third_person_camera.zig");
@@ -195,6 +197,9 @@ const RenderState = struct {
     // Shared mesh geometry (all shapes built into one vertex/index buffer).
     vertex_buffer: sg.Buffer = .{},
     index_buffer: sg.Buffer = .{},
+    // The actors use a separate vertically subdivided mesh so only they bend.
+    actor_vertex_buffer: sg.Buffer = .{},
+    actor_index_buffer: sg.Buffer = .{},
     // Per-instance transform buffers: static level, dynamic character, debug capsule.
     level_instances: sg.Buffer = .{},
     roof_instance: sg.Buffer = .{},
@@ -208,11 +213,13 @@ const RenderState = struct {
     level_instance_count: usize = 0,
     roof_instance_count: usize = 0,
     display_pipeline: sg.Pipeline = .{},
+    actor_display_pipeline: sg.Pipeline = .{},
     route_pipeline: sg.Pipeline = .{},
     map_actor_pipeline: sg.Pipeline = .{},
     debug_pipeline: sg.Pipeline = .{},
     reticle_pipeline: sg.Pipeline = .{},
     shadow_pipeline: sg.Pipeline = .{},
+    actor_shadow_pipeline: sg.Pipeline = .{},
     shadow_pass: sg.Pass = .{},
     shadow_view: sg.View = .{},
     shadow_sampler: sg.Sampler = .{},
@@ -239,6 +246,9 @@ const GameState = struct {
     combat_config: combat.Config = .{},
     combat: combat.State = .{},
     combat_visuals: CombatVisuals = .{},
+    deformation_config: deformation.Config = .{},
+    player_deformation: deformation.State = .{},
+    hunter_deformation: deformation.State = .{},
     hunter_friendly: bool = false,
     // Current transient HUD message and its remaining seconds.
     notice: HudNotice = .none,
@@ -406,7 +416,7 @@ fn frame() callconv(.c) void {
         game.input.mouse_delta = .{};
     }
     uploadMapRoute();
-    draw(render_position);
+    draw(render_position, frame_time, gameplay_active);
 }
 
 fn cleanup() callconv(.c) void {
@@ -642,7 +652,7 @@ fn addStaticBox(box: level.Box) void {
 // hand-authored, so only the hunter's patrol randomness derives from this.
 fn seedSpawnRandomness() void {
     var stack_marker: u32 = 0;
-    const entropy = @as(u64, @bitCast(@intFromPtr(&stack_marker))) ^ @as(u64, @bitCast(@intFromPtr(&game)));
+    const entropy = @as(u64, @intCast(@intFromPtr(&stack_marker))) ^ @as(u64, @intCast(@intFromPtr(&game)));
     hunter.seedRandom(@truncate(entropy));
 }
 
@@ -679,6 +689,7 @@ fn placePlayerFromSlot(slot: saves.Slot) void {
     game.quick_turn = .{};
     game.combat = combat.State.init(game.combat_config, slot.magazine, slot.reserve);
     game.combat_visuals = .{};
+    game.player_deformation = .{};
 }
 
 // Place both actors, then reset the round. The player resumes from the most
@@ -695,6 +706,7 @@ fn spawnPlayerAndHunter() void {
         game.quick_turn = .{};
         game.combat = combat.State.init(game.combat_config, game.combat_config.magazine_capacity, game.combat_config.starting_reserve);
     }
+    game.player_deformation = .{};
     resetHunter(game.character.position);
     game.clock = .{};
     game.map = .{};
@@ -715,6 +727,7 @@ fn resetHunter(player_pos: b3.b3Pos) void {
     game.combat.hunter_health = game.combat_config.hunter_health;
     game.combat.knockdown_timer = 0;
     game.combat_visuals.hunter_hit_flash = 0;
+    game.hunter_deformation = .{};
 }
 
 // The hunter catches the player when their capsules touch horizontally.
@@ -741,6 +754,7 @@ fn respawnAfterCatch() void {
         game.combat = combat.State.init(game.combat_config, game.combat_config.magazine_capacity, game.combat_config.starting_reserve);
     }
 
+    game.player_deformation = .{};
     resetHunter(game.character.position);
     game.notice = .caught;
     game.notice_timer = notice_seconds;
@@ -964,6 +978,16 @@ fn initRenderer() void {
     game.render.capsule_sphere_range = sshape.elementRange(builder);
     game.render.vertex_buffer = sg.makeBuffer(sshape.vertexBufferDesc(builder));
     game.render.index_buffer = sg.makeBuffer(sshape.indexBufferDesc(builder));
+    const actor_mesh = deformed_box.build();
+    game.render.actor_vertex_buffer = sg.makeBuffer(.{
+        .data = sg.asRange(&actor_mesh.vertices),
+        .label = "character-deformed-actor-vertices",
+    });
+    game.render.actor_index_buffer = sg.makeBuffer(.{
+        .usage = .{ .index_buffer = true },
+        .data = sg.asRange(&actor_mesh.indices),
+        .label = "character-deformed-actor-indices",
+    });
 
     // Runtime-sized instance counts are uploaded into capacity buffers whenever
     // the level is (re)loaded. The roof remains separate for map mode.
@@ -1034,6 +1058,33 @@ fn initRenderer() void {
         .index_type = .UINT16,
         .cull_mode = .BACK,
         .label = "character-scene-pipeline",
+    });
+
+    var actor_layout: sg.VertexLayoutState = .{};
+    actor_layout.buffers[0].stride = @sizeOf(deformed_box.Vertex);
+    actor_layout.buffers[1] = .{ .step_func = .PER_INSTANCE, .stride = @sizeOf(Instance) };
+    actor_layout.attrs[shd.ATTR_deformed_display_position] = .{
+        .format = .FLOAT3,
+        .offset = @offsetOf(deformed_box.Vertex, "position"),
+    };
+    actor_layout.attrs[shd.ATTR_deformed_display_normal] = .{
+        .format = .FLOAT3,
+        .offset = @offsetOf(deformed_box.Vertex, "normal"),
+    };
+    actor_layout.attrs[shd.ATTR_deformed_display_inst_x] = instanceAttr(0);
+    actor_layout.attrs[shd.ATTR_deformed_display_inst_y] = instanceAttr(16);
+    actor_layout.attrs[shd.ATTR_deformed_display_inst_z] = instanceAttr(32);
+    actor_layout.attrs[shd.ATTR_deformed_display_inst_color] = instanceAttr(48);
+    game.render.actor_display_pipeline = sg.makePipeline(.{
+        .shader = sg.makeShader(shd.deformedDisplayShaderDesc(sg.queryBackend())),
+        .layout = actor_layout,
+        .depth = .{ .write_enabled = true, .compare = .LESS_EQUAL },
+        .index_type = .UINT16,
+        // Strong bends can briefly invert a projected triangle at grazing
+        // camera angles. Actors are tiny meshes, so render them double-sided
+        // instead of allowing one of their six faces to disappear.
+        .cull_mode = .NONE,
+        .label = "character-deformed-actor-pipeline",
     });
 
     var route_layout: sg.VertexLayoutState = .{};
@@ -1121,6 +1172,27 @@ fn initRenderer() void {
         .label = "character-shadow-pipeline",
     });
 
+    var actor_shadow_layout: sg.VertexLayoutState = .{};
+    actor_shadow_layout.buffers[0].stride = @sizeOf(deformed_box.Vertex);
+    actor_shadow_layout.buffers[1] = .{ .step_func = .PER_INSTANCE, .stride = @sizeOf(Instance) };
+    actor_shadow_layout.attrs[shd.ATTR_deformed_shadow_position] = .{
+        .format = .FLOAT3,
+        .offset = @offsetOf(deformed_box.Vertex, "position"),
+    };
+    actor_shadow_layout.attrs[shd.ATTR_deformed_shadow_inst_x] = instanceAttr(0);
+    actor_shadow_layout.attrs[shd.ATTR_deformed_shadow_inst_y] = instanceAttr(16);
+    actor_shadow_layout.attrs[shd.ATTR_deformed_shadow_inst_z] = instanceAttr(32);
+    game.render.actor_shadow_pipeline = sg.makePipeline(.{
+        .shader = sg.makeShader(shd.deformedShadowShaderDesc(sg.queryBackend())),
+        .layout = actor_shadow_layout,
+        .depth = .{ .pixel_format = .DEPTH, .write_enabled = true, .compare = .LESS_EQUAL },
+        .colors = noColorTargets(),
+        .sample_count = 1,
+        .index_type = .UINT16,
+        .cull_mode = .NONE,
+        .label = "character-deformed-actor-shadow-pipeline",
+    });
+
     const light_position = Vec3{ .x = 20, .y = 32, .z = -24 };
     // Directional light = orthographic projection centered on the world origin.
     const light_view = Mat4.lookAtRh(light_position, .{}, .{ .y = 1 });
@@ -1129,7 +1201,7 @@ fn initRenderer() void {
     game.render.pass_action.colors[0] = .{ .load_action = .CLEAR, .clear_value = .{ .r = 0.035, .g = 0.045, .b = 0.055, .a = 1 } };
 }
 
-fn draw(position: b3.b3Pos) void {
+fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
     // Rebuild the character's instance record from its interpolated position.
     const instance = makeInstance(
         .{ .x = position.x, .y = position.y, .z = position.z },
@@ -1183,6 +1255,32 @@ fn draw(position: b3.b3Pos) void {
     sg.updateBuffer(game.render.hunter_instance, sg.asRange(&hunter_instance));
     updateImpactInstances();
 
+    const player_sample: deformation.Sample = .{
+        .position = .{ .x = position.x, .y = position.y, .z = position.z },
+        .yaw = game.character.yaw,
+        .height = character_half_extents.y * 2.0,
+        .max_speed = game.character_config.run_speed,
+        .aiming = game.input.aiming,
+    };
+    const hunter_sample: deformation.Sample = .{
+        .position = .{ .x = hunter_render.x, .y = hunter_render.y, .z = hunter_render.z },
+        .yaw = game.hunter.yaw,
+        .height = hunter_half_extents.y * 2.0,
+        .max_speed = game.hunter_config.far_speed,
+    };
+    const player_pose = if (gameplay_active)
+        game.player_deformation.update(game.deformation_config, player_sample, frame_time)
+    else blk: {
+        game.player_deformation.reset(player_sample);
+        break :blk deformation.Pose{};
+    };
+    const hunter_pose = if (gameplay_active and !knocked_down)
+        game.hunter_deformation.update(game.deformation_config, hunter_sample, frame_time)
+    else blk: {
+        game.hunter_deformation.reset(hunter_sample);
+        break :blk deformation.Pose{};
+    };
+
     // Pass 1: render everything from the sun's viewpoint, depth-only, to the
     // shadow map. The character draws as a second single-instance call. The
     // roof is skipped in map mode so the interior is lit from above.
@@ -1191,10 +1289,21 @@ fn draw(position: b3.b3Pos) void {
     sg.applyPipeline(game.render.shadow_pipeline);
     sg.applyUniforms(shd.UB_shadow_vs_params, sg.asRange(&shadow_params));
     drawInstances(game.render.level_instances, game.render.box_range, 0, game.render.level_instance_count, false);
-    drawInstances(game.render.character_instance, game.render.box_range, 0, 1, false);
-    drawInstances(game.render.hunter_instance, game.render.box_range, 0, 1, false);
-    if (!game.map.active) {
+    if (game.map.active) {
+        drawInstances(game.render.character_instance, game.render.box_range, 0, 1, false);
+        drawInstances(game.render.hunter_instance, game.render.box_range, 0, 1, false);
+    } else {
         drawInstances(game.render.roof_instance, game.render.box_range, 0, game.render.roof_instance_count, false);
+        sg.applyPipeline(game.render.actor_shadow_pipeline);
+        var actor_shadow_params: shd.DeformedShadowVsParams = .{
+            .light_view_projection = game.render.light_view_projection,
+            .deformation = poseVector(player_pose),
+        };
+        sg.applyUniforms(shd.UB_deformed_shadow_vs_params, sg.asRange(&actor_shadow_params));
+        drawDeformedActor(game.render.character_instance, false);
+        actor_shadow_params.deformation = poseVector(hunter_pose);
+        sg.applyUniforms(shd.UB_deformed_shadow_vs_params, sg.asRange(&actor_shadow_params));
+        drawDeformedActor(game.render.hunter_instance, false);
     }
     sg.endPass();
 
@@ -1223,6 +1332,9 @@ fn draw(position: b3.b3Pos) void {
     sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));
     sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
     drawInstances(game.render.level_instances, game.render.box_range, 0, game.render.level_instance_count, true);
+    if (!game.map.active) {
+        drawInstances(game.render.roof_instance, game.render.box_range, 0, game.render.roof_instance_count, true);
+    }
     if (game.map.active) {
         const route_params: shd.RouteVsParams = .{ .view_projection = game.camera.view_projection };
         sg.applyPipeline(game.render.route_pipeline);
@@ -1239,11 +1351,18 @@ fn draw(position: b3.b3Pos) void {
         drawInstances(game.render.character_instance, game.render.box_range, 0, 1, false);
         drawInstances(game.render.hunter_instance, game.render.box_range, 0, 1, false);
     } else {
-        drawInstances(game.render.character_instance, game.render.box_range, 0, 1, true);
-        drawInstances(game.render.hunter_instance, game.render.box_range, 0, 1, true);
-    }
-    if (!game.map.active) {
-        drawInstances(game.render.roof_instance, game.render.box_range, 0, game.render.roof_instance_count, true);
+        sg.applyPipeline(game.render.actor_display_pipeline);
+        sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
+        var actor_vs_params: shd.DeformedDisplayVsParams = .{
+            .view_projection = game.camera.view_projection,
+            .light_view_projection = game.render.light_view_projection,
+            .deformation = poseVector(player_pose),
+        };
+        sg.applyUniforms(shd.UB_deformed_display_vs_params, sg.asRange(&actor_vs_params));
+        drawDeformedActor(game.render.character_instance, true);
+        actor_vs_params.deformation = poseVector(hunter_pose);
+        sg.applyUniforms(shd.UB_deformed_display_vs_params, sg.asRange(&actor_vs_params));
+        drawDeformedActor(game.render.hunter_instance, true);
     }
     if (!game.map.active and game.render.impact_instance_count > 0) {
         const impact_params: shd.RouteVsParams = .{ .view_projection = game.camera.view_projection };
@@ -1454,6 +1573,23 @@ fn formatTimestamp(buffer: []u8, timestamp: i64) []const u8 {
         day_seconds.getHoursIntoDay(),
         day_seconds.getMinutesIntoHour(),
     }) catch "";
+}
+
+fn poseVector(pose: deformation.Pose) Vec4 {
+    return .{ .x = pose.bend_x, .y = pose.bend_z, .z = pose.twist, .w = pose.squash };
+}
+
+fn drawDeformedActor(instance_buffer: sg.Buffer, with_shadow_texture: bool) void {
+    var bindings: sg.Bindings = .{};
+    bindings.vertex_buffers[0] = game.render.actor_vertex_buffer;
+    bindings.vertex_buffers[1] = instance_buffer;
+    bindings.index_buffer = game.render.actor_index_buffer;
+    if (with_shadow_texture) {
+        bindings.views[shd.VIEW_shadow_map] = game.render.shadow_view;
+        bindings.samplers[shd.SMP_shadow_sampler] = game.render.shadow_sampler;
+    }
+    sg.applyBindings(bindings);
+    sg.draw(0, deformed_box.index_count, 1);
 }
 
 // Draw `count` instances of one mesh from the shared buffers. The debug

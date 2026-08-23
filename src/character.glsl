@@ -19,6 +19,70 @@ float sample_shadow_pcf(texture2D tex, sampler smp, vec3 position) {
 }
 @end
 
+@block actor_deformation
+struct ActorVertex {
+    vec3 position;
+    vec3 normal;
+};
+
+// Bend in actor-local metres, then rebuild a moving cross-section frame along
+// the curved centerline. The instance rows are decomposed into scale, yaw axes,
+// and translation so bend angles behave the same on differently sized actors.
+ActorVertex deform_actor_vertex(
+    vec3 position,
+    vec3 normal,
+    vec4 inst_x,
+    vec4 inst_y,
+    vec4 inst_z,
+    vec4 deformation
+) {
+    vec3 world_axis_x = vec3(inst_x.x, inst_y.x, inst_z.x);
+    vec3 world_axis_y = vec3(inst_x.y, inst_y.y, inst_z.y);
+    vec3 world_axis_z = vec3(inst_x.z, inst_y.z, inst_z.z);
+    float scale_x = length(world_axis_x);
+    float scale_y = length(world_axis_y);
+    float scale_z = length(world_axis_z);
+    vec3 axis_x = world_axis_x / scale_x;
+    vec3 axis_y = world_axis_y / scale_y;
+    vec3 axis_z = world_axis_z / scale_z;
+
+    float height = clamp(position.y + 0.5, 0.0, 1.0);
+    float squash = deformation.w;
+    float bent_height = scale_y * (1.0 - squash);
+    vec2 bend = deformation.xy;
+    vec3 centerline = vec3(
+        bend.x * bent_height * 0.5 * height * height,
+        -scale_y * 0.5 + bent_height * height - dot(bend, bend) * bent_height * height * height * height / 6.0,
+        bend.y * bent_height * 0.5 * height * height
+    );
+    vec3 tangent = normalize(vec3(bend.x * height, 1.0 - 0.5 * dot(bend, bend) * height * height, bend.y * height));
+    vec3 side = normalize(vec3(1.0, 0.0, 0.0) - tangent * tangent.x);
+    vec3 depth = normalize(cross(side, tangent));
+
+    float twist = deformation.z * height;
+    float twist_cos = cos(twist);
+    float twist_sin = sin(twist);
+    vec3 twisted_side = side * twist_cos - depth * twist_sin;
+    vec3 twisted_depth = depth * twist_cos + side * twist_sin;
+    float bulge = 1.0 + squash * sin(height * 3.14159265) * 0.5;
+    vec3 actor_position = centerline
+        + twisted_side * (position.x * scale_x * bulge)
+        + twisted_depth * (position.z * scale_z * bulge);
+    vec3 actor_normal = normalize(
+        twisted_side * normal.x + tangent * normal.y + twisted_depth * normal.z
+    );
+
+    ActorVertex result;
+    vec3 translation = vec3(inst_x.w, inst_y.w, inst_z.w);
+    result.position = translation
+        + axis_x * actor_position.x + axis_y * actor_position.y + axis_z * actor_position.z;
+    result.normal = normalize(
+        axis_x * actor_normal.x + axis_y * actor_normal.y + axis_z * actor_normal.z
+    );
+    return result;
+}
+@end
+
 @vs shadow_vs
 @glsl_options fixup_clipspace
 layout(binding = 0) uniform shadow_vs_params {
@@ -45,6 +109,27 @@ void main() {}
 @end
 
 @program shadow shadow_vs shadow_fs
+
+@vs deformed_shadow_vs
+@glsl_options fixup_clipspace
+@include_block actor_deformation
+layout(binding = 0) uniform deformed_shadow_vs_params {
+    mat4 light_view_projection;
+    vec4 deformation; // bend x/z, height-progressive twist, squash
+};
+
+layout(location = 0) in vec3 position;
+layout(location = 1) in vec4 inst_x;
+layout(location = 2) in vec4 inst_y;
+layout(location = 3) in vec4 inst_z;
+
+void main() {
+    ActorVertex vertex = deform_actor_vertex(position, vec3(0.0, 1.0, 0.0), inst_x, inst_y, inst_z, deformation);
+    gl_Position = light_view_projection * vec4(vertex.position, 1.0);
+}
+@end
+
+@program deformed_shadow deformed_shadow_vs shadow_fs
 
 @vs display_vs
 layout(binding = 0) uniform display_vs_params {
@@ -77,6 +162,42 @@ void main() {
     light_position = light_view_projection * wp;
     #if !SOKOL_GLSL
         // Fix coordinate-system mismatch for non-GL backends.
+        light_position.y = -light_position.y;
+    #endif
+    gl_Position = view_projection * wp;
+}
+@end
+
+@vs deformed_display_vs
+@include_block actor_deformation
+layout(binding = 0) uniform deformed_display_vs_params {
+    mat4 view_projection;
+    mat4 light_view_projection;
+    vec4 deformation; // bend x/z, height-progressive twist, squash
+};
+
+layout(location = 0) in vec3 position;
+layout(location = 1) in vec3 normal;
+layout(location = 2) in vec4 inst_x;
+layout(location = 3) in vec4 inst_y;
+layout(location = 4) in vec4 inst_z;
+layout(location = 5) in vec4 inst_color;
+
+out vec3 color;
+out float alpha;
+out vec4 light_position;
+out vec3 world_position;
+out vec3 world_normal;
+
+void main() {
+    ActorVertex vertex = deform_actor_vertex(position, normal, inst_x, inst_y, inst_z, deformation);
+    vec4 wp = vec4(vertex.position, 1.0);
+    world_position = vertex.position;
+    world_normal = vertex.normal;
+    color = inst_color.rgb;
+    alpha = inst_color.a;
+    light_position = light_view_projection * wp;
+    #if !SOKOL_GLSL
         light_position.y = -light_position.y;
     #endif
     gl_Position = view_projection * wp;
@@ -157,6 +278,7 @@ void main() {
 @end
 
 @program display display_vs display_fs
+@program deformed_display deformed_display_vs display_fs
 
 @vs route_vs
 layout(binding = 0) uniform route_vs_params {

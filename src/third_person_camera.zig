@@ -17,6 +17,9 @@ pub const Config = struct {
     hip_fov_degrees: f32 = 58,
     aim_fov_degrees: f32 = 50,
     aim_transition_rate: f32 = 12,
+    // Vertical aiming primarily rotates the sightline from shoulder height.
+    // Retaining only a little boom orbit avoids lifting the camera into roofs.
+    aim_vertical_orbit_scale: f32 = 0.15,
     pitch_min: f32 = -0.65,
     pitch_max: f32 = 0.75,
     sensitivity: f32 = 0.0025,
@@ -93,9 +96,16 @@ pub fn update(
     };
     const distance = lerpScalar(config.hip_distance, config.aim_distance, state.aim_alpha);
     const shoulder_offset = lerpScalar(config.hip_shoulder_offset, config.aim_shoulder_offset, state.aim_alpha);
+    const boom_pitch = verticalOrbitPitch(rendered_pitch, state.aim_alpha, config.aim_vertical_orbit_scale);
+    const boom_cos_pitch = @cos(boom_pitch);
+    const boom_forward = Vec3{
+        .x = @sin(state.visual_yaw) * boom_cos_pitch,
+        .y = -@sin(boom_pitch),
+        .z = @cos(state.visual_yaw) * boom_cos_pitch,
+    };
     const desired_eye = Vec3.add(
         Vec3.add(state.pivot, Vec3.scale(right, shoulder_offset)),
-        Vec3.scale(state.forward, -distance),
+        Vec3.scale(boom_forward, -distance),
     );
     const safe_fraction = collideCameraFraction(config, world, state.pivot, desired_eye);
     if (!state.initialized) state.boom_fraction = safe_fraction;
@@ -168,6 +178,10 @@ fn lerpAngle(value: f32, target: f32, alpha: f32) f32 {
     return value + delta * alpha;
 }
 
+fn verticalOrbitPitch(pitch: f32, aim_alpha: f32, aim_scale: f32) f32 {
+    return pitch * lerpScalar(1.0, aim_scale, aim_alpha);
+}
+
 test "exponential smoothing is frame-rate independent" {
     const one_step = 1.0 - exponentialAlpha(8, 1.0 / 30.0);
     const two_steps = std.math.pow(f32, 1.0 - exponentialAlpha(8, 1.0 / 60.0), 2);
@@ -177,4 +191,10 @@ test "exponential smoothing is frame-rate independent" {
 test "visual yaw smoothing follows the shortest arc" {
     const result = lerpAngle(3.0, -3.0, 0.5);
     try std.testing.expect(result > 3.0);
+}
+
+test "aiming rotates the sightline more than the camera boom" {
+    const pitch: f32 = 0.75;
+    try std.testing.expectApproxEqAbs(pitch, verticalOrbitPitch(pitch, 0, 0.15), 0.00001);
+    try std.testing.expectApproxEqAbs(pitch * 0.15, verticalOrbitPitch(pitch, 1, 0.15), 0.00001);
 }
