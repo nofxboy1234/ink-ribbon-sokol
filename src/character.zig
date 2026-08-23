@@ -875,6 +875,7 @@ fn fireShot(focus: f32) void {
     filter.maskBits = controller.level_category;
     const level_hit = b3.b3World_CastRayClosest(game.world, origin, ray_translation, filter);
     const level_fraction = if (level_hit.hit) level_hit.fraction else 1.0;
+    const box_hit = closestShootableBox(origin, ray_translation, level_fraction + 0.002);
 
     const hunter_local_origin = b3.b3Vec3{
         .x = origin.x - game.hunter.position.x,
@@ -903,12 +904,52 @@ fn fireShot(focus: f32) void {
             game.audio.play(.hunter_hit);
         }
         game.combat_visuals.hunter_hit_flash = hunter_hit_flash_seconds;
+    } else if (box_hit) |box_index| {
+        _ = breakBox(box_index);
     } else if (level_hit.hit) {
-        addImpact(.{ .x = level_hit.point.x, .y = level_hit.point.y, .z = level_hit.point.z }, level_hit.normal);
-        game.audio.play(.bullet_impact);
+        const hit_body = b3.b3Shape_GetBody(level_hit.shapeId);
+        if (breakableIndexForBody(hit_body)) |box_index| {
+            _ = breakBox(box_index);
+        } else {
+            addImpact(.{ .x = level_hit.point.x, .y = level_hit.point.y, .z = level_hit.point.z }, level_hit.normal);
+            game.audio.play(.bullet_impact);
+        }
     }
     alertHunterToGunshot();
     camera.addRecoil(&game.camera, shot_recoil_radians);
+}
+
+fn closestShootableBox(origin: b3.b3Pos, translation: b3.b3Vec3, max_fraction: f32) ?usize {
+    var closest_index: ?usize = null;
+    var closest_fraction = max_fraction;
+    for (breakable_defs, 0..) |box, index| {
+        const bit = @as(u32, 1) << @intCast(index);
+        if (game.broken_boxes & bit != 0) continue;
+        const fraction = rayBoxFraction(origin, translation, box.position, breakable_half_extent) orelse continue;
+        if (fraction > closest_fraction) continue;
+        closest_fraction = fraction;
+        closest_index = index;
+    }
+    return closest_index;
+}
+
+fn rayBoxFraction(origin: b3.b3Pos, translation: b3.b3Vec3, center: Vec3, half_extent: f32) ?f32 {
+    var minimum: f32 = 0;
+    var maximum: f32 = 1;
+    if (!clipRayAxis(origin.x, translation.x, center.x - half_extent, center.x + half_extent, &minimum, &maximum)) return null;
+    if (!clipRayAxis(origin.y, translation.y, center.y - half_extent, center.y + half_extent, &minimum, &maximum)) return null;
+    if (!clipRayAxis(origin.z, translation.z, center.z - half_extent, center.z + half_extent, &minimum, &maximum)) return null;
+    return minimum;
+}
+
+fn clipRayAxis(origin: f32, translation: f32, lower: f32, upper: f32, minimum: *f32, maximum: *f32) bool {
+    if (@abs(translation) < 0.000001) return origin >= lower and origin <= upper;
+    var near = (lower - origin) / translation;
+    var far = (upper - origin) / translation;
+    if (near > far) std.mem.swap(f32, &near, &far);
+    minimum.* = @max(minimum.*, near);
+    maximum.* = @min(maximum.*, far);
+    return minimum.* <= maximum.*;
 }
 
 fn addImpact(point: Vec3, normal: b3.b3Vec3) void {
@@ -984,6 +1025,14 @@ fn syncBreakableCollision() void {
         const bit = @as(u32, 1) << @intCast(index);
         setBreakableCollision(index, game.broken_boxes & bit == 0);
     }
+}
+
+fn breakableIndexForBody(body: b3.b3BodyId) ?usize {
+    const body_key = b3.b3StoreBodyId(body);
+    for (game.breakable_bodies, 0..) |candidate, index| {
+        if (b3.b3Body_IsValid(candidate) and b3.b3StoreBodyId(candidate) == body_key) return index;
+    }
+    return null;
 }
 
 // Mix ASLR-derived addresses into the PRNG seed: both a stack local and the
@@ -1316,11 +1365,7 @@ fn updateActionsAndDebris(dt: f32) void {
         game.kick.timer += dt;
         if (!game.kick.broke_box and game.kick.timer >= 0.30) {
             game.kick.broke_box = true;
-            setBreakableCollision(game.kick.target, false);
-            game.broken_boxes |= @as(u32, 1) << @intCast(game.kick.target);
-            revealBoxDrop(game.kick.target);
-            spawnBoxDebris(game.kick.target);
-            game.audio.play(.box_break);
+            _ = breakBox(game.kick.target);
         }
         if (game.kick.timer >= action_duration) game.kick = .{};
     }
@@ -1348,6 +1393,17 @@ fn updateActionsAndDebris(dt: f32) void {
         piece.yaw += piece.angular_velocity * dt;
         piece.pitch += piece.angular_velocity * 0.73 * dt;
     }
+}
+
+fn breakBox(index: usize) bool {
+    const bit = @as(u32, 1) << @intCast(index);
+    if (game.broken_boxes & bit != 0) return false;
+    setBreakableCollision(index, false);
+    game.broken_boxes |= bit;
+    revealBoxDrop(index);
+    spawnBoxDebris(index);
+    game.audio.play(.box_break);
+    return true;
 }
 
 fn collectInteractionItem(target: InteractionTarget) void {
@@ -3056,6 +3112,23 @@ test "box drop roll can produce nothing ammo or health" {
     const ammo = rollBoxDrop(box_item_chance - 0.01, box_health_share);
     try std.testing.expectEqual(inventory.ItemKind.ammo, ammo.kind);
     try std.testing.expectEqual(box_ammo_amount, ammo.amount);
+}
+
+test "gun ray intersects a breakable box and rejects a miss" {
+    const center = Vec3{ .x = 2, .y = 0.42, .z = -3 };
+    const hit = rayBoxFraction(
+        .{ .x = 2, .y = 0.42, .z = 2 },
+        .{ .z = -10 },
+        center,
+        breakable_half_extent,
+    ) orelse return error.TestUnexpectedResult;
+    try std.testing.expectApproxEqAbs(@as(f32, 0.458), hit, 0.0001);
+    try std.testing.expect(rayBoxFraction(
+        .{ .x = 3, .y = 0.42, .z = 2 },
+        .{ .z = -10 },
+        center,
+        breakable_half_extent,
+    ) == null);
 }
 
 test "authored world items occupy walkable player cells" {

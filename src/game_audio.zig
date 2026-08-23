@@ -111,7 +111,7 @@ fn duration(event: Event) f32 {
         .hunter_knockdown => 0.42,
         .box_break => 0.52,
         .pickup => 0.24,
-        .heal => 0.62,
+        .heal => 0.86,
         .reload_start => 0.18,
         .reload_complete => 0.28,
         .punch => 0.30,
@@ -164,9 +164,12 @@ fn voiceSample(voice: Voice, sample_rate: f32) f32 {
         },
         .heal => blk: {
             const fade = @sin(std.math.pi * progress);
-            const tone_a = @sin(tau * 440.0 * time);
-            const tone_b = @sin(tau * (660.0 + 180.0 * progress) * time);
-            break :blk (tone_a * 0.11 + tone_b * 0.09) * fade;
+            // A soft spray transient followed by a rising two-note shimmer
+            // makes consuming the first-aid item distinct from picking it up.
+            const spray = noise * pulse(time, 0.16, 0.18) * 0.12;
+            const tone_a = @sin(tau * (420.0 * time + 85.0 * time * time));
+            const tone_b = @sin(tau * (630.0 * time + 145.0 * time * time));
+            break :blk spray + (tone_a * 0.14 + tone_b * 0.11) * fade;
         },
         .reload_start => blk: {
             const click = pulse(time, 0.012, 0.016);
