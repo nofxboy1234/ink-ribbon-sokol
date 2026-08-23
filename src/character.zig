@@ -56,6 +56,7 @@ const notice_seconds: f32 = 3;
 const impact_capacity = 32;
 const impact_seconds: f32 = 0.35;
 const hunter_hit_flash_seconds: f32 = 0.09;
+const hunter_flinch_seconds: f32 = 0.32;
 const shot_recoil_radians: f32 = 0.008;
 
 // Transient centered HUD messages.
@@ -96,11 +97,19 @@ const PickupDef = struct {
 };
 
 // The first two pickups sit in the entrance path so the inventory interaction
-// is discoverable immediately; the third rewards exploring toward the hall.
+// is discoverable immediately. Later entries are deliberately spread through
+// both wings and appended so old save-file collection bits keep their meaning.
 const pickup_defs = [_]PickupDef{
     .{ .position = .{ .x = -1.0, .y = 0.18, .z = 9.2 }, .item = .{ .kind = .ammo, .amount = 30 }, .name = "Handgun Ammo" },
     .{ .position = .{ .x = 1.0, .y = 0.18, .z = 8.0 }, .item = .{ .kind = .health, .amount = 1 }, .name = "First Aid Spray" },
     .{ .position = .{ .x = 0.0, .y = 0.18, .z = 6.5 }, .item = .{ .kind = .ammo, .amount = 24 }, .name = "Handgun Ammo" },
+    .{ .position = .{ .x = -10.5, .y = 0.18, .z = -9.3 }, .item = .{ .kind = .health, .amount = 1 }, .name = "First Aid Spray" },
+    .{ .position = .{ .x = 0.0, .y = 0.18, .z = 0.0 }, .item = .{ .kind = .ammo, .amount = 18 }, .name = "Handgun Ammo" },
+    .{ .position = .{ .x = -9.2, .y = 0.18, .z = -9.3 }, .item = .{ .kind = .ammo, .amount = 24 }, .name = "Handgun Ammo" },
+    .{ .position = .{ .x = 7.0, .y = 0.18, .z = -2.0 }, .item = .{ .kind = .health, .amount = 1 }, .name = "First Aid Spray" },
+    .{ .position = .{ .x = 0.0, .y = 0.18, .z = -7.0 }, .item = .{ .kind = .ammo, .amount = 30 }, .name = "Handgun Ammo" },
+    .{ .position = .{ .x = 2.0, .y = 0.18, .z = -7.0 }, .item = .{ .kind = .health, .amount = 1 }, .name = "First Aid Spray" },
+    .{ .position = .{ .x = 8.2, .y = 0.18, .z = -2.0 }, .item = .{ .kind = .ammo, .amount = 36 }, .name = "Handgun Ammo" },
 };
 
 const BreakableDef = struct {
@@ -117,6 +126,8 @@ const world_item_count = pickup_defs.len + breakable_defs.len;
 const interaction_radius: f32 = 2.0;
 const debris_capacity = breakable_defs.len * 8;
 const debris_seconds: f32 = 4.0;
+const action_duration: f32 = 0.68;
+const action_contact_time: f32 = 0.30;
 
 const InteractionKind = enum { pickup, breakable };
 const InteractionTarget = struct {
@@ -129,6 +140,38 @@ const KickState = struct {
     timer: f32 = 0,
     target: usize = 0,
     broke_box: bool = false,
+};
+
+const PickupAction = struct {
+    const Events = struct {
+        collect: bool = false,
+        finished: bool = false,
+    };
+
+    active: bool = false,
+    timer: f32 = 0,
+    target: usize = 0,
+    committed: bool = false,
+
+    fn advance(self: *PickupAction, dt: f32) Events {
+        var events = Events{};
+        if (!self.active) return events;
+        self.timer += dt;
+        if (!self.committed and self.timer >= action_contact_time) {
+            self.committed = true;
+            events.collect = true;
+        }
+        if (self.timer >= action_duration) {
+            self.active = false;
+            events.finished = true;
+        }
+        return events;
+    }
+
+    fn amount(self: PickupAction) f32 {
+        if (!self.active) return 0;
+        return @sin(std.math.pi * std.math.clamp(self.timer / action_duration, 0, 1));
+    }
 };
 
 const Debris = struct {
@@ -218,8 +261,37 @@ const CombatVisuals = struct {
     hunter_hit_flash: f32 = 0,
 };
 
+const HunterReaction = struct {
+    elapsed: f32 = 0,
+    duration: f32 = 0,
+    side: f32 = 1,
+
+    fn begin(self: *HunterReaction, side: f32) void {
+        self.elapsed = 0;
+        self.duration = hunter_flinch_seconds;
+        self.side = if (side < 0) -1 else 1;
+    }
+
+    fn update(self: *HunterReaction, dt: f32) void {
+        if (!self.active()) return;
+        self.elapsed = @min(self.duration, self.elapsed + dt);
+    }
+
+    fn active(self: HunterReaction) bool {
+        return self.elapsed < self.duration;
+    }
+
+    fn amount(self: HunterReaction) f32 {
+        if (!self.active() or self.duration <= 0) return 0;
+        const t = std.math.clamp(self.elapsed / self.duration, 0, 1);
+        // A fast recoil followed by a longer ease back to the neutral pose.
+        if (t < 0.18) return smoothstep(t / 0.18);
+        return 1.0 - smoothstep((t - 0.18) / 0.82);
+    }
+};
+
 const DebugState = struct {
-    draw_physics: bool = true,
+    draw_physics: bool = false,
 };
 
 const MapRouteStatus = enum { none, found, arrived, no_path };
@@ -328,6 +400,7 @@ const GameState = struct {
     broken_boxes: u32 = 0,
     interaction_target: ?InteractionTarget = null,
     kick: KickState = .{},
+    pickup_action: PickupAction = .{},
     debris: [debris_capacity]Debris = @splat(.{}),
     character_config: controller.Config = .{},
     character: controller.State = initialCharacter(),
@@ -336,6 +409,7 @@ const GameState = struct {
     combat_config: combat.Config = .{},
     combat: combat.State = .{},
     combat_visuals: CombatVisuals = .{},
+    hunter_reaction: HunterReaction = .{},
     condition_config: player_condition.Config = .{},
     condition: player_condition.State = .{},
     deformation_config: deformation.Config = .{},
@@ -409,6 +483,7 @@ fn keyboardQuickTurnDelta(left: bool, right: bool) f32 {
 }
 
 fn beginQuickTurn() void {
+    camera.cancelRecenter(&game.camera);
     const delta = keyboardQuickTurnDelta(game.input.left, game.input.right);
     game.quick_turn = .{
         .active = true,
@@ -442,11 +517,11 @@ fn frame() callconv(.c) void {
                     &game.character,
                     &game.mover_scratch,
                     game.world,
-                    if (game.condition.canMove() and !game.kick.active) game.input.characterInput() else .{},
+                    if (game.condition.canMove() and !playerActionActive()) game.input.characterInput() else .{},
                     game.camera.basis,
                     @floatCast(fixed_dt),
                 );
-                if (game.condition.canMove() and !game.kick.active) {
+                if (game.condition.canMove() and !playerActionActive()) {
                     const reserve_before = game.combat.reserve;
                     const combat_events = combat.update(game.combat_config, &game.combat, .{
                         .aiming = game.input.aiming,
@@ -460,25 +535,29 @@ fn frame() callconv(.c) void {
                     }
                     for (combat_events.shot_focus[0..combat_events.shot_count]) |shot_focus| fireShot(shot_focus);
                 }
-                updateKickAndDebris(@floatCast(fixed_dt));
+                updateActionsAndDebris(@floatCast(fixed_dt));
                 if (game.condition.update(game.condition_config, game.character.grounded, @floatCast(fixed_dt)) == .defeated) {
                     respawnAfterCatch();
                     break;
                 }
             }
-            if (game.menu.kind == .none and !game.inventory_ui.active and (!game.map.active or !game.map.hunter_paused) and !game.combat.hunterKnockedDown()) {
-                if (game.condition.hunter_watch_timer > 0) {
-                    faceHunterTowardPlayer(@floatCast(fixed_dt));
-                } else {
-                    hunter.update(
-                        game.hunter_config,
-                        &game.hunter,
-                        &game.mover_scratch,
-                        game.world,
-                        game.character.position,
-                        @floatCast(fixed_dt),
-                    );
-                    if (hunterContacted()) punchPlayer();
+            const hunter_sim_active = game.menu.kind == .none and !game.inventory_ui.active and (!game.map.active or !game.map.hunter_paused);
+            if (hunter_sim_active) {
+                game.hunter_reaction.update(@floatCast(fixed_dt));
+                if (!game.combat.hunterKnockedDown() and !game.hunter_reaction.active()) {
+                    if (game.condition.hunter_watch_timer > 0) {
+                        faceHunterTowardPlayer(@floatCast(fixed_dt));
+                    } else {
+                        hunter.update(
+                            game.hunter_config,
+                            &game.hunter,
+                            &game.mover_scratch,
+                            game.world,
+                            game.character.position,
+                            @floatCast(fixed_dt),
+                        );
+                        if (hunterContacted()) punchPlayer();
+                    }
                 }
             }
         }
@@ -496,7 +575,7 @@ fn frame() callconv(.c) void {
             game.character.position;
     };
 
-    if (gameplay_active and game.condition.canMove() and !game.kick.active and !game.input.aiming) updateQuickTurn(frame_time);
+    if (gameplay_active and game.condition.canMove() and !playerActionActive() and !game.input.aiming) updateQuickTurn(frame_time);
 
     if (game.map.active) {
         // WASD pans the map camera around the level.
@@ -519,7 +598,7 @@ fn frame() callconv(.c) void {
         );
         game.input.mouse_delta = .{};
     }
-    if (gameplay_active and game.condition.canMove() and !game.kick.active) {
+    if (gameplay_active and game.condition.canMove() and !playerActionActive()) {
         updateInteractionTarget();
     } else {
         game.interaction_target = null;
@@ -549,28 +628,41 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     if (down and !value.key_repeat) moveMenuSlot(-1);
                 } else {
                     game.input.forward = down;
+                    if (down) camera.cancelRecenter(&game.camera);
                 },
                 .S => if (game.menu.kind != .none) {
                     if (down and !value.key_repeat) moveMenuSlot(1);
                 } else {
                     game.input.back = down;
+                    if (down) camera.cancelRecenter(&game.camera);
                 },
-                .A => game.input.left = down,
+                .A => {
+                    game.input.left = down;
+                    if (down) camera.cancelRecenter(&game.camera);
+                },
                 .D => if (game.menu.kind != .none) {
                     if (down and !value.key_repeat) deleteSelectedSlot();
                 } else {
                     game.input.right = down;
+                    if (down) camera.cancelRecenter(&game.camera);
                 },
                 .LEFT_SHIFT, .RIGHT_SHIFT => if (down and !value.key_repeat) {
-                    // Arm running. It only takes effect while a direction is
-                    // held and is never toggled off by Shift again.
-                    game.input.run = true;
+                    if (!game.input.moving() and game.menu.kind == .none and !game.map.active and game.condition.canMove() and !playerActionActive()) {
+                        game.input.run = false;
+                        game.quick_turn.active = false;
+                        camera.beginRecenter(&game.camera, game.character.yaw);
+                    } else {
+                        // Arm running when Shift accompanies a movement key.
+                        game.input.run = true;
+                    }
                 },
                 .Q => if (game.menu.kind == .none and !game.map.active) {
+                    if (down and playerActionActive()) return;
                     game.input.aiming = down;
                     if (down) {
                         game.input.run = false;
                         game.quick_turn.active = false;
+                        camera.cancelRecenter(&game.camera);
                     }
                 },
                 .R => if (down and !value.key_repeat and game.menu.kind == .none and !game.map.active) {
@@ -584,7 +676,7 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     game.notice = if (game.hunter_friendly) .hunter_friendly else .hunter_hostile;
                     game.notice_timer = notice_seconds;
                 },
-                .M => if (down and !value.key_repeat and game.menu.kind == .none) {
+                .M => if (down and !value.key_repeat and game.menu.kind == .none and (game.map.active or !playerActionActive())) {
                     game.map.active = !game.map.active;
                     if (game.map.active) {
                         game.map.hunter_paused = true;
@@ -600,10 +692,10 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     // gameplay doesn't resume with the character moving.
                     game.input = .{};
                 },
-                .I => if (down and !value.key_repeat and game.menu.kind == .none and !game.map.active and game.condition.canMove()) {
+                .I => if (down and !value.key_repeat and game.menu.kind == .none and !game.map.active and game.condition.canMove() and !playerActionActive()) {
                     openInventory();
                 },
-                .X => if (down and !value.key_repeat and game.menu.kind == .none and !game.map.active and game.condition.canMove() and !game.kick.active) {
+                .X => if (down and !value.key_repeat and game.menu.kind == .none and !game.map.active and game.condition.canMove() and !playerActionActive()) {
                     activateInteraction();
                 },
                 .P => if (down and !value.key_repeat and game.map.active) {
@@ -618,12 +710,12 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 .SPACE => if (down and !value.key_repeat) {
                     if (game.menu.kind != .none) {
                         confirmMenu();
-                    } else if (!game.map.active and nearSaveFixture()) {
+                    } else if (!game.map.active and !playerActionActive() and nearSaveFixture()) {
                         openMenu(.save);
                     }
                 },
                 .L => if (down and !value.key_repeat) {
-                    if (game.menu.kind == .none and !game.map.active) openMenu(.load);
+                    if (game.menu.kind == .none and !game.map.active and !playerActionActive()) openMenu(.load);
                 },
                 .ENTER => if (down and !value.key_repeat and game.menu.kind != .none) {
                     confirmMenu();
@@ -652,7 +744,7 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 inventoryClick(value.mouse_x, value.mouse_y);
             } else if (game.map.active) {
                 selectMapSaveAt(value.mouse_x, value.mouse_y);
-            } else if (game.menu.kind == .none) {
+            } else if (game.menu.kind == .none and !playerActionActive()) {
                 sapp.lockMouse(true);
                 game.input.firing = true;
             }
@@ -716,7 +808,13 @@ fn fireShot(focus: f32) void {
     };
     const hunter_hit = b3.b3RayCastCapsule(&hunter_capsule, &ray_input);
     if (hunter_hit.hit and !game.combat.hunterKnockedDown()) {
-        _ = game.combat.applyHunterHit(game.combat_config, focus);
+        const knocked_down = game.combat.applyHunterHit(game.combat_config, focus);
+        if (knocked_down) {
+            game.hunter_reaction = .{};
+        } else {
+            game.hunter_reaction.begin(if (spread_x < 0) -1 else 1);
+            game.hunter.previous_position = game.hunter.position;
+        }
         game.combat_visuals.hunter_hit_flash = hunter_hit_flash_seconds;
     } else if (level_hit.hit) {
         addImpact(.{ .x = level_hit.point.x, .y = level_hit.point.y, .z = level_hit.point.z }, level_hit.normal);
@@ -814,6 +912,7 @@ fn placePlayerFromSlot(slot: saves.Slot) void {
     game.camera.yaw = slot.yaw;
     game.quick_turn = .{};
     game.kick = .{};
+    game.pickup_action = .{};
     game.interaction_target = null;
     game.combat = combat.State.init(game.combat_config, slot.magazine, slot.reserve);
     game.inventory = slot.inventory;
@@ -825,6 +924,7 @@ fn placePlayerFromSlot(slot: saves.Slot) void {
     game.player_deformation = .{};
     game.interaction_target = null;
     game.kick = .{};
+    game.pickup_action = .{};
     game.debris = @splat(.{});
 }
 
@@ -855,6 +955,7 @@ fn spawnPlayerAndHunter() void {
     game.inventory_ui = .{};
     game.interaction_target = null;
     game.kick = .{};
+    game.pickup_action = .{};
     game.debris = @splat(.{});
     game.notice = .none;
     game.notice_timer = 0;
@@ -872,6 +973,7 @@ fn resetHunter(player_pos: b3.b3Pos) void {
     game.combat.hunter_health = game.combat_config.hunter_health;
     game.combat.knockdown_timer = 0;
     game.combat_visuals.hunter_hit_flash = 0;
+    game.hunter_reaction = .{};
     game.hunter_deformation = .{};
 }
 
@@ -904,6 +1006,7 @@ fn punchPlayer() void {
     game.character.grounded = false;
     game.quick_turn = .{};
     game.kick = .{};
+    game.pickup_action = .{};
     game.interaction_target = null;
     game.input = .{};
     game.camera.aim_alpha = 0;
@@ -1000,19 +1103,19 @@ fn activateInteraction() void {
     switch (target.kind) {
         .pickup => {
             const pickup = pickup_defs[target.index];
-            if (game.inventory.add(pickup.item) == null) {
+            var inventory_preview = game.inventory;
+            if (inventory_preview.add(pickup.item) == null) {
                 game.notice = .inventory_full;
                 game.notice_timer = notice_seconds;
                 return;
             }
-            game.collected_pickups |= @as(u32, 1) << @intCast(target.index);
-            if (pickup.item.kind == .ammo) {
-                game.combat.reserve +|= pickup.item.amount;
-                game.notice = .ammo_found;
-            } else {
-                game.notice = .health_found;
-            }
-            game.notice_timer = notice_seconds;
+            const dx = pickup.position.x - game.character.position.x;
+            const dz = pickup.position.z - game.character.position.z;
+            game.character.yaw = std.math.atan2(dx, dz);
+            game.character.velocity.x = 0;
+            game.character.velocity.z = 0;
+            game.pickup_action = .{ .active = true, .target = target.index };
+            game.input = .{};
             game.interaction_target = null;
         },
         .breakable => {
@@ -1029,7 +1132,11 @@ fn activateInteraction() void {
     }
 }
 
-fn updateKickAndDebris(dt: f32) void {
+fn updateActionsAndDebris(dt: f32) void {
+    const pickup_events = game.pickup_action.advance(dt);
+    if (pickup_events.collect) collectPickup(game.pickup_action.target);
+    if (pickup_events.finished) game.pickup_action = .{};
+
     if (game.kick.active) {
         game.kick.timer += dt;
         if (!game.kick.broke_box and game.kick.timer >= 0.30) {
@@ -1037,7 +1144,7 @@ fn updateKickAndDebris(dt: f32) void {
             game.broken_boxes |= @as(u32, 1) << @intCast(game.kick.target);
             spawnBoxDebris(game.kick.target);
         }
-        if (game.kick.timer >= 0.68) game.kick = .{};
+        if (game.kick.timer >= action_duration) game.kick = .{};
     }
 
     for (&game.debris) |*piece| {
@@ -1063,6 +1170,25 @@ fn updateKickAndDebris(dt: f32) void {
         piece.yaw += piece.angular_velocity * dt;
         piece.pitch += piece.angular_velocity * 0.73 * dt;
     }
+}
+
+fn collectPickup(index: usize) void {
+    const bit = @as(u32, 1) << @intCast(index);
+    if (game.collected_pickups & bit != 0) return;
+    const pickup = pickup_defs[index];
+    if (game.inventory.add(pickup.item) == null) {
+        game.notice = .inventory_full;
+        game.notice_timer = notice_seconds;
+        return;
+    }
+    game.collected_pickups |= bit;
+    if (pickup.item.kind == .ammo) {
+        game.combat.reserve +|= pickup.item.amount;
+        game.notice = .ammo_found;
+    } else {
+        game.notice = .health_found;
+    }
+    game.notice_timer = notice_seconds;
 }
 
 fn spawnBoxDebris(box_index: usize) void {
@@ -1098,7 +1224,11 @@ fn spawnBoxDebris(box_index: usize) void {
 
 fn kickAmount() f32 {
     if (!game.kick.active) return 0;
-    return @sin(std.math.pi * std.math.clamp(game.kick.timer / 0.68, 0, 1));
+    return @sin(std.math.pi * std.math.clamp(game.kick.timer / action_duration, 0, 1));
+}
+
+fn playerActionActive() bool {
+    return game.kick.active or game.pickup_action.active;
 }
 
 // Defeated: restore the most recent save (or the initial loadout) and move the
@@ -1128,6 +1258,7 @@ fn respawnAfterCatch() void {
     game.inventory_ui = .{};
     game.interaction_target = null;
     game.kick = .{};
+    game.pickup_action = .{};
     game.debris = @splat(.{});
 }
 
@@ -1797,12 +1928,17 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         game.player_deformation.reset(player_sample);
         break :blk deformation.Pose{};
     };
-    const hunter_pose = if (gameplay_active and !knocked_down)
+    var hunter_pose = if (gameplay_active and !knocked_down)
         game.hunter_deformation.update(game.deformation_config, hunter_sample, frame_time)
     else blk: {
         game.hunter_deformation.reset(hunter_sample);
         break :blk deformation.Pose{};
     };
+    const flinch = game.hunter_reaction.amount();
+    hunter_pose.bend_x += game.hunter_reaction.side * flinch * 0.20;
+    hunter_pose.bend_z += flinch * 0.12;
+    hunter_pose.twist += game.hunter_reaction.side * flinch * 0.24;
+    hunter_pose.foot_roll -= game.hunter_reaction.side * flinch * 0.035;
 
     // Pass 1: render everything from the sun's viewpoint, depth-only, to the
     // shadow map. The character draws as a second single-instance call. The
@@ -1964,7 +2100,7 @@ fn updatePickupInstances() void {
     for (pickup_defs, 0..) |pickup, index| {
         const collected_bit = @as(u32, 1) << @intCast(index);
         const discovered_bit = collected_bit;
-        if (game.collected_pickups & collected_bit != 0 or game.discovered_items & discovered_bit == 0) continue;
+        if (game.collected_pickups & collected_bit != 0 or (!game.debug.draw_physics and game.discovered_items & discovered_bit == 0)) continue;
         const color = switch (pickup.item.kind) {
             .ammo => rgb(0.15, 0.48, 1.0),
             .health => rgb(0.18, 0.82, 0.37),
@@ -1981,7 +2117,7 @@ fn updatePickupInstances() void {
     for (breakable_defs, 0..) |box, index| {
         const broken_bit = @as(u32, 1) << @intCast(index);
         const discovered_bit = @as(u32, 1) << @intCast(pickup_defs.len + index);
-        if (game.broken_boxes & broken_bit != 0 or game.discovered_items & discovered_bit == 0) continue;
+        if (game.broken_boxes & broken_bit != 0 or (!game.debug.draw_physics and game.discovered_items & discovered_bit == 0)) continue;
         map_instances[map_count] = makeInstance(
             .{ .x = box.position.x, .y = level.floor_height + 0.22, .z = box.position.z },
             .{ .x = 0.28, .y = 0.06, .z = 0.28 },
@@ -2077,7 +2213,7 @@ fn mapHoverName() ?[]const u8 {
     const world = mapWorldAtScreen(game.map.cursor.x, game.map.cursor.y);
     for (pickup_defs, 0..) |pickup, index| {
         const item_bit = @as(u32, 1) << @intCast(index);
-        if (game.discovered_items & item_bit == 0 or game.collected_pickups & item_bit != 0) continue;
+        if ((!game.debug.draw_physics and game.discovered_items & item_bit == 0) or game.collected_pickups & item_bit != 0) continue;
         const dx = world.x - pickup.position.x;
         const dz = world.z - pickup.position.z;
         if (dx * dx + dz * dz <= 0.8 * 0.8) return pickup.name;
@@ -2085,7 +2221,7 @@ fn mapHoverName() ?[]const u8 {
     for (breakable_defs, 0..) |box, index| {
         const discovered_bit = @as(u32, 1) << @intCast(pickup_defs.len + index);
         const broken_bit = @as(u32, 1) << @intCast(index);
-        if (game.discovered_items & discovered_bit == 0 or game.broken_boxes & broken_bit != 0) continue;
+        if ((!game.debug.draw_physics and game.discovered_items & discovered_bit == 0) or game.broken_boxes & broken_bit != 0) continue;
         const dx = world.x - box.position.x;
         const dz = world.z - box.position.z;
         if (dx * dx + dz * dz <= 0.9 * 0.9) return box.name;
@@ -2419,7 +2555,7 @@ fn footVector(pose: deformation.Pose) Vec4 {
 }
 
 fn actionVector() Vec4 {
-    return .{ .x = kickAmount() };
+    return .{ .x = kickAmount(), .y = game.pickup_action.amount() };
 }
 
 fn drawDeformedActor(instance_buffer: sg.Buffer, with_shadow_texture: bool) void {
@@ -2577,6 +2713,11 @@ fn fbool(value: bool) f32 {
     return @floatFromInt(@intFromBool(value));
 }
 
+fn smoothstep(value: f32) f32 {
+    const t = std.math.clamp(value, 0, 1);
+    return t * t * (3.0 - 2.0 * t);
+}
+
 fn rgb(r: f32, g: f32, b: f32) Vec4 {
     return .{ .x = r, .y = g, .z = b, .w = 1 };
 }
@@ -2626,6 +2767,53 @@ test "keyboard quick turn chooses shortest backward direction" {
     try std.testing.expectApproxEqAbs(-std.math.pi * 0.75, keyboardQuickTurnDelta(false, true), tolerance);
     // Opposing lateral keys cancel back to a straight 180-degree turn.
     try std.testing.expectApproxEqAbs(std.math.pi, keyboardQuickTurnDelta(true, true), tolerance);
+}
+
+test "hunter flinch stops briefly and eases back to neutral" {
+    var reaction = HunterReaction{};
+    reaction.begin(-1);
+    try std.testing.expect(reaction.active());
+    reaction.update(hunter_flinch_seconds * 0.18);
+    try std.testing.expect(reaction.amount() > 0.99);
+    reaction.update(hunter_flinch_seconds);
+    try std.testing.expect(!reaction.active());
+    try std.testing.expectEqual(@as(f32, 0), reaction.amount());
+}
+
+test "pickup action commits at contact and finishes after retracting" {
+    var action = PickupAction{ .active = true, .target = 3 };
+    var events = action.advance(action_contact_time - 0.01);
+    try std.testing.expect(!events.collect);
+    try std.testing.expect(action.amount() > 0);
+
+    events = action.advance(0.02);
+    try std.testing.expect(events.collect);
+    try std.testing.expect(!events.finished);
+    try std.testing.expectEqual(@as(usize, 3), action.target);
+
+    events = action.advance(action_duration);
+    try std.testing.expect(!events.collect);
+    try std.testing.expect(events.finished);
+    try std.testing.expect(!action.active);
+    try std.testing.expectEqual(@as(f32, 0), action.amount());
+}
+
+test "authored world items occupy walkable player cells" {
+    level.load();
+    navmesh.buildLevel();
+    for (pickup_defs, 0..) |pickup, index| {
+        const cell = navmesh.player_nav.cellAt(pickup.position.x, pickup.position.z) orelse return error.TestUnexpectedResult;
+        if (!navmesh.player_nav.isWalkable(cell)) std.debug.print("blocked pickup {d}: ({d}, {d})\n", .{ index, pickup.position.x, pickup.position.z });
+        try std.testing.expect(navmesh.player_nav.isWalkable(cell));
+        const reachable = navmesh.player_nav.isReachable(
+            level.current.player_spawn.x,
+            level.current.player_spawn.z,
+            pickup.position.x,
+            pickup.position.z,
+        );
+        if (!reachable) std.debug.print("unreachable pickup {d}: ({d}, {d})\n", .{ index, pickup.position.x, pickup.position.z });
+        try std.testing.expect(reachable);
+    }
 }
 
 test "hunter AI tests" {

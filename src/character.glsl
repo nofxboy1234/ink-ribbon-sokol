@@ -86,6 +86,16 @@ ActorVertex deform_actor_vertex(
     actor_position += twisted_depth * (kick * scale_z * 1.15)
         + twisted_side * (kick * scale_x * 0.12);
     actor_position.y += kick * scale_y * 0.08;
+    // Picking up an item pulls a narrow upper-right band forward and down.
+    // On the cuboid character this reads as a simple reaching hand/arm while
+    // keeping both the top and torso anchored to the main body.
+    float hand_height = smoothstep(0.50, 0.62, height)
+        * (1.0 - smoothstep(0.74, 0.88, height));
+    float right_hand = smoothstep(-0.02, 0.5, position.x) * hand_height;
+    float pickup_reach = action_motion.y * right_hand;
+    actor_position += twisted_depth * (pickup_reach * scale_z * 0.85)
+        + twisted_side * (pickup_reach * scale_x * 0.10);
+    actor_position.y -= pickup_reach * scale_y * 0.16;
     vec3 foot_up = normalize(tangent
         - twisted_side * foot_roll
         - twisted_depth * foot_pitch);
@@ -138,7 +148,7 @@ layout(binding = 0) uniform deformed_shadow_vs_params {
     mat4 light_view_projection;
     vec4 deformation; // bend x/z, height-progressive twist, squash
     vec4 lower_motion; // foot roll/pitch, lower counter-twist, splay
-    vec4 action_motion; // kick amount in x
+    vec4 action_motion; // kick in x, pickup hand reach in y
 };
 
 layout(location = 0) in vec3 position;
@@ -201,7 +211,7 @@ layout(binding = 0) uniform deformed_display_vs_params {
     mat4 light_view_projection;
     vec4 deformation; // bend x/z, height-progressive twist, squash
     vec4 lower_motion; // foot roll/pitch, lower counter-twist, splay
-    vec4 action_motion; // kick amount in x
+    vec4 action_motion; // kick in x, pickup hand reach in y
 };
 
 layout(location = 0) in vec3 position;

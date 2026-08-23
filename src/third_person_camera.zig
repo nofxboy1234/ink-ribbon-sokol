@@ -22,12 +22,14 @@ pub const Config = struct {
     aim_vertical_orbit_scale: f32 = 0.15,
     pitch_min: f32 = -0.65,
     pitch_max: f32 = 0.75,
+    default_pitch: f32 = 0.15,
     sensitivity: f32 = 0.0025,
     cast_radius: f32 = 0.18,
     wall_margin: f32 = 0.08,
     follow_rate: f32 = 18.0,
     recovery_rate: f32 = 8.0,
     orbit_rate: f32 = 30.0,
+    recenter_rate: f32 = 7.5,
 };
 
 pub const State = struct {
@@ -43,6 +45,8 @@ pub const State = struct {
     aim_alpha: f32 = 0,
     recoil_pitch: f32 = 0,
     boom_fraction: f32 = 1,
+    recenter_yaw: f32 = std.math.pi,
+    recentering: bool = false,
     initialized: bool = false,
 };
 
@@ -56,6 +60,11 @@ pub fn update(
     frame_dt: f32,
     aspect: f32,
 ) void {
+    if (mouse_delta.x != 0 or mouse_delta.y != 0) {
+        cancelRecenter(state);
+    } else if (state.recentering) {
+        updateRecenter(config, state, frame_dt);
+    }
     state.yaw -= mouse_delta.x * config.sensitivity;
     state.pitch = std.math.clamp(
         state.pitch + mouse_delta.y * config.sensitivity,
@@ -127,6 +136,31 @@ pub fn addRecoil(state: *State, amount: f32) void {
     state.recoil_pitch = @max(-0.12, state.recoil_pitch - amount);
 }
 
+// Return the shoulder camera to the actor's forward heading. The target angles
+// move first and the existing visual-angle smoothing follows them, avoiding a
+// snap even when the camera begins near the angle wrap at +/-pi.
+pub fn beginRecenter(state: *State, actor_yaw: f32) void {
+    state.recenter_yaw = actor_yaw;
+    state.recentering = true;
+}
+
+pub fn cancelRecenter(state: *State) void {
+    state.recentering = false;
+}
+
+fn updateRecenter(config: Config, state: *State, dt: f32) void {
+    const alpha = exponentialAlpha(config.recenter_rate, dt);
+    state.yaw = lerpAngle(state.yaw, state.recenter_yaw, alpha);
+    state.pitch = lerpScalar(state.pitch, config.default_pitch, alpha);
+
+    const yaw_error = shortestAngle(state.recenter_yaw - state.yaw);
+    if (@abs(yaw_error) < 0.0005 and @abs(config.default_pitch - state.pitch) < 0.0005) {
+        state.yaw = state.recenter_yaw;
+        state.pitch = config.default_pitch;
+        state.recentering = false;
+    }
+}
+
 fn collideCameraFraction(config: Config, world: b3.b3WorldId, pivot: Vec3, desired: Vec3) f32 {
     var context = CastContext{};
     var point = b3.b3Vec3{};
@@ -174,8 +208,11 @@ fn lerpScalar(a: f32, b: f32, alpha: f32) f32 {
 }
 
 fn lerpAngle(value: f32, target: f32, alpha: f32) f32 {
-    const delta = @mod(target - value + std.math.pi, 2.0 * std.math.pi) - std.math.pi;
-    return value + delta * alpha;
+    return value + shortestAngle(target - value) * alpha;
+}
+
+fn shortestAngle(angle: f32) f32 {
+    return @mod(angle + std.math.pi, 2.0 * std.math.pi) - std.math.pi;
 }
 
 fn verticalOrbitPitch(pitch: f32, aim_alpha: f32, aim_scale: f32) f32 {
@@ -197,4 +234,18 @@ test "aiming rotates the sightline more than the camera boom" {
     const pitch: f32 = 0.75;
     try std.testing.expectApproxEqAbs(pitch, verticalOrbitPitch(pitch, 0, 0.15), 0.00001);
     try std.testing.expectApproxEqAbs(pitch * 0.15, verticalOrbitPitch(pitch, 1, 0.15), 0.00001);
+}
+
+test "camera recenter restores actor heading and authored pitch" {
+    const config = Config{};
+    var state = State{
+        .yaw = -2.8,
+        .pitch = -0.5,
+    };
+    beginRecenter(&state, 2.8);
+    for (0..180) |_| updateRecenter(config, &state, 1.0 / 60.0);
+
+    try std.testing.expect(!state.recentering);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.8), state.yaw, 0.0001);
+    try std.testing.expectApproxEqAbs(config.default_pitch, state.pitch, 0.0001);
 }

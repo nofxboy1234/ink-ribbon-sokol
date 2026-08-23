@@ -219,6 +219,16 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
             return self.findPathInner(start_x, start_z, goal_x, goal_z, out, null);
         }
 
+        // Constant-time reachability after the component labels have been
+        // built. Unlike findPath, this also returns true when both points land
+        // in the same cell and does not run A* merely to validate authored data.
+        pub fn isReachable(self: *Self, start_x: f32, start_z: f32, goal_x: f32, goal_z: f32) bool {
+            const start = self.nearestWalkable(start_x, start_z, snap_ring) orelse return false;
+            const goal = self.nearestWalkable(goal_x, goal_z, snap_ring) orelse return false;
+            if (!self.components_valid) self.computeComponents();
+            return self.component[start] == self.component[goal];
+        }
+
         // A* with one circular hunter influence. The hard radius excludes every
         // cell whose square footprint touches it. The nonnegative danger cost
         // is added to base edge costs and falls linearly to zero at the danger
