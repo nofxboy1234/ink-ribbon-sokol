@@ -28,8 +28,6 @@ pub const Box = struct {
 pub const Scene = struct {
     boxes: [max_boxes]Box = undefined,
     box_count: usize = 0,
-    floor_index: usize = 0,
-    floor_surface_y: f32 = 0,
     player_spawn: ?Vec3 = null,
     player_yaw: f32 = std.math.pi,
 
@@ -75,10 +73,7 @@ pub fn load() !Scene {
         result.box_count += 1;
     }
     if (result.box_count == 0) return error.EmptyScene;
-
-    result.floor_index = findBottomFloor(result.boxSlice());
-    const floor = result.boxes[result.floor_index];
-    result.floor_surface_y = floor.center.y + projectedHalfExtent(floor, .y);
+    if (result.player_spawn == null) return error.PlayerSpawnMissing;
     return result;
 }
 
@@ -136,32 +131,6 @@ fn boxFromNode(node: *const cgltf.cgltf_node) !Box {
         .basis_x = basis_x,
         .basis_y = basis_y,
         .basis_z = basis_z,
-    };
-}
-
-fn findBottomFloor(boxes: []const Box) usize {
-    var selected: usize = 0;
-    var selected_bottom = boxes[0].center.y - projectedHalfExtent(boxes[0], .y);
-    var selected_area = projectedHalfExtent(boxes[0], .x) * projectedHalfExtent(boxes[0], .z);
-    for (boxes[1..], 1..) |box, index| {
-        const bottom = box.center.y - projectedHalfExtent(box, .y);
-        const area = projectedHalfExtent(box, .x) * projectedHalfExtent(box, .z);
-        if (bottom < selected_bottom - 0.01 or (@abs(bottom - selected_bottom) <= 0.01 and area > selected_area)) {
-            selected = index;
-            selected_bottom = bottom;
-            selected_area = area;
-        }
-    }
-    return selected;
-}
-
-const Axis = enum { x, y, z };
-
-fn projectedHalfExtent(box: Box, axis: Axis) f32 {
-    return switch (axis) {
-        .x => @abs(box.basis_x.x) * box.half_extents.x + @abs(box.basis_y.x) * box.half_extents.y + @abs(box.basis_z.x) * box.half_extents.z,
-        .y => @abs(box.basis_x.y) * box.half_extents.x + @abs(box.basis_y.y) * box.half_extents.y + @abs(box.basis_z.y) * box.half_extents.z,
-        .z => @abs(box.basis_x.z) * box.half_extents.x + @abs(box.basis_y.z) * box.half_extents.y + @abs(box.basis_z.z) * box.half_extents.z,
     };
 }
 

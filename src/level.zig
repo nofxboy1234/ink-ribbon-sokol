@@ -1,7 +1,8 @@
 //! Runtime level data imported exclusively from `level/level.glb`.
 //!
 //! Blender owns the scene layout. Each mesh node becomes an oriented Box3D
-//! collision/render box and an optional `PlayerSpawn` node defines the start.
+//! collision/render box and a required `PlayerSpawn` node defines the start
+//! position, facing direction, and ground height.
 
 const std = @import("std");
 const math = @import("math.zig");
@@ -79,7 +80,7 @@ pub const Level = struct {
     save_bounds: [2]SaveBounds = @splat(.{ .min_x = 0, .max_x = 0, .min_z = 0, .max_z = 0 }),
     lights: [light_capacity]Vec4 = @splat(.{}),
     light_count: usize = 0,
-    floor_surface_y: f32 = 0,
+    ground_y: f32 = 0,
     walk_min_x: f32 = 0,
     walk_max_x: f32 = 0,
     walk_min_z: f32 = 0,
@@ -143,32 +144,37 @@ pub fn insideWalkBounds(x: f32, z: f32) bool {
 fn build() !Level {
     const imported = try blender_level.load();
     var result = Level{};
-    for (imported.boxSlice(), 0..) |box, index| {
-        const is_floor = index == imported.floor_index;
-        result.addBox(.{
+    result.player_spawn = fromImported(imported.player_spawn orelse return error.PlayerSpawnMissing);
+    result.player_spawn_yaw = imported.player_yaw;
+    result.ground_y = result.player_spawn.y;
+    result.walk_min_x = std.math.inf(f32);
+    result.walk_max_x = -std.math.inf(f32);
+    result.walk_min_z = std.math.inf(f32);
+    result.walk_max_z = -std.math.inf(f32);
+
+    for (imported.boxSlice()) |box| {
+        var converted = Box{
             .center = fromImported(box.center),
             .half_extents = fromImported(box.half_extents),
             .basis_x = fromImported(box.basis_x),
             .basis_y = fromImported(box.basis_y),
             .basis_z = fromImported(box.basis_z),
-            .color = if (is_floor) floor_color else geometry_color,
-            .nav_block = !is_floor,
-        });
-    }
+            .color = geometry_color,
+        };
 
-    const floor = result.boxes[imported.floor_index];
-    const floor_half_x = projectedHalfExtent(floor, .x);
-    const floor_half_z = projectedHalfExtent(floor, .z);
-    result.floor_surface_y = imported.floor_surface_y;
-    result.walk_min_x = floor.center.x - floor_half_x;
-    result.walk_max_x = floor.center.x + floor_half_x;
-    result.walk_min_z = floor.center.z - floor_half_z;
-    result.walk_max_z = floor.center.z + floor_half_z;
-    result.player_spawn = if (imported.player_spawn) |spawn|
-        fromImported(spawn)
-    else
-        .{ .x = floor.center.x, .y = result.floor_surface_y, .z = floor.center.z };
-    result.player_spawn_yaw = imported.player_yaw;
+        // Geometry whose top is at the spawn's ground plane supports walking;
+        // geometry extending above that plane is an obstacle for navigation.
+        // This avoids guessing which arbitrarily named mesh is the floor.
+        converted.nav_block = converted.center.y + projectedHalfExtent(converted, .y) > result.ground_y + 0.05;
+        result.addBox(converted);
+
+        const half_x = projectedHalfExtent(converted, .x);
+        const half_z = projectedHalfExtent(converted, .z);
+        result.walk_min_x = @min(result.walk_min_x, converted.center.x - half_x);
+        result.walk_max_x = @max(result.walk_max_x, converted.center.x + half_x);
+        result.walk_min_z = @min(result.walk_min_z, converted.center.z - half_z);
+        result.walk_max_z = @max(result.walk_max_z, converted.center.z + half_z);
+    }
 
     // These neutral defaults support reusable systems without placing any
     // old level content into the fresh Blender scene.
@@ -183,10 +189,10 @@ fn build() !Level {
         .max_z = result.walk_max_z,
     };
     result.lights[0] = .{
-        .x = floor.center.x,
-        .y = result.floor_surface_y + 6,
-        .z = floor.center.z,
-        .w = @max(floor_half_x, floor_half_z) * 2,
+        .x = (result.walk_min_x + result.walk_max_x) * 0.5,
+        .y = result.ground_y + 6,
+        .z = (result.walk_min_z + result.walk_max_z) * 0.5,
+        .w = @max(result.walk_max_x - result.walk_min_x, result.walk_max_z - result.walk_min_z),
     };
     result.light_count = 1;
     if (!result.validate()) return error.InvalidImportedLevel;
@@ -207,5 +213,4 @@ pub fn projectedHalfExtent(box: Box, axis: ProjectionAxis) f32 {
     };
 }
 
-const floor_color = Vec4{ .x = 0.18, .y = 0.21, .z = 0.23, .w = 1 };
 const geometry_color = Vec4{ .x = 0.43, .y = 0.44, .z = 0.46, .w = 1 };

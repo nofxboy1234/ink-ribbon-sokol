@@ -2207,7 +2207,7 @@ fn rebuildMapRoute() void {
             game.map.route_instances[game.map.route_segment_count] = makeScaledInstance(
                 .{
                     .x = (from.x + waypoint.x) * 0.5,
-                    .y = level.current.floor_surface_y + 0.1,
+                    .y = level.current.ground_y + 0.1,
                     .z = (from.z + waypoint.z) * 0.5,
                 },
                 .{ .x = map_route_width, .y = map_route_height, .z = segment_length },
@@ -2597,7 +2597,7 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
     for (level.current.save_targets[0..level.current.save_target_count], 0..) |target, index| {
         const selected = index == game.map.selected_save;
         save_instances[index] = makeScaledInstance(
-            .{ .x = target.x, .y = level.current.floor_surface_y + 0.18, .z = target.z },
+            .{ .x = target.x, .y = level.current.ground_y + 0.18, .z = target.z },
             if (selected) .{ .x = 1.2, .y = 0.08, .z = 1.2 } else .{ .x = 0.75, .y = 0.06, .z = 0.75 },
             0,
             if (selected) rgb(1.0, 0.82, 0.22) else rgb(1.0, 0.49, 0.71),
@@ -2860,7 +2860,7 @@ fn updatePickupInstances() void {
         if (!pickup.item.occupied()) continue;
         const color = itemColor(pickup.item);
         map_instances[map_count] = makeInstance(
-            .{ .x = pickup.position.x, .y = level.current.floor_surface_y + 0.22, .z = pickup.position.z },
+            .{ .x = pickup.position.x, .y = level.current.ground_y + 0.22, .z = pickup.position.z },
             .{ .x = 0.28, .y = 0.06, .z = 0.28 },
             0,
             color,
@@ -2875,7 +2875,7 @@ fn updatePickupInstances() void {
         const drop = boxDropItem(index);
         if (broken and !drop.occupied()) continue;
         map_instances[map_count] = makeInstance(
-            .{ .x = box.position.x, .y = level.current.floor_surface_y + 0.22, .z = box.position.z },
+            .{ .x = box.position.x, .y = level.current.ground_y + 0.22, .z = box.position.z },
             .{ .x = 0.28, .y = 0.06, .z = 0.28 },
             0,
             if (broken) itemColor(drop) else rgb(1.0, 0.42, 0.06),
@@ -2884,7 +2884,7 @@ fn updatePickupInstances() void {
     }
     for (level.doorSlice(), 0..) |door, index| {
         map_instances[map_count] = makeInstance(
-            .{ .x = door.position.x, .y = level.current.floor_surface_y + 0.26, .z = door.position.z },
+            .{ .x = door.position.x, .y = level.current.ground_y + 0.26, .z = door.position.z },
             .{ .x = level.door_width * 0.5, .y = 0.055, .z = 0.22 },
             doorBaseYaw(door),
             doorDisplayColor(door, index),
