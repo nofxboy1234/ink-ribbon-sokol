@@ -55,6 +55,9 @@ pub const hunter_query_category: u64 = 1 << 3;
 pub const level_category: u64 = 1 << 0;
 // Used by save-room barriers: collides with (and occludes) the hunter only.
 pub const hunter_block_category: u64 = 1 << 4;
+// Dynamic hinged doors have their own category so actor proxies can push them
+// without the capsule movers seeing one another.
+pub const door_category: u64 = 1 << 5;
 
 pub fn update(
     config: Config,
@@ -161,7 +164,7 @@ pub fn moveCapsule(
 pub fn hunterFilter() b3.b3QueryFilter {
     var filter = b3.b3DefaultQueryFilter();
     filter.categoryBits = hunter_query_category;
-    filter.maskBits = level_category | hunter_block_category;
+    filter.maskBits = level_category | hunter_block_category | door_category;
     return filter;
 }
 
@@ -189,7 +192,7 @@ fn collectPlane(_: b3.b3ShapeId, results: [*c]const b3.b3PlaneResult, count: c_i
 fn moverFilter() b3.b3QueryFilter {
     var filter = b3.b3DefaultQueryFilter();
     filter.categoryBits = player_query_category;
-    filter.maskBits = level_category;
+    filter.maskBits = level_category | door_category;
     return filter;
 }
 

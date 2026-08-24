@@ -28,11 +28,8 @@ pub const Slot = struct {
     box_drops_present: u32 = 0,
     box_drops_health: u32 = 0,
     collected_box_drops: u32 = 0,
-    // Door masks preserve permanent unlock/open state and the chosen swing
-    // direction for each authored door.
+    // Door angles are transient Box3D state; only permanent unlocks persist.
     unlocked_doors: u32 = 0,
-    opened_doors: u32 = 0,
-    door_swing_positive: u32 = 0,
     // Unix epoch seconds when the slot was written, for the slot list UI.
     timestamp: i64 = 0,
 };
@@ -41,7 +38,7 @@ pub var slots: [slot_count]Slot = @splat(.{});
 
 const file_name = "saves.json";
 const file_limit = 1 << 20;
-const current_version: u32 = 8;
+const current_version: u32 = 9;
 
 const FileFormat = struct {
     version: u32 = current_version,
@@ -74,8 +71,6 @@ pub fn loadFromDir(dir: std.Io.Dir, io: std.Io) void {
         // while carrying the three colored lock states to their new entrances.
         if (parsed.value.version == 7) {
             for (&slots) |*slot| if (slot.occupied) {
-                slot.opened_doors = remapDoorMaskV7(slot.opened_doors);
-                slot.door_swing_positive = remapDoorMaskV7(slot.door_swing_positive);
                 var unlocked = remapDoorMaskV7(slot.unlocked_doors);
                 const colored_mask = doorBit(0) | doorBit(5) | doorBit(10);
                 unlocked &= ~colored_mask;
@@ -164,8 +159,6 @@ test "slots round-trip through disk" {
         .box_drops_health = 0b010,
         .collected_box_drops = 0b001,
         .unlocked_doors = 0b0101,
-        .opened_doors = 0b0011,
-        .door_swing_positive = 0b0010,
         .timestamp = 1755892800,
     };
     slots[7] = .{ .occupied = true, .x = -12, .y = 0.9, .z = 15, .yaw = -0.5 };
@@ -188,8 +181,6 @@ test "slots round-trip through disk" {
     try std.testing.expectEqual(@as(u32, 0b010), slots[2].box_drops_health);
     try std.testing.expectEqual(@as(u32, 0b001), slots[2].collected_box_drops);
     try std.testing.expectEqual(@as(u32, 0b0101), slots[2].unlocked_doors);
-    try std.testing.expectEqual(@as(u32, 0b0011), slots[2].opened_doors);
-    try std.testing.expectEqual(@as(u32, 0b0010), slots[2].door_swing_positive);
     try std.testing.expectEqual(@as(i64, 1755892800), slots[2].timestamp);
     try std.testing.expect(slots[7].occupied);
     try std.testing.expect(!slots[0].occupied);
@@ -213,8 +204,6 @@ test "version seven door masks migrate to validated door indices" {
     var old_slots: [slot_count]Slot = @splat(.{});
     old_slots[0] = .{
         .occupied = true,
-        .opened_doors = doorBit(0) | doorBit(6) | doorBit(11) | doorBit(21),
-        .door_swing_positive = doorBit(7) | doorBit(19),
         .unlocked_doors = doorBit(0) | doorBit(5) | doorBit(9),
     };
     const data = try std.json.Stringify.valueAlloc(
@@ -226,9 +215,20 @@ test "version seven door masks migrate to validated door indices" {
     try tmp.dir.writeFile(io, .{ .sub_path = file_name, .data = data });
 
     loadFromDir(tmp.dir, io);
-    try std.testing.expectEqual(doorBit(0) | doorBit(5) | doorBit(8) | doorBit(16), slots[0].opened_doors);
-    try std.testing.expectEqual(doorBit(6) | doorBit(15), slots[0].door_swing_positive);
     try std.testing.expectEqual(doorBit(0) | doorBit(5) | doorBit(10), slots[0].unlocked_doors);
+}
+
+test "version eight transient door fields are ignored" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data =
+        \\{"version":8,"slots":[{"occupied":true,"unlocked_doors":5,"opened_doors":3,"door_swing_positive":2},{},{},{},{},{},{},{}]}
+    ;
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = file_name, .data = data });
+
+    loadFromDir(tmp.dir, std.testing.io);
+    try std.testing.expect(slots[0].occupied);
+    try std.testing.expectEqual(@as(u32, 5), slots[0].unlocked_doors);
 }
 
 test "corrupt save file leaves empty slots" {

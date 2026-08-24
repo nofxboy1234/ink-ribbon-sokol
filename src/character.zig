@@ -1,8 +1,8 @@
 //! Data-oriented character mover scene.
 //!
 //! Plain state is kept separate from the systems that transform it. Box3D owns
-//! collision geometry, Sokol owns rendering, and the character capsule belongs
-//! to neither as a rigid body: it is moved explicitly by application code.
+//! collision geometry, Sokol owns rendering, and the character capsule moves
+//! explicitly while a kinematic proxy transfers its contacts to dynamic doors.
 
 const std = @import("std");
 const b3 = @import("box3d");
@@ -144,7 +144,18 @@ const world_item_count = pickup_defs.len + breakable_defs.len;
 const world_render_count = world_item_count + level.door_defs.len;
 const interaction_radius: f32 = 2.0;
 const door_interaction_radius: f32 = 1.0;
-const door_open_speed: f32 = 2.8;
+const door_limit_radians: f32 = 95.0 * std.math.pi / 180.0;
+const door_spring_hertz: f32 = 0.65;
+const door_spring_damping: f32 = 0.8;
+const door_density: f32 = 1.5;
+const door_angular_damping: f32 = 0.25;
+const door_push_impulse: f32 = 3.0;
+const door_walk_push_strength: f32 = 10.0;
+const door_run_push_strength: f32 = 16.0;
+const door_physics_edge_clearance: f32 = 0.05;
+const door_physics_vertical_clearance: f32 = 0.025;
+const door_ai_push_cooldown_seconds: f32 = 0.55;
+const physics_substeps: c_int = 4;
 const debris_capacity = breakable_defs.len * 8;
 const debris_seconds: f32 = 4.0;
 const action_duration: f32 = 0.68;
@@ -420,6 +431,10 @@ const GameState = struct {
     world: b3.b3WorldId = b3.b3_nullWorldId,
     breakable_bodies: [breakable_defs.len]b3.b3BodyId = @splat(b3.b3_nullBodyId),
     door_bodies: [level.door_defs.len]b3.b3BodyId = @splat(b3.b3_nullBodyId),
+    door_anchor_bodies: [level.door_defs.len]b3.b3BodyId = @splat(b3.b3_nullBodyId),
+    door_joints: [level.door_defs.len]b3.b3JointId = @splat(b3.b3_nullJointId),
+    player_proxy_body: b3.b3BodyId = b3.b3_nullBodyId,
+    hunter_proxy_body: b3.b3BodyId = b3.b3_nullBodyId,
     clock: Clock = .{},
     input: InputState = .{},
     debug: DebugState = .{},
@@ -434,9 +449,10 @@ const GameState = struct {
     box_drops_health: u32 = 0,
     collected_box_drops: u32 = 0,
     unlocked_doors: u32 = 0,
-    opened_doors: u32 = 0,
-    door_swing_positive: u32 = 0,
-    door_open_amount: [level.door_defs.len]f32 = @splat(0),
+    door_previous_angle: [level.door_defs.len]f32 = @splat(0),
+    door_current_angle: [level.door_defs.len]f32 = @splat(0),
+    door_hinge_sign: [level.door_defs.len]f32 = @splat(-1),
+    door_ai_push_cooldown: [level.door_defs.len]f32 = @splat(0),
     interaction_target: ?InteractionTarget = null,
     kick: KickState = .{},
     pickup_action: PickupAction = .{},
@@ -554,13 +570,13 @@ fn frame() callconv(.c) void {
 
     // Menus freeze the round exactly like map mode does.
     const gameplay_active = !game.map.active and game.menu.kind == .none and !game.inventory_ui.active;
-    if (gameplay_active) updateDoors(frame_time);
 
     const render_position = blk: {
         var ticks: usize = 0;
         while (ticks < max_ticks_per_frame and game.clock.consumeTick()) : (ticks += 1) {
             // Map/menu modes always freeze the player. On the map the hunter
             // is independently paused by default and can be resumed with P.
+            const hunter_sim_active = game.menu.kind == .none and !game.inventory_ui.active and (!game.map.active or !game.map.hunter_paused);
             if (gameplay_active) {
                 controller.update(
                     game.character_config,
@@ -571,6 +587,7 @@ fn frame() callconv(.c) void {
                     game.camera.basis,
                     @floatCast(fixed_dt),
                 );
+                if (game.condition.canMove() and !playerActionActive()) pushDoorsFromPlayerMovement(@floatCast(fixed_dt));
                 updatePlayerFootsteps();
                 if (game.condition.canMove() and !playerActionActive()) {
                     const reserve_before = game.combat.reserve;
@@ -597,7 +614,6 @@ fn frame() callconv(.c) void {
                     break;
                 }
             }
-            const hunter_sim_active = game.menu.kind == .none and !game.inventory_ui.active and (!game.map.active or !game.map.hunter_paused);
             if (hunter_sim_active) {
                 game.hunter_reaction.update(@floatCast(fixed_dt));
                 if (!game.combat.hunterKnockedDown() and !game.hunter_reaction.active()) {
@@ -618,6 +634,7 @@ fn frame() callconv(.c) void {
                     }
                 }
             }
+            if (gameplay_active or hunter_sim_active) stepDoorPhysics(gameplay_active, hunter_sim_active);
         }
         // Discard excess backlog after the bounded catch-up budget.
         if (ticks == max_ticks_per_frame and game.clock.accumulator >= fixed_dt) {
@@ -883,8 +900,8 @@ fn openDoorInHunterPath() void {
     var nearest: ?usize = null;
     var nearest_distance: f32 = 1.65;
     for (level.door_defs, 0..) |door, index| {
-        const bit = @as(u32, 1) << @intCast(index);
-        if (game.opened_doors & bit != 0 or !doorIsUnlocked(door, index)) continue;
+        if (!doorIsUnlocked(door, index) or game.door_ai_push_cooldown[index] > 0) continue;
+        if (@abs(game.door_current_angle[index]) > 0.65) continue;
         const dx = door.position.x - game.hunter.position.x;
         const dz = door.position.z - game.hunter.position.z;
         const distance = std.math.hypot(dx, dz);
@@ -896,7 +913,10 @@ fn openDoorInHunterPath() void {
     // The navmesh decides which doorway the route crosses. Activation itself
     // uses proximity because the next conservative grid waypoint can sit just
     // before the leaf and briefly point away from it.
-    if (nearest) |index| beginDoorOpen(index, game.hunter.position);
+    if (nearest) |index| {
+        applyDoorPush(index, game.hunter.position);
+        game.door_ai_push_cooldown[index] = door_ai_push_cooldown_seconds;
+    }
 }
 
 fn fireShot(focus: f32) void {
@@ -913,7 +933,7 @@ fn fireShot(focus: f32) void {
     const origin = b3.b3Pos{ .x = game.camera.eye.x, .y = game.camera.eye.y, .z = game.camera.eye.z };
 
     var filter = b3.b3DefaultQueryFilter();
-    filter.maskBits = controller.level_category;
+    filter.maskBits = controller.level_category | controller.door_category;
     const level_hit = b3.b3World_CastRayClosest(game.world, origin, ray_translation, filter);
     const level_fraction = if (level_hit.hit) level_hit.fraction else 1.0;
     const box_hit = closestShootableBox(origin, ray_translation, level_fraction + 0.002);
@@ -1020,7 +1040,11 @@ fn initPhysics() void {
     game.breakable_bodies = @splat(b3.b3_nullBodyId);
     for (breakable_defs, 0..) |box, index| game.breakable_bodies[index] = addBreakableBody(box);
     game.door_bodies = @splat(b3.b3_nullBodyId);
-    for (level.door_defs, 0..) |door, index| game.door_bodies[index] = addDoorBody(door);
+    game.door_anchor_bodies = @splat(b3.b3_nullBodyId);
+    game.door_joints = @splat(b3.b3_nullJointId);
+    for (level.door_defs, 0..) |door, index| addDoorPhysics(door, index);
+    game.player_proxy_body = addActorProxy(game.character_config.capsule_half_segment, game.character_config.capsule_radius, controller.player_query_category);
+    game.hunter_proxy_body = addActorProxy(game.hunter_config.capsule_half_segment, game.hunter_config.capsule_radius, controller.hunter_query_category);
 }
 
 fn addStaticBox(box: level.Box) void {
@@ -1057,18 +1081,78 @@ fn addBreakableBody(box: BreakableDef) b3.b3BodyId {
     return body;
 }
 
-fn addDoorBody(door: level.DoorDef) b3.b3BodyId {
+fn addDoorPhysics(door: level.DoorDef, index: usize) void {
+    const yaw = doorBaseYaw(door);
+    const rotation = yawRotation(yaw);
+    game.door_hinge_sign[index] = chooseDoorHingeSign(door);
+    const hinge = doorHingePosition(door, index, level.door_height * 0.5);
+
+    var anchor_def = b3.b3DefaultBodyDef();
+    anchor_def.position = .{ .x = hinge.x, .y = hinge.y, .z = hinge.z };
+    const anchor = b3.b3CreateBody(game.world, &anchor_def);
+
     var body_def = b3.b3DefaultBodyDef();
+    body_def.type = @intCast(b3.b3_dynamicBody);
     body_def.position = .{ .x = door.position.x, .y = level.door_height * 0.5, .z = door.position.z };
-    const yaw: f32 = if (door.axis == .x) 0 else std.math.pi * 0.5;
-    const half_yaw = yaw * 0.5;
-    body_def.rotation = .{ .v = .{ .y = @sin(half_yaw) }, .s = @cos(half_yaw) };
+    body_def.rotation = rotation;
+    body_def.angularDamping = door_angular_damping;
     const body = b3.b3CreateBody(game.world, &body_def);
     var shape_def = b3.b3DefaultShapeDef();
-    shape_def.filter.categoryBits = controller.level_category;
-    shape_def.filter.maskBits = controller.player_query_category | camera.camera_query_category | controller.hunter_query_category;
-    var hull = b3.b3MakeBoxHull(level.door_width * 0.5, level.door_height * 0.5, level.door_half_thickness);
+    shape_def.density = door_density;
+    shape_def.filter.categoryBits = controller.door_category;
+    shape_def.filter.maskBits = controller.player_query_category | controller.hunter_query_category | camera.camera_query_category;
+    var hull = b3.b3MakeBoxHull(
+        level.door_width * 0.5 - door_physics_edge_clearance,
+        level.door_height * 0.5 - door_physics_vertical_clearance,
+        level.door_half_thickness,
+    );
     _ = b3.b3CreateHullShape(body, &shape_def, &hull.base);
+
+    game.door_anchor_bodies[index] = anchor;
+    game.door_bodies[index] = body;
+    replaceDoorJoint(index, door.lock == .none);
+}
+
+fn replaceDoorJoint(index: usize, unlocked: bool) void {
+    const old_joint = game.door_joints[index];
+    if (b3.b3Joint_IsValid(old_joint)) b3.b3DestroyJoint(old_joint, true);
+
+    // Revolute joints rotate around their local Z axis. Rotate both joint
+    // frames so that axis becomes world Y, while keeping their initial frames
+    // coincident for either authored door orientation.
+    const rotation = yawRotation(doorBaseYaw(level.door_defs[index]));
+    const vertical_hinge_frame = b3.b3Quat{ .v = .{ .x = -@sin(std.math.pi * 0.25) }, .s = @cos(std.math.pi * 0.25) };
+    var joint_def = b3.b3DefaultRevoluteJointDef();
+    joint_def.base.bodyIdA = game.door_anchor_bodies[index];
+    joint_def.base.bodyIdB = game.door_bodies[index];
+    joint_def.base.localFrameA = b3.b3Transform_identity;
+    joint_def.base.localFrameA.q = vertical_hinge_frame;
+    joint_def.base.localFrameB = b3.b3Transform_identity;
+    joint_def.base.localFrameB.p = .{ .x = game.door_hinge_sign[index] * level.door_width * 0.5 };
+    joint_def.base.localFrameB.q = b3.b3MulQuat(b3.b3Conjugate(rotation), vertical_hinge_frame);
+    joint_def.enableSpring = true;
+    joint_def.hertz = door_spring_hertz;
+    joint_def.dampingRatio = door_spring_damping;
+    joint_def.targetAngle = 0;
+    joint_def.enableLimit = true;
+    joint_def.lowerAngle = if (unlocked) -door_limit_radians else 0;
+    joint_def.upperAngle = if (unlocked) door_limit_radians else 0;
+    game.door_joints[index] = b3.b3CreateRevoluteJoint(game.world, &joint_def);
+}
+
+fn addActorProxy(half_segment: f32, radius: f32, category: u64) b3.b3BodyId {
+    var body_def = b3.b3DefaultBodyDef();
+    body_def.type = @intCast(b3.b3_kinematicBody);
+    const body = b3.b3CreateBody(game.world, &body_def);
+    var shape_def = b3.b3DefaultShapeDef();
+    shape_def.filter.categoryBits = category;
+    shape_def.filter.maskBits = controller.door_category;
+    var capsule = b3.b3Capsule{
+        .center1 = .{ .y = -half_segment },
+        .center2 = .{ .y = half_segment },
+        .radius = radius,
+    };
+    _ = b3.b3CreateCapsuleShape(body, &shape_def, &capsule);
     return body;
 }
 
@@ -1085,44 +1169,147 @@ fn syncBreakableCollision() void {
     }
 }
 
-fn setDoorCollision(index: usize, enabled: bool) void {
-    const body = game.door_bodies[index];
-    if (!b3.b3Body_IsValid(body) or b3.b3Body_IsEnabled(body) == enabled) return;
-    if (enabled) b3.b3Body_Enable(body) else b3.b3Body_Disable(body);
+fn doorBaseYaw(door: level.DoorDef) f32 {
+    return if (door.axis == .x) 0 else std.math.pi * 0.5;
+}
+
+fn yawRotation(yaw: f32) b3.b3Quat {
+    const half_yaw = yaw * 0.5;
+    return .{ .v = .{ .y = @sin(half_yaw) }, .s = @cos(half_yaw) };
+}
+
+fn chooseDoorHingeSign(door: level.DoorDef) f32 {
+    const negative_score = doorHingeObstructionScore(door, -1);
+    const positive_score = doorHingeObstructionScore(door, 1);
+    return if (positive_score + 0.001 < negative_score) 1 else -1;
+}
+
+fn doorHingeObstructionScore(door: level.DoorDef, sign: f32) f32 {
+    const hinge_x = door.position.x + (if (door.axis == .x) sign * level.door_width * 0.5 else 0);
+    const hinge_z = door.position.z + (if (door.axis == .z) sign * level.door_width * 0.5 else 0);
+    var score: f32 = 0;
+    for (level.current.boxSlice()) |box| {
+        if (!box.collidable or box.is_roof or box.hunter_block) continue;
+        if (box.center.y + box.half_extents.y <= 0.05 or box.center.y - box.half_extents.y >= level.door_height) continue;
+        const parallel_to_door = if (door.axis == .x)
+            box.half_extents.x > box.half_extents.z
+        else
+            box.half_extents.z > box.half_extents.x;
+        if (parallel_to_door) continue;
+        const dx = @max(@abs(hinge_x - box.center.x) - box.half_extents.x, 0);
+        const dz = @max(@abs(hinge_z - box.center.z) - box.half_extents.z, 0);
+        const distance = std.math.hypot(dx, dz);
+        if (distance < 0.35) score += 0.35 - distance;
+    }
+    return score;
+}
+
+fn doorHingePosition(door: level.DoorDef, index: usize, y: f32) Vec3 {
+    const yaw = doorBaseYaw(door);
+    const sign = game.door_hinge_sign[index];
+    return .{
+        .x = door.position.x + @cos(yaw) * sign * level.door_width * 0.5,
+        .y = y,
+        .z = door.position.z - @sin(yaw) * sign * level.door_width * 0.5,
+    };
 }
 
 fn restoreDoorState() void {
-    for (level.door_defs, 0..) |_, index| {
-        const bit = @as(u32, 1) << @intCast(index);
-        const open = game.opened_doors & bit != 0;
-        game.door_open_amount[index] = if (open) 1 else 0;
-        setDoorCollision(index, !open);
-    }
-}
-
-fn updateDoors(dt: f32) void {
     for (level.door_defs, 0..) |door, index| {
-        const bit = @as(u32, 1) << @intCast(index);
-        if (game.opened_doors & bit != 0) {
-            game.door_open_amount[index] = @min(1, game.door_open_amount[index] + door_open_speed * dt);
-        } else if (game.door_open_amount[index] > 0) {
-            game.door_open_amount[index] = @max(0, game.door_open_amount[index] - door_open_speed * dt);
-            if (game.door_open_amount[index] == 0 and !doorwayOccupied(door)) setDoorCollision(index, true);
-        } else if (!doorwayOccupied(door)) {
-            setDoorCollision(index, true);
-        }
+        const body = game.door_bodies[index];
+        if (!b3.b3Body_IsValid(body)) continue;
+        b3.b3Body_SetTransform(body, .{ .x = door.position.x, .y = level.door_height * 0.5, .z = door.position.z }, yawRotation(doorBaseYaw(door)));
+        b3.b3Body_SetLinearVelocity(body, .{});
+        b3.b3Body_SetAngularVelocity(body, .{});
+        replaceDoorJoint(index, doorIsUnlocked(door, index));
+        b3.b3Body_SetAwake(body, true);
+        game.door_previous_angle[index] = 0;
+        game.door_current_angle[index] = 0;
+        game.door_ai_push_cooldown[index] = 0;
+    }
+    resetActorProxies();
+}
+
+fn resetActorProxies() void {
+    setProxyTransform(game.player_proxy_body, game.character.position);
+    setProxyTransform(game.hunter_proxy_body, game.hunter.position);
+}
+
+fn setProxyTransform(body: b3.b3BodyId, position: b3.b3Pos) void {
+    if (!b3.b3Body_IsValid(body)) return;
+    b3.b3Body_SetTransform(body, position, b3.b3Quat_identity);
+    b3.b3Body_SetLinearVelocity(body, .{});
+}
+
+fn targetProxy(body: b3.b3BodyId, previous: b3.b3Pos, current: b3.b3Pos) void {
+    if (!b3.b3Body_IsValid(body)) return;
+    b3.b3Body_SetTransform(body, previous, b3.b3Quat_identity);
+    b3.b3Body_SetTargetTransform(body, .{ .p = .{ .x = current.x, .y = current.y, .z = current.z }, .q = b3.b3Quat_identity }, @floatCast(fixed_dt), true);
+}
+
+// The characters are query-driven capsule movers rather than simulated rigid
+// bodies. Their kinematic proxies block a closing leaf, while this contact
+// force carries sustained walk/run intent into the hinge after the mover has
+// reached the panel and can no longer advance its proxy through it.
+fn pushDoorsFromPlayerMovement(dt: f32) void {
+    const move_x = @as(f32, @floatFromInt(@intFromBool(game.input.right))) - @as(f32, @floatFromInt(@intFromBool(game.input.left)));
+    const move_y = @as(f32, @floatFromInt(@intFromBool(game.input.forward))) - @as(f32, @floatFromInt(@intFromBool(game.input.back)));
+    const move_length = std.math.hypot(move_x, move_y);
+    if (move_length < 0.001) return;
+    const inverse_length = 1.0 / @max(move_length, 1.0);
+    const wish = b3.b3Vec3{
+        .x = (game.camera.basis.forward.x * move_y + game.camera.basis.right.x * move_x) * inverse_length,
+        .z = (game.camera.basis.forward.z * move_y + game.camera.basis.right.z * move_x) * inverse_length,
+    };
+    const strength = if (game.input.run and !game.input.aiming) door_run_push_strength else door_walk_push_strength;
+
+    for (level.door_defs, 0..) |door, index| {
+        if (!doorIsUnlocked(door, index)) continue;
+        const yaw = doorBaseYaw(door) + game.door_current_angle[index];
+        const tangent = b3.b3Vec3{ .x = @cos(yaw), .z = -@sin(yaw) };
+        const normal = b3.b3Vec3{ .x = @sin(yaw), .z = @cos(yaw) };
+        const hinge = doorHingePosition(door, index, level.door_height * 0.5);
+        const center_direction = -game.door_hinge_sign[index];
+        const center_x = hinge.x + tangent.x * level.door_width * 0.5 * center_direction;
+        const center_z = hinge.z + tangent.z * level.door_width * 0.5 * center_direction;
+        const relative_x = game.character.position.x - center_x;
+        const relative_z = game.character.position.z - center_z;
+        const along = relative_x * tangent.x + relative_z * tangent.z;
+        if (@abs(along) > level.door_width * 0.5 + game.character_config.capsule_radius) continue;
+        const normal_distance = relative_x * normal.x + relative_z * normal.z;
+        if (@abs(normal_distance) > level.door_half_thickness + game.character_config.capsule_radius + 0.12) continue;
+        const toward_panel = wish.x * normal.x + wish.z * normal.z;
+        if (normal_distance * toward_panel >= -0.01) continue;
+
+        const contact_along = std.math.clamp(along, -level.door_width * 0.5, level.door_width * 0.5);
+        const contact_x = center_x + tangent.x * contact_along;
+        const contact_z = center_z + tangent.z * contact_along;
+        const radial_x = contact_x - hinge.x;
+        const radial_z = contact_z - hinge.z;
+        const torque_sign = radial_z * wish.x - radial_x * wish.z;
+        if (@abs(torque_sign) < 0.001) continue;
+        const leverage = std.math.clamp(@abs(torque_sign) / (level.door_width * 0.5), 0.35, 1.0);
+        const direction: f32 = if (torque_sign >= 0) 1 else -1;
+        b3.b3Body_ApplyAngularImpulse(game.door_bodies[index], .{ .y = direction * strength * leverage * dt }, true);
     }
 }
 
-fn doorwayOccupied(door: level.DoorDef) bool {
-    return actorOverlapsDoorway(game.character.position, game.character_config.capsule_radius, door) or
-        actorOverlapsDoorway(game.hunter.position, game.hunter_config.capsule_radius, door);
-}
+fn stepDoorPhysics(player_active: bool, hunter_active: bool) void {
+    for (level.door_defs, 0..) |_, index| {
+        game.door_previous_angle[index] = game.door_current_angle[index];
+        game.door_ai_push_cooldown[index] = @max(0, game.door_ai_push_cooldown[index] - @as(f32, @floatCast(fixed_dt)));
+    }
 
-fn actorOverlapsDoorway(position: b3.b3Pos, radius: f32, door: level.DoorDef) bool {
-    const along = if (door.axis == .x) @abs(position.x - door.position.x) else @abs(position.z - door.position.z);
-    const normal = if (door.axis == .x) @abs(position.z - door.position.z) else @abs(position.x - door.position.x);
-    return along < level.door_width * 0.5 + radius and normal < level.door_half_thickness + radius + 0.08;
+    if (player_active) targetProxy(game.player_proxy_body, game.character.previous_position, game.character.position) else setProxyTransform(game.player_proxy_body, game.character.position);
+    if (hunter_active) targetProxy(game.hunter_proxy_body, game.hunter.previous_position, game.hunter.position) else setProxyTransform(game.hunter_proxy_body, game.hunter.position);
+    b3.b3World_Step(game.world, @floatCast(fixed_dt), physics_substeps);
+
+    for (level.door_defs, 0..) |_, index| {
+        const joint = game.door_joints[index];
+        if (!b3.b3Joint_IsValid(joint)) continue;
+        const angle = b3.b3RevoluteJoint_GetAngle(joint);
+        game.door_current_angle[index] = angle;
+    }
 }
 
 fn breakableIndexForBody(body: b3.b3BodyId) ?usize {
@@ -1185,8 +1372,6 @@ fn placePlayerFromSlot(slot: saves.Slot) void {
     game.box_drops_health = slot.box_drops_health;
     game.collected_box_drops = slot.collected_box_drops;
     game.unlocked_doors = slot.unlocked_doors;
-    game.opened_doors = slot.opened_doors;
-    game.door_swing_positive = slot.door_swing_positive;
     game.condition.reset(game.condition_config, slot.health);
     game.combat_visuals = .{};
     game.player_deformation = .{};
@@ -1221,8 +1406,6 @@ fn spawnPlayerAndHunter() void {
         game.box_drops_health = 0;
         game.collected_box_drops = 0;
         game.unlocked_doors = 0;
-        game.opened_doors = 0;
-        game.door_swing_positive = 0;
         game.condition.reset(game.condition_config, game.condition_config.max_health);
     }
     game.player_deformation = .{};
@@ -1314,7 +1497,7 @@ fn targetPosition(target: InteractionTarget) Vec3 {
         .pickup => pickup_defs[target.index].position,
         .breakable => breakable_defs[target.index].position,
         .box_drop => boxDropPosition(target.index),
-        .door => level.door_defs[target.index].position,
+        .door => doorPose(level.door_defs[target.index], target.index, level.door_height * 0.5).center,
     };
 }
 
@@ -1486,7 +1669,7 @@ fn updateInteractionTarget() void {
         }
     }
     for (level.door_defs, 0..) |door, index| {
-        const score = interactionScore(door.position, door_interaction_radius) orelse continue;
+        const score = interactionScore(doorPose(door, index, level.door_height * 0.5).center, door_interaction_radius) orelse continue;
         if (score > best_score) {
             best = .{ .kind = .door, .index = index };
             best_score = score;
@@ -1535,14 +1718,7 @@ fn activateInteraction() void {
 fn interactDoor(index: usize) void {
     const door = level.door_defs[index];
     const bit = @as(u32, 1) << @intCast(index);
-    if (game.opened_doors & bit != 0) {
-        game.opened_doors &= ~bit;
-        game.character.velocity.x = 0;
-        game.character.velocity.z = 0;
-        game.interaction_target = null;
-        return;
-    }
-    if (game.unlocked_doors & bit == 0) {
+    if (!doorIsUnlocked(door, index)) {
         if (doorKey(door.lock)) |key| {
             if (!game.inventory.consumeOne(key)) {
                 game.notice = .door_locked;
@@ -1550,29 +1726,28 @@ fn interactDoor(index: usize) void {
                 return;
             }
             game.unlocked_doors |= bit;
+            replaceDoorJoint(index, true);
+            b3.b3Body_SetAwake(game.door_bodies[index], true);
             game.notice = .door_unlocked;
             game.notice_timer = notice_seconds;
         }
     }
 
-    beginDoorOpen(index, game.character.position);
+    applyDoorPush(index, game.character.position);
     game.character.velocity.x = 0;
     game.character.velocity.z = 0;
     game.interaction_target = null;
 }
 
-fn beginDoorOpen(index: usize, opener: b3.b3Pos) void {
+fn applyDoorPush(index: usize, opener: b3.b3Pos) void {
     const door = level.door_defs[index];
-    const bit = @as(u32, 1) << @intCast(index);
-    if (game.opened_doors & bit != 0) return;
+    if (!doorIsUnlocked(door, index)) return;
     const opener_side = if (door.axis == .x)
         opener.z - door.position.z
     else
         opener.x - door.position.x;
-    if (opener_side >= 0) game.door_swing_positive |= bit else game.door_swing_positive &= ~bit;
-    game.opened_doors |= bit;
-    setDoorCollision(index, false);
-    game.audio.play(.door_open);
+    const direction: f32 = if (opener_side >= 0) 1 else -1;
+    b3.b3Body_ApplyAngularImpulse(game.door_bodies[index], .{ .y = -game.door_hinge_sign[index] * direction * door_push_impulse }, true);
 }
 
 fn updateActionsAndDebris(dt: f32) void {
@@ -1733,8 +1908,6 @@ fn respawnAfterCatch() void {
         game.box_drops_health = 0;
         game.collected_box_drops = 0;
         game.unlocked_doors = 0;
-        game.opened_doors = 0;
-        game.door_swing_positive = 0;
         game.condition.reset(game.condition_config, game.condition_config.max_health);
     }
 
@@ -1937,8 +2110,6 @@ fn confirmMenu() void {
                 .box_drops_health = game.box_drops_health,
                 .collected_box_drops = game.collected_box_drops,
                 .unlocked_doors = game.unlocked_doors,
-                .opened_doors = game.opened_doors,
-                .door_swing_positive = game.door_swing_positive,
                 .timestamp = std.Io.Timestamp.now(app_io.io(), .real).toSeconds(),
             };
             if (saves.writeToCwd(app_io.io())) |_| {
@@ -2673,11 +2844,10 @@ fn updatePickupInstances() void {
         map_count += 1;
     }
     for (level.door_defs, 0..) |door, index| {
-        const pose = doorPose(door, index, level.floor_height + 0.26);
         map_instances[map_count] = makeInstance(
-            pose.center,
+            .{ .x = door.position.x, .y = level.floor_height + 0.26, .z = door.position.z },
             .{ .x = level.door_width * 0.5, .y = 0.055, .z = 0.22 },
-            pose.yaw,
+            doorBaseYaw(door),
             doorDisplayColor(door, index),
         );
         map_count += 1;
@@ -2715,20 +2885,16 @@ fn makeDoorInstance(door: level.DoorDef, index: usize) Instance {
 const DoorPose = struct { center: Vec3, yaw: f32 };
 
 fn doorPose(door: level.DoorDef, index: usize, y: f32) DoorPose {
-    const bit = @as(u32, 1) << @intCast(index);
-    const base_yaw: f32 = if (door.axis == .x) 0 else std.math.pi * 0.5;
-    const direction: f32 = if (game.door_swing_positive & bit != 0) 1 else -1;
-    const yaw = base_yaw + direction * std.math.pi * 0.5 * game.door_open_amount[index];
+    const base_yaw = doorBaseYaw(door);
+    const angle = game.door_previous_angle[index] + (game.door_current_angle[index] - game.door_previous_angle[index]) * game.clock.alpha();
+    const yaw = base_yaw + angle;
     const half_width = level.door_width * 0.5;
-    const hinge = Vec3{
-        .x = door.position.x - @cos(base_yaw) * half_width,
-        .y = y,
-        .z = door.position.z + @sin(base_yaw) * half_width,
-    };
+    const hinge = doorHingePosition(door, index, y);
+    const center_direction = -game.door_hinge_sign[index];
     const center = Vec3{
-        .x = hinge.x + @cos(yaw) * half_width,
+        .x = hinge.x + @cos(yaw) * half_width * center_direction,
         .y = hinge.y,
-        .z = hinge.z - @sin(yaw) * half_width,
+        .z = hinge.z - @sin(yaw) * half_width * center_direction,
     };
     return .{ .center = center, .yaw = yaw };
 }
@@ -3547,6 +3713,120 @@ test "hunter starting room has an unlocked path door in opening range" {
     try std.testing.expect(found);
 }
 
+test "unlocked physics door swings and spring closes" {
+    level.load();
+    game = .{};
+    initPhysics();
+    defer {
+        b3.b3DestroyWorld(game.world);
+        game = .{};
+    }
+    const index = for (level.door_defs, 0..) |door, door_index| {
+        if (door.lock == .none) break door_index;
+    } else unreachable;
+    const door = level.door_defs[index];
+    game.character.position = .{ .x = -22, .y = player_spawn_y, .z = 15 };
+    game.character.previous_position = game.character.position;
+    game.hunter.position = .{ .x = 22, .y = hunter_spawn_y, .z = -15 };
+    game.hunter.previous_position = game.hunter.position;
+    restoreDoorState();
+
+    const opener = if (door.axis == .x)
+        b3.b3Pos{ .x = door.position.x, .y = player_spawn_y, .z = door.position.z + 1 }
+    else
+        b3.b3Pos{ .x = door.position.x + 1, .y = player_spawn_y, .z = door.position.z };
+    applyDoorPush(index, opener);
+    for (0..20) |_| stepDoorPhysics(false, false);
+    try std.testing.expect(@abs(game.door_current_angle[index]) > 0.15);
+
+    for (0..300) |_| stepDoorPhysics(false, false);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), game.door_current_angle[index], 0.04);
+}
+
+test "locked physics door remains constrained until unlocked" {
+    level.load();
+    game = .{};
+    initPhysics();
+    defer {
+        b3.b3DestroyWorld(game.world);
+        game = .{};
+    }
+    const index = for (level.door_defs, 0..) |door, door_index| {
+        if (door.lock != .none) break door_index;
+    } else unreachable;
+    const door = level.door_defs[index];
+    const opener = if (door.axis == .x)
+        b3.b3Pos{ .x = door.position.x, .y = player_spawn_y, .z = door.position.z + 1 }
+    else
+        b3.b3Pos{ .x = door.position.x + 1, .y = player_spawn_y, .z = door.position.z };
+    restoreDoorState();
+    applyDoorPush(index, opener);
+    for (0..30) |_| stepDoorPhysics(false, false);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), game.door_current_angle[index], 0.003);
+
+    game.unlocked_doors |= @as(u32, 1) << @intCast(index);
+    restoreDoorState();
+    applyDoorPush(index, opener);
+    var maximum_angle: f32 = 0;
+    for (0..20) |_| {
+        stepDoorPhysics(false, false);
+        maximum_angle = @max(maximum_angle, @abs(game.door_current_angle[index]));
+    }
+    try std.testing.expect(maximum_angle > 0.15);
+}
+
+test "player movement contact pushes an unlocked physics door" {
+    level.load();
+    game = .{};
+    initPhysics();
+    defer {
+        b3.b3DestroyWorld(game.world);
+        game = .{};
+    }
+    const index = for (level.door_defs, 0..) |door, door_index| {
+        if (door.lock == .none) break door_index;
+    } else unreachable;
+    const door = level.door_defs[index];
+    const normal = if (door.axis == .x)
+        b3.b3Vec3{ .z = -1 }
+    else
+        b3.b3Vec3{ .x = -1 };
+    const start = b3.b3Pos{
+        .x = door.position.x - normal.x * 0.72,
+        .y = player_spawn_y,
+        .z = door.position.z - normal.z * 0.72,
+    };
+    game.character = controller.State.init(start);
+    game.hunter.position = .{ .x = 22, .y = hunter_spawn_y, .z = -15 };
+    game.hunter.previous_position = game.hunter.position;
+    const basis = controller.Basis{ .forward = normal, .right = .{ .x = -normal.z, .z = normal.x } };
+    game.camera.basis = basis;
+    game.input.forward = true;
+    restoreDoorState();
+
+    var maximum_angle: f32 = 0;
+    for (0..90) |_| {
+        controller.update(
+            game.character_config,
+            &game.character,
+            &game.mover_scratch,
+            game.world,
+            .{ .move = .{ .y = 1 } },
+            basis,
+            @floatCast(fixed_dt),
+        );
+        pushDoorsFromPlayerMovement(@floatCast(fixed_dt));
+        stepDoorPhysics(true, false);
+        maximum_angle = @max(maximum_angle, @abs(game.door_current_angle[index]));
+    }
+    try std.testing.expect(maximum_angle > 0.08);
+    const crossed = if (door.axis == .x)
+        game.character.position.z < door.position.z
+    else
+        game.character.position.x < door.position.x;
+    try std.testing.expect(crossed);
+}
+
 test "hunter opens and crosses its starting room door" {
     level.load();
     navmesh.buildLevel();
@@ -3580,10 +3860,11 @@ test "hunter opens and crosses its starting room door" {
             1.0 / 60.0,
         );
         openDoorInHunterPath();
-        updateDoors(1.0 / 60.0);
+        stepDoorPhysics(false, true);
     }
     const start_room_door = level.door_defs.len - 1;
-    try std.testing.expect(game.opened_doors & (@as(u32, 1) << @intCast(start_room_door)) != 0);
+    try std.testing.expect(b3.b3Joint_IsValid(game.door_joints[start_room_door]));
+    try std.testing.expectEqual(@as(b3.b3BodyType, @intCast(b3.b3_dynamicBody)), b3.b3Body_GetType(game.door_bodies[start_room_door]));
     try std.testing.expect(game.hunter.position.x < 22.3);
 }
 

@@ -168,7 +168,7 @@ fn collideCameraFraction(config: Config, world: b3.b3WorldId, pivot: Vec3, desir
     const translation: b3.b3Vec3 = .{ .x = desired.x - pivot.x, .y = desired.y - pivot.y, .z = desired.z - pivot.z };
     var filter = b3.b3DefaultQueryFilter();
     filter.categoryBits = camera_query_category;
-    filter.maskBits = controller.level_category;
+    filter.maskBits = controller.level_category | controller.door_category;
     _ = b3.b3World_CastShape(
         world,
         .{ .x = pivot.x, .y = pivot.y, .z = pivot.z },

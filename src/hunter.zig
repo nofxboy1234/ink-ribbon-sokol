@@ -397,7 +397,7 @@ fn inVisionCone(facing_yaw: f32, to_player: b3.b3Vec3, half_angle: f32) bool {
 // are not level-category shapes, so neither can occlude it.
 fn lineOfSight(world: b3.b3WorldId, from: b3.b3Pos, to: b3.b3Pos) bool {
     var filter = b3.b3DefaultQueryFilter();
-    filter.maskBits = controller.level_category | controller.hunter_block_category;
+    filter.maskBits = controller.level_category | controller.hunter_block_category | controller.door_category;
     const ray = b3.b3World_CastRayClosest(world, from, subPos(to, from), filter);
     return !ray.hit;
 }
