@@ -7,8 +7,11 @@
 
 const std = @import("std");
 const math = @import("math.zig");
+const blender_level = @import("blender_level.zig");
 pub const Vec3 = math.Vec3;
 pub const Vec4 = math.Vec4;
+
+pub const Kind = enum { authored_rpd, blender_blockout };
 
 pub const footprint_half_x: f32 = 26;
 pub const footprint_half_z: f32 = 19;
@@ -90,6 +93,11 @@ pub const Box = struct {
     center: Vec3,
     half_extents: Vec3,
     color: Vec4,
+    // Orthonormal local axes in world space. Blender mesh nodes use these
+    // directly; hand-authored boxes default to an identity orientation.
+    basis_x: Vec3 = .{ .x = 1 },
+    basis_y: Vec3 = .{ .y = 1 },
+    basis_z: Vec3 = .{ .z = 1 },
     pitch: f32 = 0,
     visible: bool = true,
     collidable: bool = true,
@@ -278,6 +286,7 @@ const props = [_]Prop{
 const SaveBounds = struct { min_x: f32, max_x: f32, min_z: f32, max_z: f32 };
 
 pub const Level = struct {
+    kind: Kind = .authored_rpd,
     boxes: [max_boxes]Box = undefined,
     box_count: usize = 0,
     rooms: [room_capacity]Room = undefined,
@@ -302,6 +311,11 @@ pub const Level = struct {
     save_max_z: f32 = 0,
     lights: [light_capacity]Vec4 = @splat(.{}),
     light_count: usize = 0,
+    floor_surface_y: f32 = 0,
+    walk_min_x: f32 = -footprint_half_x,
+    walk_max_x: f32 = footprint_half_x,
+    walk_min_z: f32 = -footprint_half_z,
+    walk_max_z: f32 = footprint_half_z,
 
     pub fn boxSlice(self: *const Level) []const Box {
         return self.boxes[0..self.box_count];
@@ -349,6 +363,12 @@ pub const Level = struct {
     }
 
     pub fn validate(self: *const Level) bool {
+        if (self.kind == .blender_blockout) {
+            return self.box_count > 0 and self.box_count <= max_boxes and
+                self.walk_min_x < self.walk_max_x and self.walk_min_z < self.walk_max_z and
+                self.player_spawn.x >= self.walk_min_x and self.player_spawn.x <= self.walk_max_x and
+                self.player_spawn.z >= self.walk_min_z and self.player_spawn.z <= self.walk_max_z;
+        }
         if (self.room_count != room_capacity or self.box_count == 0 or self.box_count > max_boxes) return false;
         if (self.graphDistance(self.start_room, self.save_room) == null) return false;
         if (!self.isInSaveRoom(self.save_room_target.x, self.save_room_target.z)) return false;
@@ -370,8 +390,88 @@ pub const Level = struct {
 
 pub var current: Level = undefined;
 
+// The existing RPD remains available to tests and to a future level selector.
 pub fn load() void {
     current = build();
+}
+
+// The Blender blockout is the default scene launched by the game.
+pub fn loadDefault() void {
+    current = buildBlender() catch |err| std.debug.panic("failed to import level/level.glb: {s}", .{@errorName(err)});
+}
+
+pub fn authoredGameplayEnabled() bool {
+    return current.kind == .authored_rpd;
+}
+
+pub fn insideWalkBounds(x: f32, z: f32) bool {
+    return x >= current.walk_min_x and x <= current.walk_max_x and
+        z >= current.walk_min_z and z <= current.walk_max_z;
+}
+
+fn buildBlender() !Level {
+    const imported = try blender_level.load();
+    var result = Level{ .kind = .blender_blockout };
+    for (imported.boxSlice(), 0..) |box, index| {
+        const is_floor = index == imported.floor_index;
+        result.addBox(.{
+            .center = fromImported(box.center),
+            .half_extents = fromImported(box.half_extents),
+            .basis_x = fromImported(box.basis_x),
+            .basis_y = fromImported(box.basis_y),
+            .basis_z = fromImported(box.basis_z),
+            .color = if (is_floor) floor_color else wall_color,
+            // The lowest broad object is the support surface, not a navmesh
+            // obstacle. It remains collidable so the capsule stands on it.
+            .nav_block = !is_floor,
+        });
+    }
+
+    const floor = result.boxes[imported.floor_index];
+    const floor_half_x = projectedHalfExtent(floor, .x);
+    const floor_half_z = projectedHalfExtent(floor, .z);
+    result.floor_surface_y = imported.floor_surface_y;
+    result.walk_min_x = floor.center.x - floor_half_x;
+    result.walk_max_x = floor.center.x + floor_half_x;
+    result.walk_min_z = floor.center.z - floor_half_z;
+    result.walk_max_z = floor.center.z + floor_half_z;
+    // Spawn coordinates describe the support surface. Character code adds the
+    // capsule's centre height, just as it does for the authored y=0 floor.
+    result.player_spawn = .{ .x = floor.center.x, .y = result.floor_surface_y, .z = floor.center.z };
+    result.hunter_spawn = .{
+        .x = floor.center.x - floor_half_x * 0.62,
+        .y = result.floor_surface_y,
+        .z = floor.center.z - floor_half_z * 0.62,
+    };
+    // Retain a valid map target without importing the RPD's typewriters or
+    // inventory props into this isolated blockout test.
+    result.save_targets[0] = result.player_spawn;
+    result.save_target_count = 1;
+    result.save_bounds[0] = .{
+        .min_x = result.walk_min_x,
+        .max_x = result.walk_max_x,
+        .min_z = result.walk_min_z,
+        .max_z = result.walk_max_z,
+    };
+    result.save_room_target = result.player_spawn;
+    result.lights[0] = .{ .x = floor.center.x, .y = result.floor_surface_y + 6.0, .z = floor.center.z, .w = @max(floor_half_x, floor_half_z) * 2.0 };
+    result.light_count = 1;
+    if (!result.validate()) return error.InvalidImportedLevel;
+    return result;
+}
+
+fn fromImported(value: blender_level.Vec3) Vec3 {
+    return .{ .x = value.x, .y = value.y, .z = value.z };
+}
+
+const ProjectionAxis = enum { x, y, z };
+
+pub fn projectedHalfExtent(box: Box, axis: ProjectionAxis) f32 {
+    return switch (axis) {
+        .x => @abs(box.basis_x.x) * box.half_extents.x + @abs(box.basis_y.x) * box.half_extents.y + @abs(box.basis_z.x) * box.half_extents.z,
+        .y => @abs(box.basis_x.y) * box.half_extents.x + @abs(box.basis_y.y) * box.half_extents.y + @abs(box.basis_z.y) * box.half_extents.z,
+        .z => @abs(box.basis_x.z) * box.half_extents.x + @abs(box.basis_y.z) * box.half_extents.y + @abs(box.basis_z.z) * box.half_extents.z,
+    };
 }
 
 fn build() Level {
@@ -571,6 +671,10 @@ fn addDoorFrame(result: *Level, door: DoorDef) void {
 fn addRamp(result: *Level, x: f32, z: f32, hx: f32, hz: f32, pitch: f32) void {
     var box = solid(x, 0.38, z, hx, 0.12, hz, stair_color);
     box.pitch = pitch;
+    const c = @cos(pitch);
+    const s = @sin(pitch);
+    box.basis_y = .{ .y = c, .z = s };
+    box.basis_z = .{ .y = -s, .z = c };
     box.nav_block = false;
     result.addBox(box);
 }
@@ -735,4 +839,12 @@ test "six stair ramps are pitched and terminate on first floor" {
     var ramps: usize = 0;
     for (current.boxSlice()) |box| ramps += @intFromBool(box.pitch != 0);
     try std.testing.expectEqual(@as(usize, 6), ramps);
+}
+
+test "Blender blockout is isolated and spawns on its bottom floor" {
+    current = try buildBlender();
+    try std.testing.expectEqual(Kind.blender_blockout, current.kind);
+    try std.testing.expectEqual(@as(usize, 3), current.box_count);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.83579254), current.player_spawn.y, 0.0001);
+    try std.testing.expect(!authoredGameplayEnabled());
 }

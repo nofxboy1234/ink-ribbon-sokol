@@ -576,7 +576,7 @@ fn frame() callconv(.c) void {
         while (ticks < max_ticks_per_frame and game.clock.consumeTick()) : (ticks += 1) {
             // Map/menu modes always freeze the player. On the map the hunter
             // is independently paused by default and can be resumed with P.
-            const hunter_sim_active = game.menu.kind == .none and !game.inventory_ui.active and (!game.map.active or !game.map.hunter_paused);
+            const hunter_sim_active = level.authoredGameplayEnabled() and game.menu.kind == .none and !game.inventory_ui.active and (!game.map.active or !game.map.hunter_paused);
             if (gameplay_active) {
                 controller.update(
                     game.character_config,
@@ -897,6 +897,7 @@ fn updateHunterFootsteps() void {
 }
 
 fn openDoorInHunterPath() void {
+    if (!level.authoredGameplayEnabled()) return;
     var nearest: ?usize = null;
     var nearest_distance: f32 = 1.65;
     for (level.door_defs, 0..) |door, index| {
@@ -981,6 +982,7 @@ fn fireShot(focus: f32) void {
 }
 
 fn closestShootableBox(origin: b3.b3Pos, translation: b3.b3Vec3, max_fraction: f32) ?usize {
+    if (!level.authoredGameplayEnabled()) return null;
     var closest_index: ?usize = null;
     var closest_fraction = max_fraction;
     for (breakable_defs, 0..) |box, index| {
@@ -1038,11 +1040,13 @@ fn initPhysics() void {
     game.world = b3.b3CreateWorld(&world_def);
     for (level.current.boxSlice()) |box| if (box.collidable) addStaticBox(box);
     game.breakable_bodies = @splat(b3.b3_nullBodyId);
-    for (breakable_defs, 0..) |box, index| game.breakable_bodies[index] = addBreakableBody(box);
     game.door_bodies = @splat(b3.b3_nullBodyId);
     game.door_anchor_bodies = @splat(b3.b3_nullBodyId);
     game.door_joints = @splat(b3.b3_nullJointId);
-    for (level.door_defs, 0..) |door, index| addDoorPhysics(door, index);
+    if (level.authoredGameplayEnabled()) {
+        for (breakable_defs, 0..) |box, index| game.breakable_bodies[index] = addBreakableBody(box);
+        for (level.door_defs, 0..) |door, index| addDoorPhysics(door, index);
+    }
     game.player_proxy_body = addActorProxy(game.character_config.capsule_half_segment, game.character_config.capsule_radius, controller.player_query_category);
     game.hunter_proxy_body = addActorProxy(game.hunter_config.capsule_half_segment, game.hunter_config.capsule_radius, controller.hunter_query_category);
 }
@@ -1050,10 +1054,12 @@ fn initPhysics() void {
 fn addStaticBox(box: level.Box) void {
     var body_def = b3.b3DefaultBodyDef();
     body_def.position = .{ .x = box.center.x, .y = box.center.y, .z = box.center.z };
-    // Build the X-axis quaternion locally. The generated Zig wrapper for
-    // b3MakeQuatFromAxisAngle references Box3D's non-exported assert helper.
-    const half_pitch = box.pitch * 0.5;
-    body_def.rotation = .{ .v = .{ .x = @sin(half_pitch) }, .s = @cos(half_pitch) };
+    const orientation = b3.b3Matrix3{
+        .cx = .{ .x = box.basis_x.x, .y = box.basis_x.y, .z = box.basis_x.z },
+        .cy = .{ .x = box.basis_y.x, .y = box.basis_y.y, .z = box.basis_y.z },
+        .cz = .{ .x = box.basis_z.x, .y = box.basis_z.y, .z = box.basis_z.z },
+    };
+    body_def.rotation = b3.b3MakeQuatFromMatrix(&orientation);
     const body = b3.b3CreateBody(game.world, &body_def);
     var shape_def = b3.b3DefaultShapeDef();
     if (box.hunter_block) {
@@ -1252,6 +1258,7 @@ fn targetProxy(body: b3.b3BodyId, previous: b3.b3Pos, current: b3.b3Pos) void {
 // force carries sustained walk/run intent into the hinge after the mover has
 // reached the panel and can no longer advance its proxy through it.
 fn pushDoorsFromPlayerMovement(dt: f32) void {
+    if (!level.authoredGameplayEnabled()) return;
     const move_x = @as(f32, @floatFromInt(@intFromBool(game.input.right))) - @as(f32, @floatFromInt(@intFromBool(game.input.left)));
     const move_y = @as(f32, @floatFromInt(@intFromBool(game.input.forward))) - @as(f32, @floatFromInt(@intFromBool(game.input.back)));
     const move_length = std.math.hypot(move_x, move_y);
@@ -1330,13 +1337,32 @@ fn seedSpawnRandomness() void {
 }
 
 fn loadValidatedLevel() void {
-    level.load();
+    level.loadDefault();
     navmesh.buildLevel();
-    if (!navmesh.validateLevel()) @panic("authored level failed navmesh validation");
+    if (!navmesh.validateLevel()) @panic("default level failed navmesh validation");
+}
+
+fn levelPlayerSpawn() b3.b3Pos {
+    return .{
+        .x = level.current.player_spawn.x,
+        .y = level.current.player_spawn.y + player_spawn_y,
+        .z = level.current.player_spawn.z,
+    };
+}
+
+fn levelHunterSpawn() b3.b3Pos {
+    return .{
+        .x = level.current.hunter_spawn.x,
+        .y = level.current.hunter_spawn.y + hunter_spawn_y,
+        .z = level.current.hunter_spawn.z,
+    };
 }
 
 // Index of the most recently written occupied save slot, if any.
 fn latestSaveIndex() ?usize {
+    // Authored RPD saves contain positions and world-state masks that do not
+    // belong to the isolated Blender blockout.
+    if (!level.authoredGameplayEnabled()) return null;
     var best_index: ?usize = null;
     var best_timestamp: i64 = std.math.minInt(i64);
     for (saves.slots, 0..) |slot, index| {
@@ -1391,7 +1417,7 @@ fn spawnPlayerAndHunter() void {
     if (latestSaveIndex()) |index| {
         placePlayerFromSlot(saves.slots[index]);
     } else {
-        const player_spawn = b3.b3Pos{ .x = level.current.player_spawn.x, .y = player_spawn_y, .z = level.current.player_spawn.z };
+        const player_spawn = levelPlayerSpawn();
         game.character = controller.State.init(player_spawn);
         // face -Z, matching the initial camera
         game.character.yaw = std.math.pi;
@@ -1430,7 +1456,7 @@ fn spawnPlayerAndHunter() void {
 // Send the hunter back to his authored spawn room facing the player, with a
 // fresh patrol destination so he sets off walking immediately.
 fn resetHunter(player_pos: b3.b3Pos) void {
-    const hunter_spawn = b3.b3Pos{ .x = level.current.hunter_spawn.x, .y = hunter_spawn_y, .z = level.current.hunter_spawn.z };
+    const hunter_spawn = levelHunterSpawn();
     game.hunter = hunter.State.init(hunter_spawn);
     game.hunter.yaw = std.math.atan2(player_pos.x - hunter_spawn.x, player_pos.z - hunter_spawn.z);
     game.hunter.target = hunter.randomPatrolTarget(game.hunter_config, game.hunter.position);
@@ -1645,6 +1671,10 @@ fn interactionScore(position: Vec3, radius: f32) ?f32 {
 }
 
 fn updateInteractionTarget() void {
+    if (!level.authoredGameplayEnabled()) {
+        game.interaction_target = null;
+        return;
+    }
     var best: ?InteractionTarget = null;
     var best_score: f32 = -std.math.inf(f32);
     for (pickup_defs, 0..) |pickup, index| {
@@ -1894,7 +1924,7 @@ fn respawnAfterCatch() void {
     if (latestSaveIndex()) |index| {
         placePlayerFromSlot(saves.slots[index]);
     } else {
-        const player_spawn = b3.b3Pos{ .x = level.current.player_spawn.x, .y = player_spawn_y, .z = level.current.player_spawn.z };
+        const player_spawn = levelPlayerSpawn();
         game.character = controller.State.init(player_spawn);
         game.character.yaw = std.math.pi;
         game.camera = .{};
@@ -2235,7 +2265,7 @@ fn uploadLevelInstances() void {
     var roof_count: usize = 0;
     for (level.current.boxSlice()) |box| {
         if (!box.visible) continue;
-        const instance = makePitchedInstance(box.center, box.half_extents, box.pitch, box.color);
+        const instance = makeOrientedInstance(box);
         if (box.is_roof) {
             roof_instances[roof_count] = instance;
             roof_count += 1;
@@ -2251,6 +2281,10 @@ fn uploadLevelInstances() void {
 }
 
 fn uploadWindowInstances() void {
+    if (!level.authoredGameplayEnabled()) {
+        game.render.window_instance_count = 0;
+        return;
+    }
     var instances: [level.window_defs.len]Instance = undefined;
     for (level.window_defs, 0..) |window, index| {
         instances[index] = makeInstance(
@@ -2548,6 +2582,7 @@ fn initRenderer() void {
 }
 
 fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
+    const hunter_enabled = level.authoredGameplayEnabled();
     // Rebuild the character's instance record from its interpolated position.
     const fall = game.condition.fallAmount(game.condition_config);
     const instance = makeYawPitchedInstance(
@@ -2650,7 +2685,7 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
     drawInstances(game.render.level_instances, game.render.box_range, 0, game.render.level_instance_count, false);
     if (game.map.active) {
         drawInstances(game.render.character_instance, game.render.box_range, 0, 1, false);
-        drawInstances(game.render.hunter_instance, game.render.box_range, 0, 1, false);
+        if (hunter_enabled) drawInstances(game.render.hunter_instance, game.render.box_range, 0, 1, false);
     } else {
         drawInstances(game.render.roof_instance, game.render.box_range, 0, game.render.roof_instance_count, false);
         sg.applyPipeline(game.render.actor_shadow_pipeline);
@@ -2662,11 +2697,13 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         };
         sg.applyUniforms(shd.UB_deformed_shadow_vs_params, sg.asRange(&actor_shadow_params));
         drawDeformedActor(game.render.character_instance, false);
-        actor_shadow_params.deformation = poseVector(hunter_pose);
-        actor_shadow_params.lower_motion = footVector(hunter_pose);
-        actor_shadow_params.action_motion = .{};
-        sg.applyUniforms(shd.UB_deformed_shadow_vs_params, sg.asRange(&actor_shadow_params));
-        drawDeformedActor(game.render.hunter_instance, false);
+        if (hunter_enabled) {
+            actor_shadow_params.deformation = poseVector(hunter_pose);
+            actor_shadow_params.lower_motion = footVector(hunter_pose);
+            actor_shadow_params.action_motion = .{};
+            sg.applyUniforms(shd.UB_deformed_shadow_vs_params, sg.asRange(&actor_shadow_params));
+            drawDeformedActor(game.render.hunter_instance, false);
+        }
     }
     sg.endPass();
 
@@ -2715,7 +2752,7 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         sg.applyPipeline(game.render.map_actor_pipeline);
         sg.applyUniforms(shd.UB_route_vs_params, sg.asRange(&route_params));
         drawInstances(game.render.character_instance, game.render.box_range, 0, 1, false);
-        drawInstances(game.render.hunter_instance, game.render.box_range, 0, 1, false);
+        if (hunter_enabled) drawInstances(game.render.hunter_instance, game.render.box_range, 0, 1, false);
     } else {
         if (game.render.window_instance_count > 0) {
             const window_params: shd.RouteVsParams = .{ .view_projection = game.camera.view_projection };
@@ -2734,11 +2771,13 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         };
         sg.applyUniforms(shd.UB_deformed_display_vs_params, sg.asRange(&actor_vs_params));
         drawDeformedActor(game.render.character_instance, true);
-        actor_vs_params.deformation = poseVector(hunter_pose);
-        actor_vs_params.lower_motion = footVector(hunter_pose);
-        actor_vs_params.action_motion = .{};
-        sg.applyUniforms(shd.UB_deformed_display_vs_params, sg.asRange(&actor_vs_params));
-        drawDeformedActor(game.render.hunter_instance, true);
+        if (hunter_enabled) {
+            actor_vs_params.deformation = poseVector(hunter_pose);
+            actor_vs_params.lower_motion = footVector(hunter_pose);
+            actor_vs_params.action_motion = .{};
+            sg.applyUniforms(shd.UB_deformed_display_vs_params, sg.asRange(&actor_vs_params));
+            drawDeformedActor(game.render.hunter_instance, true);
+        }
     }
     if (!game.map.active and game.render.pickup_instance_count > 0) {
         const pickup_params: shd.RouteVsParams = .{ .view_projection = game.camera.view_projection };
@@ -2774,6 +2813,12 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
 }
 
 fn updatePickupInstances() void {
+    if (!level.authoredGameplayEnabled()) {
+        game.render.pickup_instance_count = 0;
+        game.render.map_item_instance_count = 0;
+        game.render.debris_instance_count = 0;
+        return;
+    }
     var instances: [world_render_count]Instance = undefined;
     var count: usize = 0;
     for (pickup_defs, 0..) |pickup, index| {
@@ -2963,6 +3008,7 @@ fn interactionPromptCenter() math.Vec2 {
 
 fn mapHoverName() ?[]const u8 {
     if (!game.map.active) return null;
+    if (!level.authoredGameplayEnabled()) return null;
     const world = mapWorldAtScreen(game.map.cursor.x, game.map.cursor.y);
     for (pickup_defs, 0..) |pickup, index| {
         const item_bit = @as(u32, 1) << @intCast(index);
@@ -3394,6 +3440,31 @@ fn makePitchedInstance(center: Vec3, half: Vec3, pitch: f32, color: Vec4) Instan
         .y = .{ .y = scale.y * c, .z = -scale.z * s, .w = center.y },
         .z = .{ .y = scale.y * s, .z = scale.z * c, .w = center.z },
         .color = color,
+    };
+}
+
+fn makeOrientedInstance(box: level.Box) Instance {
+    const scale = Vec3.scale(box.half_extents, 2);
+    return .{
+        .x = .{
+            .x = box.basis_x.x * scale.x,
+            .y = box.basis_y.x * scale.y,
+            .z = box.basis_z.x * scale.z,
+            .w = box.center.x,
+        },
+        .y = .{
+            .x = box.basis_x.y * scale.x,
+            .y = box.basis_y.y * scale.y,
+            .z = box.basis_z.y * scale.z,
+            .w = box.center.y,
+        },
+        .z = .{
+            .x = box.basis_x.z * scale.x,
+            .y = box.basis_y.z * scale.y,
+            .z = box.basis_z.z * scale.z,
+            .w = box.center.z,
+        },
+        .color = box.color,
     };
 }
 

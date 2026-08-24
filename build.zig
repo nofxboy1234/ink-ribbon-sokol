@@ -549,7 +549,11 @@ pub fn build(b: *Build) !void {
             .{ .name = "ink_ribbon_sokol", .module = mod_lib },
             .{ .name = "sokol", .module = dep_sokol.module("sokol") },
             .{ .name = "box3d", .module = box3d_bindings },
+            .{ .name = "cgltf", .module = cgltf_bindings },
         },
+    });
+    character_mod.addAnonymousImport("level_glb", .{
+        .root_source_file = b.path("level/level.glb"),
     });
     const basic_lighting_mod = b.createModule(.{
         .root_source_file = b.path("src/examples/basic_lighting.zig"),

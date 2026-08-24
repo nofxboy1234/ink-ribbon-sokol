@@ -116,6 +116,15 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
                 const cx = self.worldX(cell % cols);
                 const cz = self.worldZ(cell / cols);
                 const half = cell_size * 0.5 + options.radius;
+                // The authored RPD has explicit boundary walls. A Blender
+                // blockout may begin as only a floor slab, so its floor bounds
+                // also define the valid navigation region.
+                if (level.current.kind == .blender_blockout and
+                    (!level.insideWalkBounds(cx - half, cz - half) or !level.insideWalkBounds(cx + half, cz + half)))
+                {
+                    self.blocked[cell] = true;
+                    continue;
+                }
                 for (boxes) |box| {
                     if (!box.collidable or !box.nav_block or box.is_roof) continue;
                     if (!options.include_hunter_block and box.hunter_block) continue;
@@ -415,8 +424,8 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
 
 // True when the XZ square around (cx, cz) overlaps the box's XZ footprint.
 fn aabbXZ(cx: f32, cz: f32, half: f32, box: level.Box) bool {
-    return @abs(cx - box.center.x) <= box.half_extents.x + half and
-        @abs(cz - box.center.z) <= box.half_extents.z + half;
+    return @abs(cx - box.center.x) <= level.projectedHalfExtent(box, .x) + half and
+        @abs(cz - box.center.z) <= level.projectedHalfExtent(box, .z) + half;
 }
 
 // Shared fixed-size grids, rebuilt whenever the runtime level changes.
@@ -440,6 +449,11 @@ pub fn buildLevel() void {
 // component behind the hunter-only save-room perimeter.
 pub fn validateLevel() bool {
     if (!level.current.validate()) return false;
+    if (level.current.kind == .blender_blockout) {
+        const player_cell = player_nav.cellAt(level.current.player_spawn.x, level.current.player_spawn.z) orelse return false;
+        const hunter_cell = level_nav.cellAt(level.current.hunter_spawn.x, level.current.hunter_spawn.z) orelse return false;
+        return player_nav.isWalkable(player_cell) and level_nav.isWalkable(hunter_cell);
+    }
     var path: [level_cols * level_rows]b3.b3Pos = undefined;
     for (level.current.save_targets[0..level.current.save_target_count], 0..) |target, index| {
         if (!level.current.isInSaveRoomIndex(index, target.x, target.z)) return false;
