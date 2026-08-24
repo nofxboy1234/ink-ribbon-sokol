@@ -547,6 +547,10 @@ fn keyboardQuickTurnDelta(left: bool, right: bool) f32 {
     return std.math.atan2(-lateral, -1.0);
 }
 
+fn hasBackwardQuickTurnIntent(input: InputState) bool {
+    return input.back and !input.forward;
+}
+
 fn beginQuickTurn() void {
     camera.cancelRecenter(&game.camera);
     const delta = keyboardQuickTurnDelta(game.input.left, game.input.right);
@@ -812,7 +816,7 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     confirmMenu();
                 },
                 .Q => if (down and !value.key_repeat) {
-                    if (game.menu.kind == .none and !game.map.active and game.condition.canMove() and !playerActionActive() and !game.input.aiming and !game.quick_turn.active) {
+                    if (game.menu.kind == .none and !game.map.active and game.condition.canMove() and !playerActionActive() and hasBackwardQuickTurnIntent(game.input) and !game.input.aiming and !game.quick_turn.active) {
                         beginQuickTurn();
                     }
                 },
@@ -3632,6 +3636,14 @@ test "keyboard quick turn chooses shortest backward direction" {
     try std.testing.expectApproxEqAbs(-std.math.pi * 0.75, keyboardQuickTurnDelta(false, true), tolerance);
     // Opposing lateral keys cancel back to a straight 180-degree turn.
     try std.testing.expectApproxEqAbs(std.math.pi, keyboardQuickTurnDelta(true, true), tolerance);
+}
+
+test "quick turn requires an unopposed backward movement input" {
+    try std.testing.expect(hasBackwardQuickTurnIntent(.{ .back = true }));
+    try std.testing.expect(hasBackwardQuickTurnIntent(.{ .back = true, .left = true }));
+    try std.testing.expect(!hasBackwardQuickTurnIntent(.{}));
+    try std.testing.expect(!hasBackwardQuickTurnIntent(.{ .forward = true }));
+    try std.testing.expect(!hasBackwardQuickTurnIntent(.{ .forward = true, .back = true }));
 }
 
 test "hunter flinch stops briefly and eases back to neutral" {

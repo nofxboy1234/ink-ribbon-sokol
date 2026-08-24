@@ -286,9 +286,14 @@ def quick_turn() -> None:
     driver = XTest()
     try:
         driver.focus_game()
-        driver.set_key("q", True)
-        driver.set_key("q", False)
-        time.sleep(0.55)
+        driver.set_key("s", True)
+        try:
+            time.sleep(0.1)
+            driver.set_key("q", True)
+            driver.set_key("q", False)
+            time.sleep(0.55)
+        finally:
+            driver.set_key("s", False)
         time.sleep(0.15)
     finally:
         driver.close()
