@@ -136,6 +136,9 @@ const debris_capacity: usize = @max(breakable_count * 8, 1);
 const debris_seconds: f32 = 4.0;
 const action_duration: f32 = 0.68;
 const action_contact_time: f32 = 0.30;
+const hunter_punch_duration: f32 = 0.58;
+const hunter_punch_extend_fraction: f32 = 0.18;
+const hunter_punch_hold_fraction: f32 = 0.16;
 const box_item_chance: f32 = 0.60;
 const box_health_share: f32 = 0.25;
 const box_ammo_amount: u16 = 20;
@@ -304,6 +307,30 @@ const HunterReaction = struct {
     }
 };
 
+const HunterPunchAction = struct {
+    active: bool = false,
+    elapsed: f32 = 0,
+
+    fn begin(self: *HunterPunchAction) void {
+        self.* = .{ .active = true };
+    }
+
+    fn update(self: *HunterPunchAction, dt: f32) void {
+        if (!self.active) return;
+        self.elapsed = @min(hunter_punch_duration, self.elapsed + dt);
+        if (self.elapsed >= hunter_punch_duration) self.active = false;
+    }
+
+    fn amount(self: HunterPunchAction) f32 {
+        if (!self.active) return 0;
+        const t = std.math.clamp(self.elapsed / hunter_punch_duration, 0, 1);
+        if (t < hunter_punch_extend_fraction) return smoothstep(t / hunter_punch_extend_fraction);
+        const retract_start = hunter_punch_extend_fraction + hunter_punch_hold_fraction;
+        if (t < retract_start) return 1;
+        return 1.0 - smoothstep((t - retract_start) / (1.0 - retract_start));
+    }
+};
+
 const DebugState = struct {
     draw_physics: bool = false,
 };
@@ -441,6 +468,7 @@ const GameState = struct {
     combat: combat.State = .{},
     combat_visuals: CombatVisuals = .{},
     hunter_reaction: HunterReaction = .{},
+    hunter_punch: HunterPunchAction = .{},
     condition_config: player_condition.Config = .{},
     condition: player_condition.State = .{},
     deformation_config: deformation.Config = .{},
@@ -595,6 +623,7 @@ fn frame() callconv(.c) void {
                 }
             }
             if (hunter_sim_active) {
+                game.hunter_punch.update(@floatCast(fixed_dt));
                 game.hunter_reaction.update(@floatCast(fixed_dt));
                 if (!game.combat.hunterKnockedDown() and !game.hunter_reaction.active()) {
                     if (game.condition.hunter_watch_timer > 0) {
@@ -953,6 +982,7 @@ fn fireShot(focus: f32) void {
     if (hunter_hit.hit and !game.combat.hunterKnockedDown()) {
         const knocked_down = game.combat.applyHunterHit(game.combat_config, focus);
         game.hunter.previous_position = game.hunter.position;
+        game.hunter_punch = .{};
         if (knocked_down) {
             game.hunter_reaction = .{};
             game.audio.play(.hunter_knockdown);
@@ -1462,6 +1492,7 @@ fn resetHunter(player_pos: b3.b3Pos) void {
     game.combat.knockdown_timer = 0;
     game.combat_visuals.hunter_hit_flash = 0;
     game.hunter_reaction = .{};
+    game.hunter_punch = .{};
     game.hunter_deformation = .{};
 }
 
@@ -1476,6 +1507,7 @@ fn hunterContacted() bool {
 
 fn punchPlayer() void {
     if (!game.condition.punch(game.condition_config)) return;
+    game.hunter_punch.begin();
     game.audio.play(.punch);
     var dx = game.character.position.x - game.hunter.position.x;
     var dz = game.character.position.z - game.hunter.position.z;
@@ -2617,7 +2649,16 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
     else
         hunter.interpolatedPosition(game.hunter, game.clock.alpha());
     const knocked_down = game.combat.hunterKnockedDown();
-    const hunter_center = Vec3{ .x = hunter_render.x, .y = hunter_render.y, .z = hunter_render.z };
+    // The hunter's capsule is taller than his visible rectangle. Keep the
+    // capsule seated on the floor for collision, but lower the rendered body
+    // by the difference so its visible feet meet the same ground plane.
+    const hunter_capsule_half_height = game.hunter_config.capsule_half_segment + game.hunter_config.capsule_radius;
+    const hunter_visual_ground_offset = @max(0, hunter_capsule_half_height - hunter_half_extents.y);
+    const hunter_center = Vec3{
+        .x = hunter_render.x,
+        .y = hunter_render.y - hunter_visual_ground_offset,
+        .z = hunter_render.z,
+    };
     const hunter_render_color = if (game.combat_visuals.hunter_hit_flash > 0)
         rgb(1.0, 0.78, 0.24)
     else if (knocked_down)
@@ -2642,7 +2683,7 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         .aiming = game.input.aiming,
     };
     const hunter_sample: deformation.Sample = .{
-        .position = .{ .x = hunter_render.x, .y = hunter_render.y, .z = hunter_render.z },
+        .position = hunter_center,
         .yaw = game.hunter.yaw,
         .height = hunter_half_extents.y * 2.0,
         .max_speed = game.hunter_config.far_speed,
@@ -2664,6 +2705,9 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
     hunter_pose.bend_z += flinch * 0.12;
     hunter_pose.twist += game.hunter_reaction.side * flinch * 0.24;
     hunter_pose.foot_roll -= game.hunter_reaction.side * flinch * 0.035;
+    const punch = game.hunter_punch.amount();
+    hunter_pose.bend_z += punch * 0.10;
+    hunter_pose.twist -= punch * 0.055;
     const knockdown = hunterKnockdownAmount(game.combat.knockdown_timer, game.combat_config.knockdown_duration);
     const breath_phase = (game.combat_config.knockdown_duration - game.combat.knockdown_timer) * 2.0 * std.math.pi * 0.72;
     const breath = @sin(breath_phase) * knockdown;
@@ -2698,7 +2742,7 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         if (hunter_enabled) {
             actor_shadow_params.deformation = poseVector(hunter_pose);
             actor_shadow_params.lower_motion = footVector(hunter_pose);
-            actor_shadow_params.action_motion = .{};
+            actor_shadow_params.action_motion = hunterActionVector();
             sg.applyUniforms(shd.UB_deformed_shadow_vs_params, sg.asRange(&actor_shadow_params));
             drawDeformedActor(game.render.hunter_instance, false);
         }
@@ -2772,7 +2816,7 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         if (hunter_enabled) {
             actor_vs_params.deformation = poseVector(hunter_pose);
             actor_vs_params.lower_motion = footVector(hunter_pose);
-            actor_vs_params.action_motion = .{};
+            actor_vs_params.action_motion = hunterActionVector();
             sg.applyUniforms(shd.UB_deformed_display_vs_params, sg.asRange(&actor_vs_params));
             drawDeformedActor(game.render.hunter_instance, true);
         }
@@ -3368,6 +3412,10 @@ fn actionVector() Vec4 {
     return .{ .x = kickAmount(), .y = game.pickup_action.amount() };
 }
 
+fn hunterActionVector() Vec4 {
+    return .{ .y = game.hunter_punch.amount() * 1.2 };
+}
+
 fn drawDeformedActor(instance_buffer: sg.Buffer, with_shadow_texture: bool) void {
     var bindings: sg.Bindings = .{};
     bindings.vertex_buffers[0] = game.render.actor_vertex_buffer;
@@ -3633,6 +3681,24 @@ test "hunter flinch stops briefly and eases back to neutral" {
     reaction.update(hunter_flinch_seconds);
     try std.testing.expect(!reaction.active());
     try std.testing.expectEqual(@as(f32, 0), reaction.amount());
+}
+
+test "hunter punch snaps forward, holds, and retracts" {
+    var punch = HunterPunchAction{};
+    punch.begin();
+    try std.testing.expect(punch.active);
+    try std.testing.expectEqual(@as(f32, 0), punch.amount());
+
+    punch.update(hunter_punch_duration * hunter_punch_extend_fraction);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), punch.amount(), 0.0001);
+    punch.update(hunter_punch_duration * hunter_punch_hold_fraction * 0.5);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), punch.amount(), 0.0001);
+
+    punch.update(hunter_punch_duration * 0.35);
+    try std.testing.expect(punch.amount() > 0 and punch.amount() < 1);
+    punch.update(hunter_punch_duration);
+    try std.testing.expect(!punch.active);
+    try std.testing.expectEqual(@as(f32, 0), punch.amount());
 }
 
 test "hunter knockdown eases into and out of the recovery bend" {
