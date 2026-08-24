@@ -13,10 +13,10 @@ const std = @import("std");
 const b3 = @import("box3d");
 const level = @import("level.zig");
 
-// Level footprint and resolution. x in [-26, 26] -> 104 cells, z in [-19, 19]
-// -> 76 cells at 0.5 m.
-pub const level_cols = 104;
-pub const level_rows = 76;
+// Maximum authored footprint at 0.5 m resolution. The current Blender level
+// occupies x ~= [-34, 34], z ~= [-45, 11], with a margin for later edits.
+pub const level_cols = 160;
+pub const level_rows = 128;
 
 // How many cells around the start/goal A* will snap to when the exact cell is
 // blocked (e.g. a patrol point inside a wall) or outside the grid.
@@ -42,10 +42,10 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
         pub const N = cols * rows;
 
         pub const cell_size: f32 = 0.5;
-        pub const min_x: f32 = -26.0;
-        pub const max_x: f32 = 26.0;
-        pub const min_z: f32 = -19.0;
-        pub const max_z: f32 = 19.0;
+        pub const min_x: f32 = -40.0;
+        pub const max_x: f32 = 40.0;
+        pub const min_z: f32 = -48.0;
+        pub const max_z: f32 = 16.0;
 
         const OpenEntry = struct { cell: usize, f: f32 };
 
@@ -120,7 +120,7 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
                 // A fresh blockout may begin as only a floor slab, so its
                 // bounds can define the valid navigation region at runtime.
                 if (options.restrict_to_level_bounds and
-                    (!level.insideWalkBounds(cx - half, cz - half) or !level.insideWalkBounds(cx + half, cz + half)))
+                    (!level.insideWalkBounds(cx, cz) or !level.supportsWalk(cx, cz)))
                 {
                     self.blocked[cell] = true;
                     continue;
@@ -134,6 +134,23 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
                         break;
                     }
                 }
+            }
+        }
+
+        pub fn blockDoor(self: *Self, door: level.DoorDef, radius: f32) void {
+            self.components_valid = false;
+            for (0..N) |cell| {
+                if (self.blocked[cell]) continue;
+                const cx = self.worldX(cell % cols);
+                const cz = self.worldZ(cell / cols);
+                const half = cell_size * 0.5 + radius;
+                const overlap = if (door.axis == .x)
+                    @abs(cx - door.position.x) <= door.width * 0.5 + half and
+                        @abs(cz - door.position.z) <= door.half_thickness + half
+                else
+                    @abs(cz - door.position.z) <= door.width * 0.5 + half and
+                        @abs(cx - door.position.x) <= door.half_thickness + half;
+                if (overlap) self.blocked[cell] = true;
             }
         }
 
@@ -432,7 +449,7 @@ fn aabbXZ(cx: f32, cz: f32, half: f32, box: level.Box) bool {
 pub var level_nav: Grid(level_cols, level_rows) = .{};
 pub var player_nav: Grid(level_cols, level_rows) = .{};
 
-pub fn buildLevel() void {
+pub fn buildLevel(unlocked_doors: u32) void {
     const boxes = level.current.boxSlice();
     // A nav cell already contributes 0.25 m of footprint. The remaining
     // 0.25 m gives the hunter's 0.5 m capsule its true wall clearance without
@@ -446,6 +463,11 @@ pub fn buildLevel() void {
         .include_hunter_block = false,
         .restrict_to_level_bounds = true,
     });
+    for (level.current.doorSlice(), 0..) |door, index| {
+        if (door.lock == .none or unlocked_doors & (@as(u32, 1) << @intCast(index)) != 0) continue;
+        level_nav.blockDoor(door, 0.25);
+        player_nav.blockDoor(door, 0.35);
+    }
 }
 
 // Validate imported actor spawns against their respective navigation grids.

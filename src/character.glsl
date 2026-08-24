@@ -455,3 +455,45 @@ void main() {
 @end
 
 @program hud_circle reticle_vs hud_circle_fs
+
+@fs post_fs
+layout(binding = 5) uniform post_fs_params {
+    vec4 post_options; // texel x/y, paused amount, scene brightness
+};
+layout(binding = 1) uniform texture2D scene_color;
+layout(binding = 1) uniform sampler scene_sampler;
+
+in vec2 uv;
+out vec4 frag_color;
+
+void main() {
+    vec2 texel = post_options.xy;
+    float paused = post_options.z;
+    vec3 center = texture(sampler2D(scene_color, scene_sampler), uv).rgb;
+    if (paused < 0.001) {
+        frag_color = vec4(center, 1.0);
+        return;
+    }
+
+    // Wide 13-tap cross/diagonal blur. It deliberately loses scene detail
+    // while leaving the subsequently drawn pause menu perfectly sharp.
+    vec3 blurred = center * 0.20;
+    blurred += texture(sampler2D(scene_color, scene_sampler), uv + texel * vec2( 2.0,  0.0)).rgb * 0.10;
+    blurred += texture(sampler2D(scene_color, scene_sampler), uv + texel * vec2(-2.0,  0.0)).rgb * 0.10;
+    blurred += texture(sampler2D(scene_color, scene_sampler), uv + texel * vec2( 0.0,  2.0)).rgb * 0.10;
+    blurred += texture(sampler2D(scene_color, scene_sampler), uv + texel * vec2( 0.0, -2.0)).rgb * 0.10;
+    blurred += texture(sampler2D(scene_color, scene_sampler), uv + texel * vec2( 3.0,  3.0)).rgb * 0.05;
+    blurred += texture(sampler2D(scene_color, scene_sampler), uv + texel * vec2(-3.0,  3.0)).rgb * 0.05;
+    blurred += texture(sampler2D(scene_color, scene_sampler), uv + texel * vec2( 3.0, -3.0)).rgb * 0.05;
+    blurred += texture(sampler2D(scene_color, scene_sampler), uv + texel * vec2(-3.0, -3.0)).rgb * 0.05;
+    blurred += texture(sampler2D(scene_color, scene_sampler), uv + texel * vec2( 5.0,  0.0)).rgb * 0.05;
+    blurred += texture(sampler2D(scene_color, scene_sampler), uv + texel * vec2(-5.0,  0.0)).rgb * 0.05;
+    blurred += texture(sampler2D(scene_color, scene_sampler), uv + texel * vec2( 0.0,  5.0)).rgb * 0.05;
+    blurred += texture(sampler2D(scene_color, scene_sampler), uv + texel * vec2( 0.0, -5.0)).rgb * 0.05;
+    float luminance = dot(blurred, vec3(0.2126, 0.7152, 0.0722));
+    vec3 desaturated = mix(blurred, vec3(luminance), 0.82);
+    frag_color = vec4(mix(center, desaturated * post_options.w, paused), 1.0);
+}
+@end
+
+@program post reticle_vs post_fs

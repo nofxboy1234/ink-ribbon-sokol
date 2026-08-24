@@ -4,7 +4,7 @@ const std = @import("std");
 
 pub const Config = struct {
     magazine_capacity: u16 = 24,
-    starting_reserve: u16 = 120,
+    starting_reserve: u16 = 0,
     fire_interval: f32 = 0.1,
     reload_duration: f32 = 1.6,
     focus_seconds: f32 = 1.0,

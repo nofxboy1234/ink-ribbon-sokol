@@ -84,10 +84,7 @@ const HudNotice = enum {
 
 // Top-down map view tuning.
 const map_pan_speed: f32 = 25.0; // metres/second the map pans with WASD
-const map_pan_x_max: f32 = 40.0; // keep the pan center near the level
-const map_pan_z_max: f32 = 30.0;
-const map_half_width: f32 = 36.0;
-const map_min_half_height: f32 = 19.5;
+const map_margin: f32 = 2.0;
 const map_route_capacity = navmesh.level_cols * navmesh.level_rows;
 const map_route_width: f32 = 0.16;
 const map_route_height: f32 = 0.04;
@@ -103,20 +100,20 @@ const PickupDef = struct {
     name: []const u8,
 };
 
-const max_pickups = 1;
-const pickup_count = 0;
-const pickup_defs: [max_pickups]PickupDef = .{.{ .position = .{}, .item = .{}, .name = "" }};
+const max_pickups = level.max_pickups;
+var pickup_count: usize = 0;
+var pickup_defs: [max_pickups]PickupDef = undefined;
 
 const BreakableDef = struct {
     position: Vec3,
     name: []const u8 = "Wooden Item Box",
+    half_extent: f32 = 0.42,
 };
 
-const max_breakables = 1;
-const breakable_count = 0;
-const breakable_defs: [max_breakables]BreakableDef = .{.{ .position = .{}, .name = "" }};
-const world_item_count = pickup_count + breakable_count;
-const world_render_capacity: usize = @max(world_item_count + level.door_count, 1);
+const max_breakables = level.max_breakables;
+var breakable_count: usize = 0;
+var breakable_defs: [max_breakables]BreakableDef = undefined;
+const world_render_capacity: usize = max_pickups + max_breakables + level.max_doors;
 const window_render_capacity: usize = @max(level.window_count, 1);
 const interaction_radius: f32 = 2.0;
 const door_interaction_radius: f32 = 1.0;
@@ -132,7 +129,7 @@ const door_physics_edge_clearance: f32 = 0.05;
 const door_physics_vertical_clearance: f32 = 0.025;
 const door_ai_push_cooldown_seconds: f32 = 0.55;
 const physics_substeps: c_int = 4;
-const debris_capacity: usize = @max(breakable_count * 8, 1);
+const debris_capacity: usize = max_breakables * 8;
 const debris_seconds: f32 = 4.0;
 const action_duration: f32 = 0.68;
 const action_contact_time: f32 = 0.30;
@@ -339,10 +336,17 @@ const MapRouteStatus = enum { none, found, arrived, no_path };
 
 // Typewriter save/load windows. While open they freeze the round exactly like
 // map mode does; navigation is keyboard-only.
-const MenuKind = enum { none, save, load };
+const MenuKind = enum { none, save, load, pause, results };
 const MenuState = struct {
     kind: MenuKind = .none,
     slot: usize = 0,
+    load_returns_to_pause: bool = false,
+};
+
+const RunStats = struct {
+    elapsed_active_seconds: f64 = 0,
+    damage_events: u32 = 0,
+    deaths: u32 = 0,
 };
 
 const InventoryUi = struct {
@@ -412,6 +416,19 @@ const RenderState = struct {
     reticle_pipeline: sg.Pipeline = .{},
     ui_rect_pipeline: sg.Pipeline = .{},
     hud_circle_pipeline: sg.Pipeline = .{},
+    post_pipeline: sg.Pipeline = .{},
+    post_bindings: sg.Bindings = .{},
+    scene_pass: sg.Pass = .{},
+    scene_color_image: sg.Image = .{},
+    scene_depth_image: sg.Image = .{},
+    scene_resolve_image: sg.Image = .{},
+    scene_color_view: sg.View = .{},
+    scene_depth_view: sg.View = .{},
+    scene_resolve_view: sg.View = .{},
+    scene_texture_view: sg.View = .{},
+    scene_sampler: sg.Sampler = .{},
+    scene_target_width: i32 = 0,
+    scene_target_height: i32 = 0,
     shadow_pipeline: sg.Pipeline = .{},
     actor_shadow_pipeline: sg.Pipeline = .{},
     shadow_pass: sg.Pass = .{},
@@ -444,6 +461,7 @@ const GameState = struct {
     map: MapState = .{},
     menu: MenuState = .{},
     inventory_ui: InventoryUi = .{},
+    run_stats: RunStats = .{},
     inventory: inventory.State = .{},
     collected_pickups: u32 = 0,
     discovered_items: u32 = 0,
@@ -578,6 +596,7 @@ fn frame() callconv(.c) void {
 
     // Menus freeze the round exactly like map mode does.
     const gameplay_active = !game.map.active and game.menu.kind == .none and !game.inventory_ui.active;
+    if (gameplay_active) game.run_stats.elapsed_active_seconds += @as(f64, frame_time);
 
     const render_position = blk: {
         var ticks: usize = 0;
@@ -618,6 +637,7 @@ fn frame() callconv(.c) void {
                 const condition_event = game.condition.update(game.condition_config, game.character.grounded, @floatCast(fixed_dt));
                 if (condition_before == .airborne and game.condition.phase == .down) game.audio.play(.body_fall);
                 if (condition_event == .defeated) {
+                    game.run_stats.deaths +|= 1;
                     respawnAfterCatch();
                     break;
                 }
@@ -666,8 +686,8 @@ fn frame() callconv(.c) void {
         const pan_speed = map_pan_speed * frame_time;
         game.map.pan.x += (fbool(game.input.right) - fbool(game.input.left)) * pan_speed;
         game.map.pan.z += (fbool(game.input.back) - fbool(game.input.forward)) * pan_speed;
-        game.map.pan.x = std.math.clamp(game.map.pan.x, -map_pan_x_max, map_pan_x_max);
-        game.map.pan.z = std.math.clamp(game.map.pan.z, -map_pan_z_max, map_pan_z_max);
+        game.map.pan.x = std.math.clamp(game.map.pan.x, level.current.walk_min_x, level.current.walk_max_x);
+        game.map.pan.z = std.math.clamp(game.map.pan.z, level.current.walk_min_z, level.current.walk_max_z);
         game.camera.view_projection = mapViewProjection();
     } else if (game.menu.kind == .none and !game.inventory_ui.active) {
         camera.update(
@@ -686,6 +706,9 @@ fn frame() callconv(.c) void {
         updateInteractionTarget();
     } else {
         game.interaction_target = null;
+    }
+    if (gameplay_active and allRequiredDoorsUnlocked() and level.current.isInEndingArea(game.character.position.x, game.character.position.z)) {
+        openResults();
     }
     uploadMapRoute();
     pumpAudio();
@@ -720,6 +743,10 @@ fn toggleMap() void {
     game.map.active = !game.map.active;
     if (game.map.active) {
         game.map.hunter_paused = true;
+        game.map.pan = .{
+            .x = (level.current.walk_min_x + level.current.walk_max_x) * 0.5,
+            .z = (level.current.walk_min_z + level.current.walk_max_z) * 0.5,
+        };
         game.map.cursor = .{ .x = sapp.widthf() * 0.5, .y = sapp.heightf() * 0.5 };
         rebuildMapRoute();
         game.camera.aim_alpha = 0;
@@ -814,9 +841,7 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 .SPACE => if (down and !value.key_repeat) {
                     if (game.menu.kind != .none) confirmMenu();
                 },
-                .L => if (down and !value.key_repeat) {
-                    if (game.menu.kind == .none and !game.map.active and !playerActionActive()) openMenu(.load);
-                },
+                .P => if (down and !value.key_repeat) openPause(),
                 .ENTER => if (down and !value.key_repeat and game.menu.kind != .none) {
                     confirmMenu();
                 },
@@ -826,7 +851,9 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     }
                 },
                 .ESCAPE => if (down) {
-                    if (game.menu.kind != .none) {
+                    if (game.menu.kind == .results) {
+                        return;
+                    } else if (game.menu.kind != .none) {
                         closeMenu();
                     } else {
                         game.input.aiming = false;
@@ -843,6 +870,8 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     inventoryClick(value.mouse_x, value.mouse_y);
                 } else if (game.map.active) {
                     selectMapSaveAt(value.mouse_x, value.mouse_y);
+                } else if (game.menu.kind == .pause or game.menu.kind == .results) {
+                    menuClick(value.mouse_x, value.mouse_y);
                 } else if (game.menu.kind == .none and !playerActionActive()) {
                     sapp.lockMouse(true);
                     if (game.input.aiming) {
@@ -870,11 +899,15 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
             .RIGHT => game.input.aiming = false,
             else => {},
         },
-        .MOUSE_MOVE => if (game.map.active) {
-            game.map.cursor = .{ .x = value.mouse_x, .y = value.mouse_y };
-        } else if (sapp.mouseLocked()) {
-            game.input.mouse_delta.x += value.mouse_dx;
-            game.input.mouse_delta.y += value.mouse_dy;
+        .MOUSE_MOVE => {
+            if (game.map.active) {
+                game.map.cursor = .{ .x = value.mouse_x, .y = value.mouse_y };
+            } else if (game.menu.kind == .pause or game.menu.kind == .results) {
+                hoverMenu(value.mouse_x, value.mouse_y);
+            } else if (sapp.mouseLocked()) {
+                game.input.mouse_delta.x += value.mouse_dx;
+                game.input.mouse_delta.y += value.mouse_dy;
+            }
         },
         .UNFOCUSED => {
             game.input = .{};
@@ -924,7 +957,7 @@ fn openDoorInHunterPath() void {
     if (!level.hasGameplayMetadata()) return;
     var nearest: ?usize = null;
     var nearest_distance: f32 = 1.65;
-    for (level.doorSlice(), 0..) |door, index| {
+    for (level.current.doorSlice(), 0..) |door, index| {
         if (!doorIsUnlocked(door, index) or game.door_ai_push_cooldown[index] > 0) continue;
         if (@abs(game.door_current_angle[index]) > 0.65) continue;
         const dx = door.position.x - game.hunter.position.x;
@@ -1013,7 +1046,7 @@ fn closestShootableBox(origin: b3.b3Pos, translation: b3.b3Vec3, max_fraction: f
     for (breakable_defs[0..breakable_count], 0..) |box, index| {
         const bit = @as(u32, 1) << @intCast(index);
         if (game.broken_boxes & bit != 0) continue;
-        const fraction = rayBoxFraction(origin, translation, box.position, breakable_half_extent) orelse continue;
+        const fraction = rayBoxFraction(origin, translation, box.position, box.half_extent) orelse continue;
         if (fraction > closest_fraction) continue;
         closest_fraction = fraction;
         closest_index = index;
@@ -1070,7 +1103,7 @@ fn initPhysics() void {
     game.door_joints = @splat(b3.b3_nullJointId);
     if (level.hasGameplayMetadata()) {
         for (breakable_defs[0..breakable_count], 0..) |box, index| game.breakable_bodies[index] = addBreakableBody(box);
-        for (level.doorSlice(), 0..) |door, index| addDoorPhysics(door, index);
+        for (level.current.doorSlice(), 0..) |door, index| addDoorPhysics(door, index);
     }
     game.player_proxy_body = addActorProxy(game.character_config.capsule_half_segment, game.character_config.capsule_radius, controller.player_query_category);
     game.hunter_proxy_body = addActorProxy(game.hunter_config.capsule_half_segment, game.hunter_config.capsule_radius, controller.hunter_query_category);
@@ -1107,7 +1140,7 @@ fn addBreakableBody(box: BreakableDef) b3.b3BodyId {
     var shape_def = b3.b3DefaultShapeDef();
     shape_def.filter.categoryBits = controller.level_category;
     shape_def.filter.maskBits = controller.player_query_category | camera.camera_query_category | controller.hunter_query_category;
-    var hull = b3.b3MakeBoxHull(breakable_half_extent, breakable_half_extent, breakable_half_extent);
+    var hull = b3.b3MakeBoxHull(box.half_extent, box.half_extent, box.half_extent);
     _ = b3.b3CreateHullShape(body, &shape_def, &hull.base);
     return body;
 }
@@ -1116,7 +1149,7 @@ fn addDoorPhysics(door: level.DoorDef, index: usize) void {
     const yaw = doorBaseYaw(door);
     const rotation = yawRotation(yaw);
     game.door_hinge_sign[index] = chooseDoorHingeSign(door);
-    const hinge = doorHingePosition(door, index, level.door_height * 0.5);
+    const hinge = doorHingePosition(door, index, door.position.y);
 
     var anchor_def = b3.b3DefaultBodyDef();
     anchor_def.position = .{ .x = hinge.x, .y = hinge.y, .z = hinge.z };
@@ -1124,7 +1157,7 @@ fn addDoorPhysics(door: level.DoorDef, index: usize) void {
 
     var body_def = b3.b3DefaultBodyDef();
     body_def.type = @intCast(b3.b3_dynamicBody);
-    body_def.position = .{ .x = door.position.x, .y = level.door_height * 0.5, .z = door.position.z };
+    body_def.position = .{ .x = door.position.x, .y = door.position.y, .z = door.position.z };
     body_def.rotation = rotation;
     body_def.angularDamping = door_angular_damping;
     const body = b3.b3CreateBody(game.world, &body_def);
@@ -1133,9 +1166,9 @@ fn addDoorPhysics(door: level.DoorDef, index: usize) void {
     shape_def.filter.categoryBits = controller.door_category;
     shape_def.filter.maskBits = controller.player_query_category | controller.hunter_query_category | camera.camera_query_category;
     var hull = b3.b3MakeBoxHull(
-        level.door_width * 0.5 - door_physics_edge_clearance,
-        level.door_height * 0.5 - door_physics_vertical_clearance,
-        level.door_half_thickness,
+        door.width * 0.5 - door_physics_edge_clearance,
+        door.height * 0.5 - door_physics_vertical_clearance,
+        door.half_thickness,
     );
     _ = b3.b3CreateHullShape(body, &shape_def, &hull.base);
 
@@ -1151,7 +1184,8 @@ fn replaceDoorJoint(index: usize, unlocked: bool) void {
     // Revolute joints rotate around their local Z axis. Rotate both joint
     // frames so that axis becomes world Y, while keeping their initial frames
     // coincident for either authored door orientation.
-    const rotation = yawRotation(doorBaseYaw(level.door_defs[index]));
+    const door = level.current.doors[index];
+    const rotation = yawRotation(doorBaseYaw(door));
     const vertical_hinge_frame = b3.b3Quat{ .v = .{ .x = -@sin(std.math.pi * 0.25) }, .s = @cos(std.math.pi * 0.25) };
     var joint_def = b3.b3DefaultRevoluteJointDef();
     joint_def.base.bodyIdA = game.door_anchor_bodies[index];
@@ -1159,7 +1193,7 @@ fn replaceDoorJoint(index: usize, unlocked: bool) void {
     joint_def.base.localFrameA = b3.b3Transform_identity;
     joint_def.base.localFrameA.q = vertical_hinge_frame;
     joint_def.base.localFrameB = b3.b3Transform_identity;
-    joint_def.base.localFrameB.p = .{ .x = game.door_hinge_sign[index] * level.door_width * 0.5 };
+    joint_def.base.localFrameB.p = .{ .x = game.door_hinge_sign[index] * door.width * 0.5 };
     joint_def.base.localFrameB.q = b3.b3MulQuat(b3.b3Conjugate(rotation), vertical_hinge_frame);
     joint_def.enableSpring = true;
     joint_def.hertz = door_spring_hertz;
@@ -1219,12 +1253,12 @@ fn chooseDoorHingeSign(door: level.DoorDef) f32 {
 }
 
 fn doorHingeObstructionScore(door: level.DoorDef, sign: f32) f32 {
-    const hinge_x = door.position.x + (if (door.axis == .x) sign * level.door_width * 0.5 else 0);
-    const hinge_z = door.position.z + (if (door.axis == .z) sign * level.door_width * 0.5 else 0);
+    const hinge_x = door.position.x + (if (door.axis == .x) sign * door.width * 0.5 else 0);
+    const hinge_z = door.position.z + (if (door.axis == .z) sign * door.width * 0.5 else 0);
     var score: f32 = 0;
     for (level.current.boxSlice()) |box| {
         if (!box.collidable or box.is_roof or box.hunter_block) continue;
-        if (box.center.y + box.half_extents.y <= 0.05 or box.center.y - box.half_extents.y >= level.door_height) continue;
+        if (box.center.y + box.half_extents.y <= level.current.ground_y or box.center.y - box.half_extents.y >= door.position.y + door.height * 0.5) continue;
         const parallel_to_door = if (door.axis == .x)
             box.half_extents.x > box.half_extents.z
         else
@@ -1242,17 +1276,17 @@ fn doorHingePosition(door: level.DoorDef, index: usize, y: f32) Vec3 {
     const yaw = doorBaseYaw(door);
     const sign = game.door_hinge_sign[index];
     return .{
-        .x = door.position.x + @cos(yaw) * sign * level.door_width * 0.5,
+        .x = door.position.x + @cos(yaw) * sign * door.width * 0.5,
         .y = y,
-        .z = door.position.z - @sin(yaw) * sign * level.door_width * 0.5,
+        .z = door.position.z - @sin(yaw) * sign * door.width * 0.5,
     };
 }
 
 fn restoreDoorState() void {
-    for (level.doorSlice(), 0..) |door, index| {
+    for (level.current.doorSlice(), 0..) |door, index| {
         const body = game.door_bodies[index];
         if (!b3.b3Body_IsValid(body)) continue;
-        b3.b3Body_SetTransform(body, .{ .x = door.position.x, .y = level.door_height * 0.5, .z = door.position.z }, yawRotation(doorBaseYaw(door)));
+        b3.b3Body_SetTransform(body, .{ .x = door.position.x, .y = door.position.y, .z = door.position.z }, yawRotation(doorBaseYaw(door)));
         b3.b3Body_SetLinearVelocity(body, .{});
         b3.b3Body_SetAngularVelocity(body, .{});
         replaceDoorJoint(index, doorIsUnlocked(door, index));
@@ -1262,6 +1296,7 @@ fn restoreDoorState() void {
         game.door_ai_push_cooldown[index] = 0;
     }
     resetActorProxies();
+    navmesh.buildLevel(game.unlocked_doors);
 }
 
 fn resetActorProxies() void {
@@ -1298,39 +1333,39 @@ fn pushDoorsFromPlayerMovement(dt: f32) void {
     };
     const strength = if (game.input.run and !game.input.aiming) door_run_push_strength else door_walk_push_strength;
 
-    for (level.doorSlice(), 0..) |door, index| {
+    for (level.current.doorSlice(), 0..) |door, index| {
         if (!doorIsUnlocked(door, index)) continue;
         const yaw = doorBaseYaw(door) + game.door_current_angle[index];
         const tangent = b3.b3Vec3{ .x = @cos(yaw), .z = -@sin(yaw) };
         const normal = b3.b3Vec3{ .x = @sin(yaw), .z = @cos(yaw) };
-        const hinge = doorHingePosition(door, index, level.door_height * 0.5);
+        const hinge = doorHingePosition(door, index, door.position.y);
         const center_direction = -game.door_hinge_sign[index];
-        const center_x = hinge.x + tangent.x * level.door_width * 0.5 * center_direction;
-        const center_z = hinge.z + tangent.z * level.door_width * 0.5 * center_direction;
+        const center_x = hinge.x + tangent.x * door.width * 0.5 * center_direction;
+        const center_z = hinge.z + tangent.z * door.width * 0.5 * center_direction;
         const relative_x = game.character.position.x - center_x;
         const relative_z = game.character.position.z - center_z;
         const along = relative_x * tangent.x + relative_z * tangent.z;
-        if (@abs(along) > level.door_width * 0.5 + game.character_config.capsule_radius) continue;
+        if (@abs(along) > door.width * 0.5 + game.character_config.capsule_radius) continue;
         const normal_distance = relative_x * normal.x + relative_z * normal.z;
-        if (@abs(normal_distance) > level.door_half_thickness + game.character_config.capsule_radius + 0.12) continue;
+        if (@abs(normal_distance) > door.half_thickness + game.character_config.capsule_radius + 0.12) continue;
         const toward_panel = wish.x * normal.x + wish.z * normal.z;
         if (normal_distance * toward_panel >= -0.01) continue;
 
-        const contact_along = std.math.clamp(along, -level.door_width * 0.5, level.door_width * 0.5);
+        const contact_along = std.math.clamp(along, -door.width * 0.5, door.width * 0.5);
         const contact_x = center_x + tangent.x * contact_along;
         const contact_z = center_z + tangent.z * contact_along;
         const radial_x = contact_x - hinge.x;
         const radial_z = contact_z - hinge.z;
         const torque_sign = radial_z * wish.x - radial_x * wish.z;
         if (@abs(torque_sign) < 0.001) continue;
-        const leverage = std.math.clamp(@abs(torque_sign) / (level.door_width * 0.5), 0.35, 1.0);
+        const leverage = std.math.clamp(@abs(torque_sign) / (door.width * 0.5), 0.35, 1.0);
         const direction: f32 = if (torque_sign >= 0) 1 else -1;
         b3.b3Body_ApplyAngularImpulse(game.door_bodies[index], .{ .y = direction * strength * leverage * dt }, true);
     }
 }
 
 fn stepDoorPhysics(player_active: bool, hunter_active: bool) void {
-    for (level.doorSlice(), 0..) |_, index| {
+    for (level.current.doorSlice(), 0..) |_, index| {
         game.door_previous_angle[index] = game.door_current_angle[index];
         game.door_ai_push_cooldown[index] = @max(0, game.door_ai_push_cooldown[index] - @as(f32, @floatCast(fixed_dt)));
     }
@@ -1339,7 +1374,7 @@ fn stepDoorPhysics(player_active: bool, hunter_active: bool) void {
     if (hunter_active) targetProxy(game.hunter_proxy_body, game.hunter.previous_position, game.hunter.position) else setProxyTransform(game.hunter_proxy_body, game.hunter.position);
     b3.b3World_Step(game.world, @floatCast(fixed_dt), physics_substeps);
 
-    for (level.doorSlice(), 0..) |_, index| {
+    for (level.current.doorSlice(), 0..) |_, index| {
         const joint = game.door_joints[index];
         if (!b3.b3Joint_IsValid(joint)) continue;
         const angle = b3.b3RevoluteJoint_GetAngle(joint);
@@ -1365,7 +1400,26 @@ fn seedSpawnRandomness() void {
 
 fn loadValidatedLevel() void {
     level.loadDefault();
-    navmesh.buildLevel();
+    pickup_count = level.current.pickup_count;
+    for (level.current.pickupSlice(), 0..) |pickup, index| {
+        pickup_defs[index] = .{
+            .position = pickup.position,
+            .item = pickup.item,
+            .name = switch (pickup.item.kind) {
+                .ammo => "Handgun Ammo",
+                .health => "First Aid Spray",
+                .key_purple => "Purple Key",
+                .key_pink => "Pink Key",
+                .key_cyan => "Cyan Key",
+                .empty => "Item",
+            },
+        };
+    }
+    breakable_count = level.current.breakable_count;
+    for (level.current.breakableSlice(), 0..) |box, index| {
+        breakable_defs[index] = .{ .position = box.position, .half_extent = box.half_extent };
+    }
+    navmesh.buildLevel(0);
     game.hunter_config.level_center_x = (level.current.walk_min_x + level.current.walk_max_x) * 0.5;
     game.hunter_config.level_center_z = (level.current.walk_min_z + level.current.walk_max_z) * 0.5;
     game.hunter_config.level_half_x = (level.current.walk_max_x - level.current.walk_min_x) * 0.5;
@@ -1428,6 +1482,11 @@ fn placePlayerFromSlot(slot: saves.Slot) void {
     game.box_drops_health = slot.box_drops_health;
     game.collected_box_drops = slot.collected_box_drops;
     game.unlocked_doors = slot.unlocked_doors;
+    game.run_stats = .{
+        .elapsed_active_seconds = slot.elapsed_active_seconds,
+        .damage_events = slot.damage_events,
+        .deaths = slot.deaths,
+    };
     game.condition.reset(game.condition_config, slot.health);
     game.combat_visuals = .{};
     game.player_deformation = .{};
@@ -1462,6 +1521,7 @@ fn spawnPlayerAndHunter() void {
         game.box_drops_health = 0;
         game.collected_box_drops = 0;
         game.unlocked_doors = 0;
+        game.run_stats = .{};
         game.condition.reset(game.condition_config, game.condition_config.max_health);
     }
     game.player_deformation = .{};
@@ -1483,12 +1543,52 @@ fn spawnPlayerAndHunter() void {
     restoreDoorState();
 }
 
+fn restartRun() void {
+    const player_spawn = levelPlayerSpawn();
+    game.character = controller.State.init(player_spawn);
+    game.character.yaw = level.current.player_spawn_yaw;
+    game.camera = .{};
+    game.camera.yaw = game.character.yaw;
+    game.quick_turn = .{};
+    game.combat = combat.State.init(game.combat_config, game.combat_config.magazine_capacity, 0);
+    game.inventory = inventory.State.defaultLoadout(0);
+    game.collected_pickups = 0;
+    game.discovered_items = 0;
+    game.broken_boxes = 0;
+    game.box_drops_present = 0;
+    game.box_drops_health = 0;
+    game.collected_box_drops = 0;
+    game.unlocked_doors = 0;
+    game.run_stats = .{};
+    game.condition.reset(game.condition_config, game.condition_config.max_health);
+    game.player_deformation = .{};
+    game.clock = .{};
+    game.map = .{};
+    game.menu = .{};
+    game.inventory_ui = .{};
+    game.interaction_target = null;
+    game.kick = .{};
+    game.pickup_action = .{};
+    game.debris = @splat(.{});
+    game.notice = .none;
+    game.notice_timer = 0;
+    game.input = .{};
+    game.player_step_distance = 0;
+    game.hunter_step_distance = 0;
+    resetHunter(game.character.position);
+    syncBreakableCollision();
+    restoreDoorState();
+    sapp.lockMouse(true);
+    sapp.showMouse(false);
+}
+
 // Send the hunter back to his authored spawn room facing the player, with a
 // fresh patrol destination so he sets off walking immediately.
 fn resetHunter(player_pos: b3.b3Pos) void {
     const hunter_spawn = levelHunterSpawn();
     game.hunter = hunter.State.init(hunter_spawn);
-    game.hunter.yaw = std.math.atan2(player_pos.x - hunter_spawn.x, player_pos.z - hunter_spawn.z);
+    game.hunter.yaw = level.current.hunter_spawn_yaw;
+    _ = player_pos;
     game.hunter.target = hunter.randomPatrolTarget(game.hunter_config, game.hunter.position);
     game.hunter.repath_timer = 0;
     game.combat.hunter_health = game.combat_config.hunter_health;
@@ -1510,6 +1610,7 @@ fn hunterContacted() bool {
 
 fn punchPlayer() void {
     if (!game.condition.punch(game.condition_config)) return;
+    game.run_stats.damage_events +|= 1;
     game.hunter_punch.begin();
     game.audio.play(.punch);
     var dx = game.character.position.x - game.hunter.position.x;
@@ -1555,7 +1656,7 @@ fn targetPosition(target: InteractionTarget) Vec3 {
         .pickup => pickup_defs[target.index].position,
         .breakable => breakable_defs[target.index].position,
         .box_drop => boxDropPosition(target.index),
-        .door => doorPose(level.door_defs[target.index], target.index, level.door_height * 0.5).center,
+        .door => doorPose(level.current.doors[target.index], target.index, level.current.doors[target.index].position.y).center,
     };
 }
 
@@ -1564,7 +1665,7 @@ fn targetName(target: InteractionTarget) []const u8 {
         .pickup => pickup_defs[target.index].name,
         .breakable => breakable_defs[target.index].name,
         .box_drop => itemName(boxDropItem(target.index)),
-        .door => doorName(level.door_defs[target.index], target.index),
+        .door => doorName(level.current.doors[target.index], target.index),
     };
 }
 
@@ -1579,7 +1680,7 @@ fn targetColor(target: InteractionTarget) Vec4 {
             .empty => .{},
         },
         .breakable => .{ .x = 1.0, .y = 0.48, .z = 0.08, .w = 1 },
-        .door => doorDisplayColor(level.door_defs[target.index], target.index),
+        .door => doorDisplayColor(level.current.doors[target.index], target.index),
     };
 }
 
@@ -1730,8 +1831,8 @@ fn updateInteractionTarget() void {
             best_score = score;
         }
     }
-    for (level.doorSlice(), 0..) |door, index| {
-        const score = interactionScore(doorPose(door, index, level.door_height * 0.5).center, door_interaction_radius) orelse continue;
+    for (level.current.doorSlice(), 0..) |door, index| {
+        const score = interactionScore(doorPose(door, index, door.position.y).center, door_interaction_radius) orelse continue;
         if (score > best_score) {
             best = .{ .kind = .door, .index = index };
             best_score = score;
@@ -1778,7 +1879,7 @@ fn activateInteraction() void {
 }
 
 fn interactDoor(index: usize) void {
-    const door = level.door_defs[index];
+    const door = level.current.doors[index];
     const bit = @as(u32, 1) << @intCast(index);
     if (!doorIsUnlocked(door, index)) {
         if (doorKey(door.lock)) |key| {
@@ -1788,6 +1889,7 @@ fn interactDoor(index: usize) void {
                 return;
             }
             game.unlocked_doors |= bit;
+            navmesh.buildLevel(game.unlocked_doors);
             replaceDoorJoint(index, true);
             b3.b3Body_SetAwake(game.door_bodies[index], true);
             game.notice = .door_unlocked;
@@ -1802,7 +1904,7 @@ fn interactDoor(index: usize) void {
 }
 
 fn applyDoorPush(index: usize, opener: b3.b3Pos) void {
-    const door = level.door_defs[index];
+    const door = level.current.doors[index];
     if (!doorIsUnlocked(door, index)) return;
     const opener_side = if (door.axis == .x)
         opener.z - door.position.z
@@ -1953,6 +2055,7 @@ fn playerActionActive() bool {
 // Defeated: restore the most recent save (or the initial loadout) and move the
 // hunter home so the next chase starts fairly.
 fn respawnAfterCatch() void {
+    const retained_stats = game.run_stats;
     if (latestSaveIndex()) |index| {
         placePlayerFromSlot(saves.slots[index]);
     } else {
@@ -1973,6 +2076,7 @@ fn respawnAfterCatch() void {
         game.unlocked_doors = 0;
         game.condition.reset(game.condition_config, game.condition_config.max_health);
     }
+    game.run_stats = retained_stats;
 
     game.player_deformation = .{};
     resetHunter(game.character.position);
@@ -2011,8 +2115,40 @@ fn openMenu(kind: MenuKind) void {
 }
 
 fn closeMenu() void {
-    game.menu.kind = .none;
+    if (game.menu.kind == .load and game.menu.load_returns_to_pause) {
+        game.menu = .{ .kind = .pause };
+    } else {
+        game.menu = .{};
+        sapp.lockMouse(true);
+        sapp.showMouse(false);
+    }
     game.input = .{};
+}
+
+fn openPause() void {
+    if (game.map.active or game.inventory_ui.active or game.menu.kind == .save or game.menu.kind == .load or game.menu.kind == .results) return;
+    if (game.menu.kind == .pause) {
+        closeMenu();
+        return;
+    }
+    openMenu(.pause);
+    sapp.lockMouse(false);
+    sapp.showMouse(true);
+}
+
+fn openResults() void {
+    game.menu = .{ .kind = .results };
+    game.input = .{};
+    game.interaction_target = null;
+    sapp.lockMouse(false);
+    sapp.showMouse(true);
+}
+
+fn allRequiredDoorsUnlocked() bool {
+    for (level.current.doorSlice(), 0..) |door, index| {
+        if (door.lock != .none and !doorIsUnlocked(door, index)) return false;
+    }
+    return true;
 }
 
 const InventoryLayout = struct {
@@ -2032,6 +2168,35 @@ const ScreenRect = struct {
         return x >= self.x and y >= self.y and x <= self.x + self.w and y <= self.y + self.h;
     }
 };
+
+fn rootMenuItemRect(index: usize) ScreenRect {
+    const count: usize = if (game.menu.kind == .results) 2 else 3;
+    const width: f32 = 320;
+    const height: f32 = 48;
+    const gap: f32 = 12;
+    const total = @as(f32, @floatFromInt(count)) * height + @as(f32, @floatFromInt(count - 1)) * gap;
+    return .{
+        .x = (sapp.widthf() - width) * 0.5,
+        .y = (sapp.heightf() - total) * 0.5 + @as(f32, @floatFromInt(index)) * (height + gap) + 45,
+        .w = width,
+        .h = height,
+    };
+}
+
+fn hoverMenu(x: f32, y: f32) void {
+    const count: usize = if (game.menu.kind == .results) 2 else 3;
+    for (0..count) |index| {
+        if (rootMenuItemRect(index).contains(x, y)) {
+            game.menu.slot = index;
+            return;
+        }
+    }
+}
+
+fn menuClick(x: f32, y: f32) void {
+    hoverMenu(x, y);
+    if (rootMenuItemRect(game.menu.slot).contains(x, y)) confirmMenu();
+}
 
 fn inventoryLayout() InventoryLayout {
     const gap: f32 = 10;
@@ -2131,13 +2296,19 @@ fn inventoryClick(x: f32, y: f32) void {
 }
 
 fn moveMenuSlot(delta: i32) void {
-    const count: i32 = saves.slot_count;
+    const count: i32 = switch (game.menu.kind) {
+        .pause => 3,
+        .results => 2,
+        .save, .load => saves.slot_count,
+        .none => return,
+    };
     const current: i32 = @intCast(game.menu.slot);
     game.menu.slot = @intCast(@mod(current + delta + count, count));
 }
 
 // Clear the selected slot (when it holds a save) and persist the change.
 fn deleteSelectedSlot() void {
+    if (game.menu.kind != .save and game.menu.kind != .load) return;
     if (!saves.slots[game.menu.slot].occupied) return;
     saves.slots[game.menu.slot] = .{};
     if (saves.writeToCwd(app_io.io())) |_| {
@@ -2173,6 +2344,9 @@ fn confirmMenu() void {
                 .box_drops_health = game.box_drops_health,
                 .collected_box_drops = game.collected_box_drops,
                 .unlocked_doors = game.unlocked_doors,
+                .elapsed_active_seconds = game.run_stats.elapsed_active_seconds,
+                .damage_events = game.run_stats.damage_events,
+                .deaths = game.run_stats.deaths,
                 .timestamp = std.Io.Timestamp.now(app_io.io(), .real).toSeconds(),
             };
             if (saves.writeToCwd(app_io.io())) |_| {
@@ -2187,10 +2361,25 @@ fn confirmMenu() void {
             const slot = saves.slots[game.menu.slot];
             if (slot.occupied) {
                 placePlayerFromSlot(slot);
+                game.menu.load_returns_to_pause = false;
             }
         },
+        .pause => {
+            switch (game.menu.slot) {
+                0 => closeMenu(),
+                1 => game.menu = .{ .kind = .load, .load_returns_to_pause = true },
+                2 => sapp.requestQuit(),
+                else => unreachable,
+            }
+            return;
+        },
+        .results => switch (game.menu.slot) {
+            0 => restartRun(),
+            1 => sapp.requestQuit(),
+            else => unreachable,
+        },
     }
-    closeMenu();
+    if (game.menu.kind == .save or game.menu.kind == .load) closeMenu();
 }
 
 fn rebuildMapRoute() void {
@@ -2261,14 +2450,21 @@ fn rebuildMapRoute() void {
 }
 
 fn mapHalfHeight() f32 {
-    return @max(map_min_half_height, map_half_width / (sapp.widthf() / @max(sapp.heightf(), 1)));
+    return mapHalfWidth() / (sapp.widthf() / @max(sapp.heightf(), 1));
+}
+
+fn mapHalfWidth() f32 {
+    const aspect = sapp.widthf() / @max(sapp.heightf(), 1);
+    const half_x = (level.current.walk_max_x - level.current.walk_min_x) * 0.5 + map_margin;
+    const half_z = (level.current.walk_max_z - level.current.walk_min_z) * 0.5 + map_margin;
+    return @max(half_x, half_z * aspect);
 }
 
 fn mapWorldAtScreen(screen_x: f32, screen_y: f32) Vec3 {
     const normalized_x = screen_x / @max(sapp.widthf(), 1) * 2.0 - 1.0;
     const normalized_y = screen_y / @max(sapp.heightf(), 1) * 2.0 - 1.0;
     return .{
-        .x = game.map.pan.x + normalized_x * map_half_width,
+        .x = game.map.pan.x + normalized_x * mapHalfWidth(),
         .z = game.map.pan.z + normalized_y * mapHalfHeight(),
     };
 }
@@ -2542,6 +2738,19 @@ fn initRenderer() void {
         .colors = blendingTargets(),
         .label = "character-hud-circle-pipeline",
     });
+    game.render.post_pipeline = sg.makePipeline(.{
+        .shader = sg.makeShader(shd.postShaderDesc(sg.queryBackend())),
+        .label = "character-scene-post-pipeline",
+    });
+    game.render.scene_sampler = sg.makeSampler(.{
+        .min_filter = .LINEAR,
+        .mag_filter = .LINEAR,
+        .wrap_u = .CLAMP_TO_EDGE,
+        .wrap_v = .CLAMP_TO_EDGE,
+        .label = "character-scene-post-sampler",
+    });
+    game.render.post_bindings.samplers[shd.SMP_scene_sampler] = game.render.scene_sampler;
+    recreateSceneTargets(@max(sapp.width(), 1), @max(sapp.height(), 1));
 
     // Depth-only 2048x2048 texture seen from the sun. Only depth is written,
     // so the shadow pixel format is DEPTH (no color).
@@ -2614,7 +2823,56 @@ fn initRenderer() void {
     game.render.pass_action.colors[0] = .{ .load_action = .CLEAR, .clear_value = .{ .r = 0.035, .g = 0.045, .b = 0.055, .a = 1 } };
 }
 
+fn recreateSceneTargets(width: i32, height: i32) void {
+    if (width == game.render.scene_target_width and height == game.render.scene_target_height) return;
+    if (game.render.scene_target_width != 0) {
+        sg.destroyView(game.render.scene_color_view);
+        sg.destroyView(game.render.scene_depth_view);
+        sg.destroyView(game.render.scene_resolve_view);
+        sg.destroyView(game.render.scene_texture_view);
+        sg.destroyImage(game.render.scene_color_image);
+        sg.destroyImage(game.render.scene_depth_image);
+        sg.destroyImage(game.render.scene_resolve_image);
+    }
+    const defaults = sglue.environment().defaults;
+    game.render.scene_color_image = sg.makeImage(.{
+        .usage = .{ .color_attachment = true },
+        .width = width,
+        .height = height,
+        .pixel_format = defaults.color_format,
+        .sample_count = defaults.sample_count,
+        .label = "character-scene-msaa-color",
+    });
+    game.render.scene_depth_image = sg.makeImage(.{
+        .usage = .{ .depth_stencil_attachment = true },
+        .width = width,
+        .height = height,
+        .pixel_format = defaults.depth_format,
+        .sample_count = defaults.sample_count,
+        .label = "character-scene-msaa-depth",
+    });
+    game.render.scene_resolve_image = sg.makeImage(.{
+        .usage = .{ .resolve_attachment = true },
+        .width = width,
+        .height = height,
+        .pixel_format = defaults.color_format,
+        .sample_count = 1,
+        .label = "character-scene-resolve",
+    });
+    game.render.scene_color_view = sg.makeView(.{ .color_attachment = .{ .image = game.render.scene_color_image } });
+    game.render.scene_depth_view = sg.makeView(.{ .depth_stencil_attachment = .{ .image = game.render.scene_depth_image } });
+    game.render.scene_resolve_view = sg.makeView(.{ .resolve_attachment = .{ .image = game.render.scene_resolve_image } });
+    game.render.scene_texture_view = sg.makeView(.{ .texture = .{ .image = game.render.scene_resolve_image } });
+    game.render.scene_pass.attachments.colors[0] = game.render.scene_color_view;
+    game.render.scene_pass.attachments.depth_stencil = game.render.scene_depth_view;
+    game.render.scene_pass.attachments.resolves[0] = game.render.scene_resolve_view;
+    game.render.post_bindings.views[shd.VIEW_scene_color] = game.render.scene_texture_view;
+    game.render.scene_target_width = width;
+    game.render.scene_target_height = height;
+}
+
 fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
+    recreateSceneTargets(@max(sapp.width(), 1), @max(sapp.height(), 1));
     const hunter_enabled = level.hunterEnabled();
     // Rebuild the character's instance record from its interpolated position.
     const fall = game.condition.fallAmount(game.condition_config);
@@ -2771,7 +3029,8 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         .indoor_light_7 = level.current.lights[7],
     };
 
-    sg.beginPass(.{ .action = game.render.pass_action, .swapchain = sglue.swapchain() });
+    game.render.scene_pass.action = game.render.pass_action;
+    sg.beginPass(game.render.scene_pass);
     sg.applyPipeline(game.render.display_pipeline);
     sg.applyUniforms(shd.UB_display_vs_params, sg.asRange(&vs_params));
     sg.applyUniforms(shd.UB_display_fs_params, sg.asRange(&fs_params));
@@ -2852,8 +3111,24 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
             drawInstances(game.render.capsule_instances, game.render.capsule_sphere_range, 4 * @sizeOf(Instance), 2, true);
         }
     }
+    sg.endPass();
+
+    sg.beginPass(.{ .swapchain = sglue.swapchain() });
+    const pause_backdrop = game.menu.kind == .pause or (game.menu.kind == .load and game.menu.load_returns_to_pause);
+    const post_params: shd.PostFsParams = .{ .post_options = .{
+        .x = 1.0 / @as(f32, @floatFromInt(@max(sapp.width(), 1))),
+        .y = 1.0 / @as(f32, @floatFromInt(@max(sapp.height(), 1))),
+        .z = fbool(pause_backdrop),
+        .w = 0.43,
+    } };
+    sg.applyPipeline(game.render.post_pipeline);
+    sg.applyBindings(game.render.post_bindings);
+    sg.applyUniforms(shd.UB_post_fs_params, sg.asRange(&post_params));
+    sg.draw(0, 3, 1);
+
     drawReticle();
     drawInventoryRects();
+    drawRootMenuRects();
     drawHudShapes();
     drawHud(position);
     sg.endPass();
@@ -2882,7 +3157,7 @@ fn updatePickupInstances() void {
         if (game.broken_boxes & bit == 0) {
             instances[count] = makeInstance(
                 box.position,
-                .{ .x = breakable_half_extent, .y = breakable_half_extent, .z = breakable_half_extent },
+                .{ .x = box.half_extent, .y = box.half_extent, .z = box.half_extent },
                 0,
                 rgb(1.0, 0.42, 0.06),
             );
@@ -2898,7 +3173,7 @@ fn updatePickupInstances() void {
         }
         count += 1;
     }
-    for (level.doorSlice(), 0..) |door, index| {
+    for (level.current.doorSlice(), 0..) |door, index| {
         instances[count] = makeDoorInstance(door, index);
         count += 1;
     }
@@ -2936,10 +3211,10 @@ fn updatePickupInstances() void {
         );
         map_count += 1;
     }
-    for (level.doorSlice(), 0..) |door, index| {
+    for (level.current.doorSlice(), 0..) |door, index| {
         map_instances[map_count] = makeInstance(
             .{ .x = door.position.x, .y = level.current.ground_y + 0.26, .z = door.position.z },
-            .{ .x = level.door_width * 0.5, .y = 0.055, .z = 0.22 },
+            .{ .x = door.width * 0.5, .y = 0.055, .z = @max(door.half_thickness, 0.22) },
             doorBaseYaw(door),
             doorDisplayColor(door, index),
         );
@@ -2966,10 +3241,10 @@ fn updatePickupInstances() void {
 }
 
 fn makeDoorInstance(door: level.DoorDef, index: usize) Instance {
-    const pose = doorPose(door, index, level.door_height * 0.5);
+    const pose = doorPose(door, index, door.position.y);
     return makeInstance(
         pose.center,
-        .{ .x = level.door_width * 0.5, .y = level.door_height * 0.5, .z = level.door_half_thickness },
+        .{ .x = door.width * 0.5, .y = door.height * 0.5, .z = door.half_thickness },
         pose.yaw,
         doorDisplayColor(door, index),
     );
@@ -2981,7 +3256,7 @@ fn doorPose(door: level.DoorDef, index: usize, y: f32) DoorPose {
     const base_yaw = doorBaseYaw(door);
     const angle = game.door_previous_angle[index] + (game.door_current_angle[index] - game.door_previous_angle[index]) * game.clock.alpha();
     const yaw = base_yaw + angle;
-    const half_width = level.door_width * 0.5;
+    const half_width = door.width * 0.5;
     const hinge = doorHingePosition(door, index, y);
     const center_direction = -game.door_hinge_sign[index];
     const center = Vec3{
@@ -3176,6 +3451,29 @@ fn drawInventoryRects() void {
     }
 }
 
+fn drawRootMenuRects() void {
+    if (game.menu.kind != .pause and game.menu.kind != .results) return;
+    drawUiRect(
+        .{ .x = 0, .y = 0, .w = sapp.widthf(), .h = sapp.heightf() },
+        if (game.menu.kind == .results)
+            .{ .x = 0, .y = 0, .z = 0, .w = 1 }
+        else
+            .{ .x = 0.01, .y = 0.015, .z = 0.02, .w = 0.62 },
+        .{},
+        0,
+    );
+    const count: usize = if (game.menu.kind == .results) 2 else 3;
+    for (0..count) |index| {
+        const selected = game.menu.slot == index;
+        drawUiRect(
+            rootMenuItemRect(index),
+            if (selected) .{ .x = 0.12, .y = 0.14, .z = 0.15, .w = 0.96 } else .{ .x = 0.055, .y = 0.065, .z = 0.075, .w = 0.90 },
+            if (selected) .{ .x = 0.55, .y = 0.93, .z = 0.99, .w = 1 } else .{ .x = 0.30, .y = 0.32, .z = 0.33, .w = 1 },
+            if (selected) 3 else 1,
+        );
+    }
+}
+
 fn updateCapsuleInstances(player_position: b3.b3Pos, hunter_position: b3.b3Pos) void {
     const player_radius = game.character_config.capsule_radius;
     const player_half_segment = game.character_config.capsule_half_segment;
@@ -3229,6 +3527,21 @@ fn drawHud(position: b3.b3Pos) void {
     const fps = if (frame_duration > 0) 1.0 / frame_duration else 0;
     const text_width = 11.0; // "FPS: " plus a six-character numeric field.
     sdtx.canvas(sapp.widthf(), sapp.heightf());
+    if (game.menu.kind == .pause) {
+        drawRootMenuText("PAUSED", &.{ "RETURN TO GAME", "LOAD GAME", "QUIT GAME" });
+        sdtx.draw();
+        return;
+    }
+    if (game.menu.kind == .results) {
+        drawResultsText();
+        sdtx.draw();
+        return;
+    }
+    if (game.menu.kind == .load and game.menu.load_returns_to_pause) {
+        drawSaveMenu();
+        sdtx.draw();
+        return;
+    }
     sdtx.pos(@max(1.0, sapp.widthf() / 8.0 - text_width - 1.0), 1.0);
     sdtx.color3b(255, 255, 255);
     sdtx.print("FPS: {d:>6.1}", .{fps});
@@ -3331,6 +3644,52 @@ fn drawHud(position: b3.b3Pos) void {
         sdtx.print(prompt, .{});
     }
     sdtx.draw();
+}
+
+fn drawRootMenuText(title: []const u8, labels: []const []const u8) void {
+    const text_w = sapp.widthf() / 8.0;
+    sdtx.pos(text_w * 0.5 - @as(f32, @floatFromInt(title.len)) * 0.5, sapp.heightf() / 16.0 - 10.0);
+    sdtx.color3b(248, 248, 242);
+    sdtx.print("{s}", .{title});
+    for (labels, 0..) |label, index| {
+        const rect = rootMenuItemRect(index);
+        sdtx.pos((rect.x + 22) / 8.0, (rect.y + 16) / 8.0);
+        if (index == game.menu.slot) {
+            sdtx.color3b(139, 233, 253);
+            sdtx.print("> {s}", .{label});
+        } else {
+            sdtx.color3b(225, 225, 220);
+            sdtx.print("  {s}", .{label});
+        }
+    }
+}
+
+fn drawResultsText() void {
+    var time_buffer: [32]u8 = undefined;
+    const formatted = formatRunTime(&time_buffer, game.run_stats.elapsed_active_seconds);
+    const text_w = sapp.widthf() / 8.0;
+    const left = text_w * 0.5 - 17.0;
+    sdtx.pos(text_w * 0.5 - 6.0, sapp.heightf() / 16.0 - 15.0);
+    sdtx.color3b(248, 248, 242);
+    sdtx.print("RUN COMPLETE", .{});
+    sdtx.pos(left, sapp.heightf() / 16.0 - 11.5);
+    sdtx.color3b(189, 147, 249);
+    sdtx.print("TIME              {s}", .{formatted});
+    sdtx.pos(left, sapp.heightf() / 16.0 - 10.0);
+    sdtx.color3b(255, 121, 198);
+    sdtx.print("TIMES DAMAGED     {d}", .{game.run_stats.damage_events});
+    sdtx.pos(left, sapp.heightf() / 16.0 - 8.5);
+    sdtx.color3b(139, 233, 253);
+    sdtx.print("DEATHS            {d}", .{game.run_stats.deaths});
+    drawRootMenuText("", &.{ "RESTART RUN", "QUIT GAME" });
+}
+
+fn formatRunTime(buffer: []u8, elapsed_seconds: f64) []const u8 {
+    const tenths: u64 = @intFromFloat(@max(0, elapsed_seconds) * 10.0);
+    const hours = tenths / 36_000;
+    const minutes = (tenths / 600) % 60;
+    const seconds = (tenths / 10) % 60;
+    return std.fmt.bufPrint(buffer, "{d:0>2}:{d:0>2}:{d:0>2}.{d}", .{ hours, minutes, seconds, tenths % 10 }) catch "00:00:00.0";
 }
 
 fn drawInventoryText() void {
@@ -3615,7 +3974,8 @@ fn mapViewProjection() Mat4 {
     const eye = Vec3{ .x = center.x, .y = 80, .z = center.z };
     const at = Vec3{ .x = center.x, .y = 0, .z = center.z };
     const view = Mat4.lookAtRh(eye, at, .{ .x = 0, .y = 0, .z = -1 });
-    const projection = Mat4.orthoOffCenterRh(-map_half_width, map_half_width, -half_h, half_h, 1, 200);
+    const half_w = mapHalfWidth();
+    const projection = Mat4.orthoOffCenterRh(-half_w, half_w, -half_h, half_h, 1, 200);
     return Mat4.mul(view, projection);
 }
 

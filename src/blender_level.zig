@@ -9,7 +9,13 @@
 const std = @import("std");
 const cgltf = @import("cgltf");
 
-pub const max_boxes = 256;
+pub const max_boxes = 512;
+pub const max_doors = 16;
+pub const max_pickups = 24;
+pub const max_breakables = 16;
+pub const max_save_fixtures = 4;
+pub const max_trigger_volumes = 4;
+pub const max_lights = 8;
 
 pub const Vec3 = struct {
     x: f32 = 0,
@@ -25,12 +31,49 @@ pub const Box = struct {
     basis_z: Vec3 = .{ .z = 1 },
 };
 
+pub const DoorLock = enum { none, purple, pink, cyan };
+pub const Door = struct {
+    box: Box,
+    lock: DoorLock,
+};
+
+pub const PickupKind = enum { ammo, health, key_purple, key_pink, key_cyan };
+pub const Pickup = struct {
+    position: Vec3,
+    kind: PickupKind,
+};
+
+pub const Volume = struct {
+    center: Vec3,
+    half_extents: Vec3,
+};
+
+pub const Light = struct {
+    position: Vec3,
+    radius: f32,
+};
+
 pub const Scene = struct {
     boxes: [max_boxes]Box = undefined,
     box_count: usize = 0,
     player_spawn: ?Vec3 = null,
     player_yaw: f32 = std.math.pi,
     hunter_spawn: ?Vec3 = null,
+    hunter_yaw: f32 = 0,
+    doors: [max_doors]Door = undefined,
+    door_count: usize = 0,
+    pickups: [max_pickups]Pickup = undefined,
+    pickup_count: usize = 0,
+    breakables: [max_breakables]Box = undefined,
+    breakable_count: usize = 0,
+    save_fixtures: [max_save_fixtures]Vec3 = undefined,
+    save_fixture_count: usize = 0,
+    save_rooms: [max_trigger_volumes]Volume = undefined,
+    save_room_count: usize = 0,
+    endings: [max_trigger_volumes]Volume = undefined,
+    ending_count: usize = 0,
+    lights: [max_lights]Light = undefined,
+    light_count: usize = 0,
 
     pub fn boxSlice(self: *const Scene) []const Box {
         return self.boxes[0..self.box_count];
@@ -53,7 +96,8 @@ pub fn load() !Scene {
 
     var result = Scene{};
     for (data.*.nodes[0..data.*.nodes_count]) |*node| {
-        if (node.name != null and std.mem.eql(u8, std.mem.span(node.name), "PlayerSpawn")) {
+        const name = if (node.name != null) std.mem.span(node.name) else "";
+        if (std.mem.eql(u8, name, "PlayerSpawn")) {
             if (result.player_spawn != null) return error.DuplicatePlayerSpawn;
             var matrix: [16]f32 = undefined;
             cgltf.cgltf_node_transform_world(node, &matrix);
@@ -68,11 +112,98 @@ pub fn load() !Scene {
             }
             continue;
         }
-        if (node.name != null and std.mem.eql(u8, std.mem.span(node.name), "HunterSpawn")) {
+        if (std.mem.eql(u8, name, "HunterSpawn")) {
             if (result.hunter_spawn != null) return error.DuplicateHunterSpawn;
             var matrix: [16]f32 = undefined;
             cgltf.cgltf_node_transform_world(node, &matrix);
             result.hunter_spawn = transformPoint(matrix, .{});
+            result.hunter_yaw = yawFromMatrix(matrix);
+            continue;
+        }
+        // Blender-only scale guide. The authoring exporter excludes this, but
+        // ignoring it here too prevents an accidental export from becoming a
+        // large invisible collider in the playable level.
+        if (std.mem.eql(u8, name, "PlayerPlaceHolder")) continue;
+        if (std.mem.startsWith(u8, name, "Trigger_SaveRoom_")) {
+            if (result.save_room_count == max_trigger_volumes) return error.TooManySaveRooms;
+            result.save_rooms[result.save_room_count] = try volumeFromNode(node);
+            result.save_room_count += 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, name, "Trigger_Ending_")) {
+            if (result.ending_count == max_trigger_volumes) return error.TooManyEndingAreas;
+            result.endings[result.ending_count] = try volumeFromNode(node);
+            result.ending_count += 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, name, "Light_")) {
+            if (result.light_count == max_lights) return error.TooManyLights;
+            var matrix: [16]f32 = undefined;
+            cgltf.cgltf_node_transform_world(node, &matrix);
+            result.lights[result.light_count] = .{
+                .position = transformPoint(matrix, .{}),
+                .radius = length(.{ .x = matrix[0], .y = matrix[1], .z = matrix[2] }),
+            };
+            result.light_count += 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, name, "Door_")) {
+            if (node.mesh == null) return error.GameplayMarkerMeshMissing;
+            if (result.door_count == max_doors) return error.TooManyDoors;
+            result.doors[result.door_count] = .{
+                .box = try boxFromNode(node),
+                .lock = if (std.mem.startsWith(u8, name, "Door_Unlocked_"))
+                    .none
+                else if (std.mem.startsWith(u8, name, "Door_Locked_Purple_"))
+                    .purple
+                else if (std.mem.startsWith(u8, name, "Door_Locked_Pink_"))
+                    .pink
+                else if (std.mem.startsWith(u8, name, "Door_Locked_Cyan_"))
+                    .cyan
+                else
+                    return error.InvalidDoorName,
+            };
+            result.door_count += 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, name, "Pickup_")) {
+            if (node.mesh == null) return error.GameplayMarkerMeshMissing;
+            if (result.pickup_count == max_pickups) return error.TooManyPickups;
+            const marker = try boxFromNode(node);
+            result.pickups[result.pickup_count] = .{
+                .position = marker.center,
+                .kind = if (std.mem.startsWith(u8, name, "Pickup_Ammo_"))
+                    .ammo
+                else if (std.mem.startsWith(u8, name, "Pickup_Health_"))
+                    .health
+                else if (std.mem.startsWith(u8, name, "Pickup_Key_Purple_"))
+                    .key_purple
+                else if (std.mem.startsWith(u8, name, "Pickup_Key_Pink_"))
+                    .key_pink
+                else if (std.mem.startsWith(u8, name, "Pickup_Key_Cyan_"))
+                    .key_cyan
+                else
+                    return error.InvalidPickupName,
+            };
+            result.pickup_count += 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, name, "Breakable_ItemBox_")) {
+            if (node.mesh == null) return error.GameplayMarkerMeshMissing;
+            if (result.breakable_count == max_breakables) return error.TooManyBreakables;
+            result.breakables[result.breakable_count] = try boxFromNode(node);
+            result.breakable_count += 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, name, "Interactible_Typewriter_")) {
+            if (node.mesh == null) return error.GameplayMarkerMeshMissing;
+            if (result.save_fixture_count == max_save_fixtures) return error.TooManySaveFixtures;
+            const fixture_box = try boxFromNode(node);
+            result.save_fixtures[result.save_fixture_count] = fixture_box.center;
+            result.save_fixture_count += 1;
+            if (result.box_count == max_boxes) return error.TooManyMeshNodes;
+            result.boxes[result.box_count] = fixture_box;
+            result.box_count += 1;
             continue;
         }
         if (node.mesh == null) continue;
@@ -83,6 +214,25 @@ pub fn load() !Scene {
     if (result.box_count == 0) return error.EmptyScene;
     if (result.player_spawn == null) return error.PlayerSpawnMissing;
     return result;
+}
+
+fn yawFromMatrix(matrix: [16]f32) f32 {
+    const forward_x = -matrix[8];
+    const forward_z = -matrix[10];
+    if (forward_x * forward_x + forward_z * forward_z <= 0.000001) return 0;
+    return std.math.atan2(forward_x, forward_z);
+}
+
+fn volumeFromNode(node: *const cgltf.cgltf_node) !Volume {
+    var matrix: [16]f32 = undefined;
+    cgltf.cgltf_node_transform_world(node, &matrix);
+    const half_extents = Vec3{
+        .x = length(.{ .x = matrix[0], .y = matrix[1], .z = matrix[2] }),
+        .y = length(.{ .x = matrix[4], .y = matrix[5], .z = matrix[6] }),
+        .z = length(.{ .x = matrix[8], .y = matrix[9], .z = matrix[10] }),
+    };
+    if (half_extents.x <= 0.000001 or half_extents.y <= 0.000001 or half_extents.z <= 0.000001) return error.ZeroScale;
+    return .{ .center = transformPoint(matrix, .{}), .half_extents = half_extents };
 }
 
 fn boxFromNode(node: *const cgltf.cgltf_node) !Box {

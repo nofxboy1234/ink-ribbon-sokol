@@ -17,7 +17,7 @@ pub const Slot = struct {
     z: f32 = 0,
     yaw: f32 = 0,
     magazine: u16 = 24,
-    reserve: u16 = 120,
+    reserve: u16 = 0,
     health: f32 = 100,
     inventory: inventory.State = .{},
     // Bit N is set after world pickup N has been collected.
@@ -30,6 +30,9 @@ pub const Slot = struct {
     collected_box_drops: u32 = 0,
     // Door angles are transient Box3D state; only permanent unlocks persist.
     unlocked_doors: u32 = 0,
+    elapsed_active_seconds: f64 = 0,
+    damage_events: u32 = 0,
+    deaths: u32 = 0,
     // Unix epoch seconds when the slot was written, for the slot list UI.
     timestamp: i64 = 0,
 };
@@ -38,7 +41,7 @@ pub var slots: [slot_count]Slot = @splat(.{});
 
 const file_name = "saves.json";
 const file_limit = 1 << 20;
-const current_version: u32 = 9;
+const current_version: u32 = 10;
 
 const FileFormat = struct {
     version: u32 = current_version,

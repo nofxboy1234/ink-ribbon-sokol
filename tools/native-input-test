@@ -21,7 +21,7 @@ STATE_FILE = Path("/tmp/ink-ribbon-native-input.json")
 LOG_FILE = Path("/tmp/ink-ribbon-native-input.log")
 WINDOW_TITLE = "Character Mover"
 ALLOWED_KEYS = {
-    "w", "a", "s", "d", "f", "i", "m", "q", "r", "shift", "ctrl", "alt", "tab",
+    "w", "a", "s", "d", "f", "i", "m", "p", "q", "r", "shift", "ctrl", "alt", "tab", "enter", "space",
     "f1", "f2", "f3", "escape",
     "left", "right", "up", "down",
 }
@@ -124,6 +124,8 @@ class XTest:
             "right": "Right",
             "up": "Up",
             "down": "Down",
+            "enter": "Return",
+            "space": "space",
         }.get(name, name)
         symbol = self.x11.XStringToKeysym(x_name.encode())
         code = self.x11.XKeysymToKeycode(self.display, symbol)

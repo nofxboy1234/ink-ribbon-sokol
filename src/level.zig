@@ -8,12 +8,13 @@
 const std = @import("std");
 const math = @import("math.zig");
 const blender_level = @import("blender_level.zig");
+const inventory = @import("inventory.zig");
 
 pub const Vec3 = math.Vec3;
 pub const Vec4 = math.Vec4;
 
 pub const max_boxes = blender_level.max_boxes;
-pub const light_capacity = 8;
+pub const light_capacity = blender_level.max_lights;
 
 // Runtime metadata arrays remain empty until equivalent nodes are authored in
 // Blender and added to the importer. They keep the reusable interaction and
@@ -23,16 +24,24 @@ pub const DoorLock = enum { none, purple, pink, cyan };
 pub const DoorDef = struct {
     position: Vec3,
     axis: DoorAxis,
-    gap_half_width: f32,
-    clear_half_width: f32 = 1,
     lock: DoorLock = .none,
+    width: f32,
+    height: f32,
+    half_thickness: f32,
 };
-pub const max_doors = 1;
-pub const door_count = 0;
-pub const door_defs: [max_doors]DoorDef = .{.{ .position = .{}, .axis = .x, .gap_half_width = 0 }};
-pub const door_width: f32 = 1.48;
-pub const door_height: f32 = 3.15;
-pub const door_half_thickness: f32 = 0.07;
+pub const max_doors = blender_level.max_doors;
+
+pub const PickupDef = struct {
+    position: Vec3,
+    item: inventory.Item,
+};
+pub const max_pickups = blender_level.max_pickups;
+
+pub const BreakableDef = struct {
+    position: Vec3,
+    half_extent: f32,
+};
+pub const max_breakables = blender_level.max_breakables;
 
 pub const WindowDef = struct {
     center: Vec3,
@@ -41,10 +50,6 @@ pub const WindowDef = struct {
 pub const max_windows = 1;
 pub const window_count = 0;
 pub const window_defs: [max_windows]WindowDef = .{.{ .center = .{}, .half_extents = .{} }};
-
-pub fn doorSlice() []const DoorDef {
-    return door_defs[0..door_count];
-}
 
 pub fn windowSlice() []const WindowDef {
     return window_defs[0..window_count];
@@ -73,7 +78,16 @@ pub const Level = struct {
     player_spawn: Vec3 = .{},
     player_spawn_yaw: f32 = std.math.pi,
     hunter_spawn: Vec3 = .{},
+    hunter_spawn_yaw: f32 = 0,
     hunter_enabled: bool = false,
+    doors: [max_doors]DoorDef = undefined,
+    door_count: usize = 0,
+    pickups: [max_pickups]PickupDef = undefined,
+    pickup_count: usize = 0,
+    breakables: [max_breakables]BreakableDef = undefined,
+    breakable_count: usize = 0,
+    ending_areas: [blender_level.max_trigger_volumes]SaveBounds = undefined,
+    ending_area_count: usize = 0,
     save_room_target: Vec3 = .{},
     save_fixtures: [2]Vec3 = @splat(.{}),
     save_fixture_count: usize = 0,
@@ -90,6 +104,25 @@ pub const Level = struct {
 
     pub fn boxSlice(self: *const Level) []const Box {
         return self.boxes[0..self.box_count];
+    }
+
+    pub fn doorSlice(self: *const Level) []const DoorDef {
+        return self.doors[0..self.door_count];
+    }
+
+    pub fn pickupSlice(self: *const Level) []const PickupDef {
+        return self.pickups[0..self.pickup_count];
+    }
+
+    pub fn breakableSlice(self: *const Level) []const BreakableDef {
+        return self.breakables[0..self.breakable_count];
+    }
+
+    pub fn isInEndingArea(self: *const Level, x: f32, z: f32) bool {
+        for (self.ending_areas[0..self.ending_area_count]) |bounds| {
+            if (x > bounds.min_x and x < bounds.max_x and z > bounds.min_z and z < bounds.max_z) return true;
+        }
+        return false;
     }
 
     pub fn isInSaveRoom(self: *const Level, x: f32, z: f32) bool {
@@ -135,7 +168,7 @@ pub fn loadDefault() void {
 // Items, doors, save fixtures, and hunter encounters will be enabled once
 // their metadata is authored in Blender rather than hard-coded in Zig.
 pub fn hasGameplayMetadata() bool {
-    return false;
+    return current.door_count > 0 or current.pickup_count > 0 or current.breakable_count > 0 or current.save_fixture_count > 0;
 }
 
 pub fn hunterEnabled() bool {
@@ -147,6 +180,20 @@ pub fn insideWalkBounds(x: f32, z: f32) bool {
         z >= current.walk_min_z and z <= current.walk_max_z;
 }
 
+pub fn supportsWalk(x: f32, z: f32) bool {
+    for (current.boxSlice()) |box| {
+        if (!box.collidable or box.nav_block) continue;
+        const top = box.center.y + projectedHalfExtent(box, .y);
+        if (@abs(top - current.ground_y) > 0.08) continue;
+        if (@abs(x - box.center.x) <= projectedHalfExtent(box, .x) + 0.01 and
+            @abs(z - box.center.z) <= projectedHalfExtent(box, .z) + 0.01)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 fn build() !Level {
     const imported = try blender_level.load();
     var result = Level{};
@@ -155,6 +202,7 @@ fn build() !Level {
     result.ground_y = result.player_spawn.y;
     if (imported.hunter_spawn) |spawn| {
         result.hunter_spawn = fromImported(spawn);
+        result.hunter_spawn_yaw = imported.hunter_yaw;
         result.hunter_enabled = true;
     } else {
         result.hunter_spawn = result.player_spawn;
@@ -188,24 +236,114 @@ fn build() !Level {
         result.walk_max_z = @max(result.walk_max_z, converted.center.z + half_z);
     }
 
+    for (imported.doors[0..imported.door_count]) |door| {
+        const box = door.box;
+        const width = box.half_extents.x * 2.0;
+        const height = box.half_extents.y * 2.0;
+        const thickness = box.half_extents.z;
+        if (width <= 0.5 or height <= 1.0 or thickness <= 0.01) return error.InvalidDoorDimensions;
+        result.doors[result.door_count] = .{
+            .position = fromImported(box.center),
+            .axis = if (@abs(box.basis_x.x) >= @abs(box.basis_x.z)) .x else .z,
+            .lock = switch (door.lock) {
+                .none => .none,
+                .purple => .purple,
+                .pink => .pink,
+                .cyan => .cyan,
+            },
+            .width = width,
+            .height = height,
+            .half_thickness = thickness,
+        };
+        result.door_count += 1;
+    }
+
+    for (imported.pickups[0..imported.pickup_count]) |pickup| {
+        result.pickups[result.pickup_count] = .{
+            .position = fromImported(pickup.position),
+            .item = switch (pickup.kind) {
+                .ammo => .{ .kind = .ammo, .amount = 12 },
+                .health => .{ .kind = .health, .amount = 1 },
+                .key_purple => .{ .kind = .key_purple, .amount = 1 },
+                .key_pink => .{ .kind = .key_pink, .amount = 1 },
+                .key_cyan => .{ .kind = .key_cyan, .amount = 1 },
+            },
+        };
+        result.pickup_count += 1;
+    }
+
+    for (imported.breakables[0..imported.breakable_count]) |box| {
+        result.breakables[result.breakable_count] = .{
+            .position = fromImported(box.center),
+            .half_extent = @max(box.half_extents.x, @max(box.half_extents.y, box.half_extents.z)),
+        };
+        result.breakable_count += 1;
+    }
+
+    for (imported.save_fixtures[0..imported.save_fixture_count]) |fixture| {
+        if (result.save_fixture_count == result.save_fixtures.len) return error.TooManySaveFixtures;
+        result.save_fixtures[result.save_fixture_count] = fromImported(fixture);
+        result.save_fixture_count += 1;
+    }
+
+    for (imported.save_rooms[0..imported.save_room_count]) |room| {
+        if (result.save_target_count == result.save_bounds.len) return error.TooManySaveRooms;
+        const center = fromImported(room.center);
+        const half = fromImported(room.half_extents);
+        result.save_bounds[result.save_target_count] = .{
+            .min_x = center.x - half.x,
+            .max_x = center.x + half.x,
+            .min_z = center.z - half.z,
+            .max_z = center.z + half.z,
+        };
+        result.save_targets[result.save_target_count] = if (result.save_fixture_count > result.save_target_count)
+            result.save_fixtures[result.save_target_count]
+        else
+            center;
+        result.save_target_count += 1;
+    }
+
+    for (imported.endings[0..imported.ending_count]) |ending| {
+        const center = fromImported(ending.center);
+        const half = fromImported(ending.half_extents);
+        result.ending_areas[result.ending_area_count] = .{
+            .min_x = center.x - half.x,
+            .max_x = center.x + half.x,
+            .min_z = center.z - half.z,
+            .max_z = center.z + half.z,
+        };
+        result.ending_area_count += 1;
+    }
+
+    for (imported.lights[0..imported.light_count]) |light| {
+        if (result.light_count == light_capacity) break;
+        const position = fromImported(light.position);
+        result.lights[result.light_count] = .{ .x = position.x, .y = position.y, .z = position.z, .w = light.radius };
+        result.light_count += 1;
+    }
+
     // These neutral defaults support reusable systems without placing any
     // old level content into the fresh Blender scene.
-    result.save_room_target = result.player_spawn;
-    result.save_targets[0] = result.player_spawn;
-    result.save_target_count = 1;
-    result.save_bounds[0] = .{
-        .min_x = result.walk_min_x,
-        .max_x = result.walk_max_x,
-        .min_z = result.walk_min_z,
-        .max_z = result.walk_max_z,
-    };
-    result.lights[0] = .{
-        .x = (result.walk_min_x + result.walk_max_x) * 0.5,
-        .y = result.ground_y + 6,
-        .z = (result.walk_min_z + result.walk_max_z) * 0.5,
-        .w = @max(result.walk_max_x - result.walk_min_x, result.walk_max_z - result.walk_min_z),
-    };
-    result.light_count = 1;
+    result.save_room_target = if (result.save_target_count > 0) result.save_targets[0] else result.player_spawn;
+    if (result.save_target_count == 0) {
+        result.save_targets[0] = result.player_spawn;
+        result.save_target_count = 1;
+        result.save_bounds[0] = .{
+            .min_x = result.walk_min_x,
+            .max_x = result.walk_max_x,
+            .min_z = result.walk_min_z,
+            .max_z = result.walk_max_z,
+        };
+    }
+    if (result.light_count == 0) {
+        result.lights[0] = .{
+            .x = (result.walk_min_x + result.walk_max_x) * 0.5,
+            .y = result.ground_y + 6,
+            .z = (result.walk_min_z + result.walk_max_z) * 0.5,
+            .w = @max(result.walk_max_x - result.walk_min_x, result.walk_max_z - result.walk_min_z),
+        };
+        result.light_count = 1;
+    }
     if (!result.validate()) return error.InvalidImportedLevel;
     return result;
 }
