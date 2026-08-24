@@ -29,6 +29,7 @@ pub const Box = struct {
     basis_x: Vec3 = .{ .x = 1 },
     basis_y: Vec3 = .{ .y = 1 },
     basis_z: Vec3 = .{ .z = 1 },
+    is_roof: bool = false,
 };
 
 pub const DoorLock = enum { none, purple, pink, cyan };
@@ -208,7 +209,9 @@ pub fn load() !Scene {
         }
         if (node.mesh == null) continue;
         if (result.box_count == max_boxes) return error.TooManyMeshNodes;
-        result.boxes[result.box_count] = try boxFromNode(node);
+        var box = try boxFromNode(node);
+        box.is_roof = std.mem.startsWith(u8, name, "Roof_");
+        result.boxes[result.box_count] = box;
         result.box_count += 1;
     }
     if (result.box_count == 0) return error.EmptyScene;

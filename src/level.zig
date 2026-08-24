@@ -220,6 +220,7 @@ fn build() !Level {
             .basis_y = fromImported(box.basis_y),
             .basis_z = fromImported(box.basis_z),
             .color = geometry_color,
+            .is_roof = box.is_roof,
         };
 
         // Geometry whose top is at the spawn's ground plane supports walking;

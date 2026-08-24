@@ -648,6 +648,13 @@ fn frame() callconv(.c) void {
                 if (!game.combat.hunterKnockedDown() and !game.hunter_reaction.active()) {
                     if (game.condition.hunter_watch_timer > 0) {
                         faceHunterTowardPlayer(@floatCast(fixed_dt));
+                        hunter.updateIdlePhysics(
+                            game.hunter_config,
+                            &game.hunter,
+                            &game.mover_scratch,
+                            game.world,
+                            @floatCast(fixed_dt),
+                        );
                     } else {
                         hunter.update(
                             game.hunter_config,
@@ -661,6 +668,14 @@ fn frame() callconv(.c) void {
                         updateHunterFootsteps();
                         if (hunterContacted()) punchPlayer();
                     }
+                } else {
+                    hunter.updateIdlePhysics(
+                        game.hunter_config,
+                        &game.hunter,
+                        &game.mover_scratch,
+                        game.world,
+                        @floatCast(fixed_dt),
+                    );
                 }
             }
             if (gameplay_active or hunter_sim_active) stepDoorPhysics(gameplay_active, hunter_sim_active);

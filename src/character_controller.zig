@@ -168,6 +168,24 @@ pub fn hunterFilter() b3.b3QueryFilter {
     return filter;
 }
 
+// Query the final capsule pose for a supporting contact. Query-driven actors
+// use this after moving so they remain seated on floors and begin falling as
+// soon as they leave an unsupported edge.
+pub fn capsuleGrounded(
+    scratch: *MoverScratch,
+    world: b3.b3WorldId,
+    origin: b3.b3Pos,
+    capsule: *const b3.b3Capsule,
+    filter: b3.b3QueryFilter,
+    ground_normal_y: f32,
+) bool {
+    collectPlanes(scratch, world, origin, capsule, filter);
+    for (scratch.planes[0..scratch.count]) |plane| {
+        if (plane.plane.normal.y >= ground_normal_y) return true;
+    }
+    return false;
+}
+
 fn collectPlanes(scratch: *MoverScratch, world: b3.b3WorldId, origin: b3.b3Pos, capsule: *const b3.b3Capsule, filter: b3.b3QueryFilter) void {
     scratch.count = 0;
     b3.b3World_CollideMover(world, origin, capsule, filter, collectPlane, scratch);

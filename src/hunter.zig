@@ -79,6 +79,8 @@ pub const Config = struct {
     level_half_z: f32 = 17.0,
     turn_speed: f32 = 10.0,
     solve_iterations: u8 = 5,
+    gravity: f32 = 15.0,
+    ground_normal_y: f32 = 0.65,
     // Path following: how close to a waypoint before advancing, and how often
     // to re-route while chasing (relentlessly) vs. investigating/patrolling.
     waypoint_radius: f32 = 0.4,
@@ -127,6 +129,8 @@ pub const State = struct {
     // Phase of the patrolling gaze sweep, used to scan left and right so he
     // notices the player even when they approach from the side.
     scan_timer: f32 = 0,
+    vertical_velocity: f32 = 0,
+    grounded: bool = false,
 
     pub fn init(position: b3.b3Pos) State {
         return .{
@@ -355,16 +359,55 @@ pub fn update(
             break;
         }
     }
-    move_delta.y = 0;
+    applyGravity(config, state, &move_delta, dt);
 
     const capsule = localCapsule(config);
     controller.moveCapsule(scratch, world, &state.position, &capsule, move_delta, controller.hunterFilter(), config.solve_iterations);
+    refreshGrounding(config, state, scratch, world, &capsule);
 
     // Face the direction of travel, turning gradually like a heavy stalker.
-    if (lengthSquared(move_delta) > 0.0001) {
+    if (move_delta.x * move_delta.x + move_delta.z * move_delta.z > 0.0001) {
         const target_yaw = std.math.atan2(move_delta.x, move_delta.z);
         state.yaw = approachAngle(state.yaw, target_yaw, config.turn_speed * dt);
     }
+}
+
+// Reactions, punches and knockdowns stop the AI's horizontal steering, but
+// they must not suspend gravity. This keeps an unsupported hunter subject to
+// the same fall as the player even while an animation is holding him still.
+pub fn updateIdlePhysics(
+    config: Config,
+    state: *State,
+    scratch: *controller.MoverScratch,
+    world: b3.b3WorldId,
+    dt: f32,
+) void {
+    state.previous_position = state.position;
+    var move_delta = b3.b3Vec3{};
+    applyGravity(config, state, &move_delta, dt);
+    const capsule = localCapsule(config);
+    controller.moveCapsule(scratch, world, &state.position, &capsule, move_delta, controller.hunterFilter(), config.solve_iterations);
+    refreshGrounding(config, state, scratch, world, &capsule);
+}
+
+fn applyGravity(config: Config, state: *State, move_delta: *b3.b3Vec3, dt: f32) void {
+    if (state.grounded) {
+        state.vertical_velocity = 0;
+    } else {
+        state.vertical_velocity -= config.gravity * dt;
+    }
+    move_delta.y = state.vertical_velocity * dt;
+}
+
+fn refreshGrounding(
+    config: Config,
+    state: *State,
+    scratch: *controller.MoverScratch,
+    world: b3.b3WorldId,
+    capsule: *const b3.b3Capsule,
+) void {
+    state.grounded = controller.capsuleGrounded(scratch, world, state.position, capsule, controller.hunterFilter(), config.ground_normal_y);
+    if (state.grounded and state.vertical_velocity < 0) state.vertical_velocity = 0;
 }
 
 pub fn interpolatedPosition(state: State, alpha: f32) b3.b3Pos {
@@ -546,6 +589,21 @@ test "search point stays near the last known location" {
 test "angle approach takes the shortest path" {
     const result = approachAngle(3.0, -3.0, 0.1);
     try std.testing.expect(result > 3.0);
+}
+
+test "unsupported hunter falls even while AI movement is idle" {
+    var world_def = b3.b3DefaultWorldDef();
+    const world = b3.b3CreateWorld(&world_def);
+    defer b3.b3DestroyWorld(world);
+
+    const config: Config = .{};
+    var state = State.init(.{ .y = 1.5 });
+    var scratch = controller.MoverScratch{};
+    updateIdlePhysics(config, &state, &scratch, world, 0.1);
+
+    try std.testing.expect(!state.grounded);
+    try std.testing.expect(state.position.y < 1.5);
+    try std.testing.expect(state.vertical_velocity < 0);
 }
 
 test "vision cone is frontal" {

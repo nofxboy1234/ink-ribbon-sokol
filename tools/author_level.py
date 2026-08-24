@@ -178,11 +178,22 @@ floor_box("Geo_Room_Purple_Floor", -26.0, -12.0, 17.0, 31.0)
 floor_box("Geo_Room_Pink_Floor", -7.0, 7.0, 31.0, 45.0)
 floor_box("Geo_Room_Cyan_Floor", 12.0, 26.0, 17.0, 31.0)
 
+# A continuous ceiling seals the complete authored footprint. Its semantic
+# prefix lets the runtime render it in the normal view while hiding it on the
+# top-down map.
+cube("Roof_Ceiling_All", (0.0, 17.0, 6.2), (68.7, 56.7, 0.4))
+
 # Outer cross-hall walls leave the existing room's north doorway intact.
 wall_y("Geo_Hall_South_West", -34.0, -13.25, 10.0)
 wall_y("Geo_Hall_South_East", 13.25, 34.0, 10.0)
 wall_x("Geo_Hall_West_End", -34.0, 10.0, 17.0)
 wall_x("Geo_Hall_East_End", 34.0, 10.0, 17.0)
+# Cap every north-facing dead-end edge of the cross hall. The room and loop
+# floors continue north through the remaining spans.
+wall_y("Geo_Hall_North_West_End", -34.0, -26.0, 17.0)
+wall_y("Geo_Hall_North_West_Join", -12.0, -11.0, 17.0)
+wall_y("Geo_Hall_North_East_Join", 11.0, 12.0, 17.0)
+wall_y("Geo_Hall_North_East_End", 26.0, 34.0, 17.0)
 
 # Locked rooms. Each room has exactly one corridor-facing colored door.
 doorway_y("Geo_Purple_South", -26.0, -12.0, 17.0, -19.0)
@@ -272,7 +283,9 @@ for index, location in enumerate(
 
 # The typewriter remains a visible/collidable prop and doubles as its marker.
 cube("Interactible_Typewriter_01", (-7.0, -7.0, 1.35), (0.9, 0.65, 0.70), MAT_PROP, MARKERS)
+cube("Interactible_Typewriter_02", (-19.0, 23.0, 2.48), (0.9, 0.65, 0.70), MAT_PROP, MARKERS)
 empty_cube("Trigger_SaveRoom_Start", (0.0, 0.0, 3.0), (17.0, 19.0, 4.0))
+empty_cube("Trigger_SaveRoom_Purple", (-19.0, 24.0, 3.0), (13.0, 13.0, 4.0))
 empty_cube("Trigger_Ending_01", (19.0, 28.0, 2.0), (5.0, 3.0, 2.0))
 
 # Warm light markers use their X scale as the runtime radius.
@@ -283,6 +296,8 @@ for name, location, radius in (
     ("Light_Purple", (-19.0, 24.0, 5.2), 11.0),
     ("Light_Pink", (0.0, 38.0, 5.2), 11.0),
     ("Light_Cyan", (19.0, 24.0, 5.2), 11.0),
+    ("Light_Loop_West", (-9.0, 24.0, 5.0), 8.0),
+    ("Light_Loop_East", (9.0, 24.0, 5.0), 8.0),
 ):
     light = bpy.data.objects.new(name, None)
     MARKERS.objects.link(light)
