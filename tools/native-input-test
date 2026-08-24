@@ -21,7 +21,8 @@ STATE_FILE = Path("/tmp/ink-ribbon-native-input.json")
 LOG_FILE = Path("/tmp/ink-ribbon-native-input.log")
 WINDOW_TITLE = "Character Mover"
 ALLOWED_KEYS = {
-    "w", "a", "s", "d", "e", "f", "i", "m", "p", "r", "x", "shift", "f1", "escape",
+    "w", "a", "s", "d", "f", "i", "m", "q", "r", "shift", "ctrl", "alt", "tab",
+    "f1", "f2", "f3", "escape",
     "left", "right", "up", "down",
 }
 MAX_HOLD_SECONDS = 30.0
@@ -112,7 +113,12 @@ class XTest:
     def key_code(self, name: str) -> int:
         x_name = {
             "shift": "Shift_L",
+            "ctrl": "Control_L",
+            "alt": "Alt_L",
+            "tab": "Tab",
             "f1": "F1",
+            "f2": "F2",
+            "f3": "F3",
             "escape": "Escape",
             "left": "Left",
             "right": "Right",
@@ -280,14 +286,9 @@ def quick_turn() -> None:
     driver = XTest()
     try:
         driver.focus_game()
-        driver.set_key("s", True)
-        try:
-            time.sleep(0.1)
-            driver.set_key("e", True)
-            driver.set_key("e", False)
-            time.sleep(0.55)
-        finally:
-            driver.set_key("s", False)
+        driver.set_key("q", True)
+        driver.set_key("q", False)
+        time.sleep(0.55)
         time.sleep(0.15)
     finally:
         driver.close()

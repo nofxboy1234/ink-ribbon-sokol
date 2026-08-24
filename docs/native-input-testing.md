@@ -38,6 +38,11 @@ tools/native-input-test status
 tools/native-input-test close
 ```
 
+The gameplay bindings exercised by the helper are Q for quick-turn, RMB to
+aim, LMB to fire while aiming or interact otherwise, Shift to run, Alt/MMB to
+reset the camera, Ctrl/M for the map, Tab/I for inventory, and F for the
+context action. F1-F3 remain developer controls.
+
 `look DX DY` injects a bounded relative mouse movement after safely acquiring
 mouse lock. This lets navigation turn the third-person camera before moving so
 the character walks forward with the camera behind them.
@@ -123,7 +128,7 @@ x11.XCloseDisplay(display)
 ```
 
 Adjust the click coordinates when the window or display dimensions differ.
-Use the same `XTestFakeKeyEvent` calls for W, A, S, Shift, F1, and other keys.
+Use the same `XTestFakeKeyEvent` calls for W, A, S, Shift, Q, F1, and other keys.
 Always send the matching key-release event, including when a test fails.
 
 Relative camera movement can be injected with repeated

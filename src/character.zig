@@ -706,13 +706,47 @@ fn pumpAudio() void {
     }
 }
 
+fn toggleMap() void {
+    if (game.menu.kind != .none or (!game.map.active and playerActionActive())) return;
+    game.map.active = !game.map.active;
+    if (game.map.active) {
+        game.map.hunter_paused = true;
+        game.map.cursor = .{ .x = sapp.widthf() * 0.5, .y = sapp.heightf() * 0.5 };
+        rebuildMapRoute();
+        game.camera.aim_alpha = 0;
+        game.combat.focus = 0;
+        game.combat.aiming_last_tick = false;
+    }
+    sapp.lockMouse(!game.map.active);
+    sapp.showMouse(game.map.active);
+    // Drop held keys so the map doesn't immediately pan and gameplay doesn't
+    // resume with the character moving.
+    game.input = .{};
+}
+
+fn resetCameraBehindCharacter() void {
+    if (game.menu.kind != .none or game.map.active or !game.condition.canMove() or playerActionActive()) return;
+    game.input.run = false;
+    game.quick_turn.active = false;
+    camera.beginRecenter(&game.camera, game.character.yaw);
+}
+
+fn activateGameplayInteraction() void {
+    if (game.menu.kind != .none or game.map.active or !game.condition.canMove() or playerActionActive()) return;
+    if (game.interaction_target != null) {
+        activateInteraction();
+    } else if (nearSaveFixture()) {
+        openMenu(.save);
+    }
+}
+
 fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
     const value = event_ptr[0];
     switch (value.type) {
         .KEY_DOWN, .KEY_UP => {
             const down = value.type == .KEY_DOWN;
             if (game.inventory_ui.active) {
-                if (down and !value.key_repeat and (value.key_code == .I or value.key_code == .ESCAPE)) closeInventory();
+                if (down and !value.key_repeat and (value.key_code == .I or value.key_code == .TAB or value.key_code == .ESCAPE)) closeInventory();
                 return;
             }
             switch (value.key_code) {
@@ -738,52 +772,30 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     game.input.right = down;
                     if (down) camera.cancelRecenter(&game.camera);
                 },
-                .LEFT_SHIFT, .RIGHT_SHIFT => if (down and !value.key_repeat) {
-                    if (!game.input.moving() and game.menu.kind == .none and !game.map.active and game.condition.canMove() and !playerActionActive()) {
-                        game.input.run = false;
-                        game.quick_turn.active = false;
-                        camera.beginRecenter(&game.camera, game.character.yaw);
-                    } else {
-                        // Arm running when Shift accompanies a movement key.
-                        game.input.run = true;
-                    }
+                .LEFT_SHIFT, .RIGHT_SHIFT => if (down and !value.key_repeat and game.input.moving() and game.menu.kind == .none and !game.map.active) {
+                    // Arm running when Shift accompanies a movement key.
+                    game.input.run = true;
                 },
+                .LEFT_ALT, .RIGHT_ALT => if (down and !value.key_repeat) resetCameraBehindCharacter(),
                 .R => if (down and !value.key_repeat and game.menu.kind == .none and !game.map.active) {
                     game.input.reload_queued = true;
                 },
                 .F1 => if (down and !value.key_repeat) {
                     game.debug.draw_physics = !game.debug.draw_physics;
                 },
-                .F => if (down and !value.key_repeat and game.menu.kind == .none) {
+                .F2 => if (down and !value.key_repeat and game.menu.kind == .none) {
                     game.hunter_friendly = !game.hunter_friendly;
                     game.notice = if (game.hunter_friendly) .hunter_friendly else .hunter_hostile;
                     game.notice_timer = notice_seconds;
                 },
-                .M => if (down and !value.key_repeat and game.menu.kind == .none and (game.map.active or !playerActionActive())) {
-                    game.map.active = !game.map.active;
-                    if (game.map.active) {
-                        game.map.hunter_paused = true;
-                        game.map.cursor = .{ .x = sapp.widthf() * 0.5, .y = sapp.heightf() * 0.5 };
-                        rebuildMapRoute();
-                        game.camera.aim_alpha = 0;
-                        game.combat.focus = 0;
-                        game.combat.aiming_last_tick = false;
-                    }
-                    sapp.lockMouse(!game.map.active);
-                    sapp.showMouse(!game.map.active);
-                    // Drop held keys so the map doesn't immediately pan and
-                    // gameplay doesn't resume with the character moving.
-                    game.input = .{};
-                },
-                .I => if (down and !value.key_repeat and game.menu.kind == .none and !game.map.active and game.condition.canMove() and !playerActionActive()) {
-                    openInventory();
-                },
-                .X => if (down and !value.key_repeat and game.menu.kind == .none and !game.map.active and game.condition.canMove() and !playerActionActive()) {
-                    activateInteraction();
-                },
-                .P => if (down and !value.key_repeat and game.map.active) {
+                .F3 => if (down and !value.key_repeat and game.map.active) {
                     game.map.hunter_paused = !game.map.hunter_paused;
                 },
+                .M, .LEFT_CONTROL, .RIGHT_CONTROL => if (down and !value.key_repeat) toggleMap(),
+                .I, .TAB => if (down and !value.key_repeat and game.menu.kind == .none and !game.map.active and game.condition.canMove() and !playerActionActive()) {
+                    openInventory();
+                },
+                .F => if (down and !value.key_repeat) activateGameplayInteraction(),
                 .UP => if (down and !value.key_repeat and game.menu.kind != .none) {
                     moveMenuSlot(-1);
                 },
@@ -791,11 +803,7 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     moveMenuSlot(1);
                 },
                 .SPACE => if (down and !value.key_repeat) {
-                    if (game.menu.kind != .none) {
-                        confirmMenu();
-                    } else if (!game.map.active and !playerActionActive() and nearSaveFixture()) {
-                        openMenu(.save);
-                    }
+                    if (game.menu.kind != .none) confirmMenu();
                 },
                 .L => if (down and !value.key_repeat) {
                     if (game.menu.kind == .none and !game.map.active and !playerActionActive()) openMenu(.load);
@@ -803,10 +811,8 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 .ENTER => if (down and !value.key_repeat and game.menu.kind != .none) {
                     confirmMenu();
                 },
-                .E => if (down and !value.key_repeat) {
-                    // Turn toward the held backward/diagonal direction using
-                    // the shortest clockwise or counter-clockwise arc.
-                    if (game.input.back and !game.input.aiming and !game.quick_turn.active) {
+                .Q => if (down and !value.key_repeat) {
+                    if (game.menu.kind == .none and !game.map.active and game.condition.canMove() and !playerActionActive() and !game.input.aiming and !game.quick_turn.active) {
                         beginQuickTurn();
                     }
                 },
@@ -830,7 +836,11 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                     selectMapSaveAt(value.mouse_x, value.mouse_y);
                 } else if (game.menu.kind == .none and !playerActionActive()) {
                     sapp.lockMouse(true);
-                    game.input.firing = true;
+                    if (game.input.aiming) {
+                        game.input.firing = true;
+                    } else {
+                        activateGameplayInteraction();
+                    }
                 }
             },
             .RIGHT => if (!game.inventory_ui.active and !game.map.active and game.menu.kind == .none and !playerActionActive()) {
@@ -839,6 +849,10 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 game.input.run = false;
                 game.quick_turn.active = false;
                 camera.cancelRecenter(&game.camera);
+            },
+            .MIDDLE => if (!game.inventory_ui.active and !game.map.active and game.menu.kind == .none) {
+                sapp.lockMouse(true);
+                resetCameraBehindCharacter();
             },
             else => if (!game.map.active and game.menu.kind == .none) sapp.lockMouse(true),
         },
@@ -3064,7 +3078,7 @@ fn drawHudShapes() void {
     }
     const target = game.interaction_target orelse return;
     const center = interactionPromptCenter();
-    drawHudCircle(center, 15, 2.2, .{ .x = 1, .y = 1, .z = 1, .w = 0.98 }, true);
+    drawHudCircle(center, 15, 2.2, .{ .x = 1, .y = 1, .z = 1, .w = 0.98 }, false);
     const color = targetColor(target);
     drawUiRect(
         .{ .x = center.x + 27, .y = center.y - 10, .w = 20, .h = 20 },
@@ -3168,7 +3182,7 @@ fn drawHud(position: b3.b3Pos) void {
     if (game.map.active) {
         sdtx.pos(1.0, 1.0);
         sdtx.color3b(255, 220, 120);
-        sdtx.print("MAP (click save room, WASD pans, P hunter, M exits)", .{});
+        sdtx.print("MAP (click save room, WASD pans, F3 hunter, CTRL/M exits)", .{});
         sdtx.pos(1.0, 2.2);
         sdtx.print("HUNTER: {s} / {s}", .{
             if (game.map.hunter_paused) "PAUSED" else "MOVING",
@@ -3203,7 +3217,7 @@ fn drawHud(position: b3.b3Pos) void {
         if (game.hunter_friendly) {
             sdtx.pos(1.0, 2.2);
             sdtx.color3b(80, 250, 123);
-            sdtx.print("HUNTER FRIENDLY (F toggles)", .{});
+            sdtx.print("HUNTER FRIENDLY (F2 toggles)", .{});
         }
         const ammo_x = @max(1.0, sapp.widthf() / 8.0 - 16.0);
         const ammo_y = @max(1.0, sapp.heightf() / 8.0 - 2.0);
@@ -3228,6 +3242,9 @@ fn drawHud(position: b3.b3Pos) void {
         }
         if (game.interaction_target) |target| {
             const center = interactionPromptCenter();
+            sdtx.pos((center.x - 4) / 8.0, (center.y - 5) / 8.0);
+            sdtx.color3b(248, 248, 244);
+            sdtx.print("F", .{});
             sdtx.pos((center.x + 57) / 8.0, (center.y - 5) / 8.0);
             sdtx.color3b(248, 248, 244);
             sdtx.print("{s}", .{targetName(target)});
@@ -3255,7 +3272,7 @@ fn drawHud(position: b3.b3Pos) void {
     } else if (game.menu.kind != .none) {
         drawSaveMenu();
     } else if (!game.map.active and nearSaveFixture()) {
-        const prompt = "PRESS SPACE TO SAVE";
+        const prompt = "PRESS F OR LEFT MOUSE TO SAVE";
         sdtx.pos(sapp.widthf() / 8.0 / 2.0 - @as(f32, @floatFromInt(prompt.len)) / 2.0, sapp.heightf() / 8.0 - 2.0);
         sdtx.color3b(255, 220, 120);
         sdtx.print(prompt, .{});
@@ -3273,7 +3290,7 @@ fn drawInventoryText() void {
     sdtx.print("CONDITION  {d}%", .{@as(u8, @intFromFloat(@round(game.condition.health)))});
     sdtx.pos(layout.left / 8.0, layout.top / 8.0 - 2.4);
     sdtx.color3b(150, 155, 155);
-    sdtx.print("CLICK ITEM, THEN DESTINATION    I / ESC CLOSE", .{});
+    sdtx.print("CLICK ITEM, THEN DESTINATION    TAB / I / ESC CLOSE", .{});
 
     for (game.inventory.cells, 0..) |item, cell| {
         if (!item.occupied()) continue;
