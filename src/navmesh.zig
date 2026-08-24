@@ -448,11 +448,16 @@ pub fn buildLevel() void {
     });
 }
 
-// Validate the imported spawn against the optional navigation grid.
+// Validate imported actor spawns against their respective navigation grids.
 pub fn validateLevel() bool {
     if (!level.current.validate()) return false;
     const player_cell = player_nav.cellAt(level.current.player_spawn.x, level.current.player_spawn.z) orelse return false;
-    return player_nav.isWalkable(player_cell);
+    if (!player_nav.isWalkable(player_cell)) return false;
+    if (level.current.hunter_enabled) {
+        const hunter_cell = level_nav.cellAt(level.current.hunter_spawn.x, level.current.hunter_spawn.z) orelse return false;
+        if (!level_nav.isWalkable(hunter_cell)) return false;
+    }
+    return true;
 }
 
 test "buildFromBoxes clears blocked state when rebuilt" {

@@ -40,10 +40,14 @@ pub const Config = struct {
     near_speed: f32 = 3.0,
     chase_speed: f32 = 4.4,
     close_radius: f32 = 3.5, // within this distance he slows from chase to near
-    // Vision: a 120-degree frontal cone. He locks onto the player only when a
-    // ray from his head to theirs is unobstructed; walls and furniture block.
+    // Vision: a 120-degree frontal cone. Several rays from his eyes sample the
+    // player's full height and width, so partial cover does not make the whole
+    // player invisible. Every sample must be blocked to break line of sight.
     detect_radius: f32 = 22.0,
     vision_half_angle: f32 = 60.0 * std.math.pi / 180.0,
+    vision_eye_offset: f32 = 0.75,
+    player_visibility_half_height: f32 = 0.8,
+    player_visibility_half_width: f32 = 0.25,
     // Hearing: a sprint is audible through walls within this radius. The
     // reported position carries error and only refreshes on a cadence, so sound
     // never gives a perfect track through a wall.
@@ -69,6 +73,8 @@ pub const Config = struct {
     search_time: f32 = 3.0,
     search_radius_min: f32 = 3.0,
     search_radius_max: f32 = 8.0,
+    level_center_x: f32 = 0,
+    level_center_z: f32 = 0,
     level_half_x: f32 = 24.0,
     level_half_z: f32 = 17.0,
     turn_speed: f32 = 10.0,
@@ -172,7 +178,7 @@ pub fn update(
             scanYaw(state.yaw, state.scan_timer);
         const seen = player_distance < config.detect_radius and
             inVisionCone(gaze_yaw, to_player, config.vision_half_angle) and
-            lineOfSight(world, state.position, player_position);
+            playerVisible(config, world, state.position, player_position);
         if (seen) {
             // Fresh lock-on: start tracking progress toward this goal from
             // scratch (the previous patrol goal is irrelevant).
@@ -391,11 +397,38 @@ fn inVisionCone(facing_yaw: f32, to_player: b3.b3Vec3, half_angle: f32) bool {
     return dot >= @cos(half_angle);
 }
 
-// True when the ray from the hunter to the player is unobstructed. Level
-// geometry (walls and furniture) and save-room barriers can block his view:
-// the ray runs above the floor and below the roof, and the player and hunter
-// are not level-category shapes, so neither can occlude it.
-fn lineOfSight(world: b3.b3WorldId, from: b3.b3Pos, to: b3.b3Pos) bool {
+// The player is visible while any sampled part of their body can be seen. The
+// lateral samples catch shoulders protruding around narrow cover; the vertical
+// samples keep waist-high furniture from hiding an exposed head and torso.
+fn playerVisible(config: Config, world: b3.b3WorldId, hunter_center: b3.b3Pos, player_center: b3.b3Pos) bool {
+    const eye = offset(hunter_center, .{ .y = config.vision_eye_offset });
+    var horizontal = subPos(player_center, hunter_center);
+    horizontal.y = 0;
+    const horizontal_length = length(horizontal);
+    const side = if (horizontal_length > 0.0001)
+        b3.b3Vec3{ .x = -horizontal.z / horizontal_length, .z = horizontal.x / horizontal_length }
+    else
+        b3.b3Vec3{ .x = 1 };
+    const half_height = config.player_visibility_half_height;
+    const half_width = config.player_visibility_half_width;
+    const targets = [_]b3.b3Pos{
+        offset(player_center, .{ .y = half_height }),
+        offset(player_center, .{ .x = side.x * half_width, .y = half_height * 0.45, .z = side.z * half_width }),
+        offset(player_center, .{ .x = -side.x * half_width, .y = half_height * 0.45, .z = -side.z * half_width }),
+        player_center,
+        offset(player_center, .{ .x = side.x * half_width, .y = -half_height * 0.45, .z = side.z * half_width }),
+        offset(player_center, .{ .x = -side.x * half_width, .y = -half_height * 0.45, .z = -side.z * half_width }),
+        offset(player_center, .{ .y = -half_height }),
+    };
+    for (targets) |target| {
+        if (clearSightRay(world, eye, target)) return true;
+    }
+    return false;
+}
+
+// Level geometry, save-room barriers, and doors occlude vision. Actor proxy
+// shapes are excluded by the mask, so the ray reaches the sampled body point.
+fn clearSightRay(world: b3.b3WorldId, from: b3.b3Pos, to: b3.b3Pos) bool {
     var filter = b3.b3DefaultQueryFilter();
     filter.maskBits = controller.level_category | controller.hunter_block_category | controller.door_category;
     const ray = b3.b3World_CastRayClosest(world, from, subPos(to, from), filter);
@@ -429,9 +462,9 @@ pub fn randomPatrolTarget(config: Config, origin: b3.b3Pos) b3.b3Pos {
     const angle = randomRange(0, 2.0 * std.math.pi);
     const distance = randomRange(config.patrol_distance_min, config.patrol_distance_max);
     return .{
-        .x = std.math.clamp(origin.x + @cos(angle) * distance, -config.level_half_x, config.level_half_x),
+        .x = std.math.clamp(origin.x + @cos(angle) * distance, config.level_center_x - config.level_half_x, config.level_center_x + config.level_half_x),
         .y = origin.y,
-        .z = std.math.clamp(origin.z + @sin(angle) * distance, -config.level_half_z, config.level_half_z),
+        .z = std.math.clamp(origin.z + @sin(angle) * distance, config.level_center_z - config.level_half_z, config.level_center_z + config.level_half_z),
     };
 }
 
@@ -441,9 +474,9 @@ fn searchPoint(config: Config, around: b3.b3Pos) b3.b3Pos {
     const angle = randomRange(0, 2.0 * std.math.pi);
     const distance = randomRange(config.search_radius_min, config.search_radius_max);
     return .{
-        .x = std.math.clamp(around.x + @cos(angle) * distance, -config.level_half_x, config.level_half_x),
+        .x = std.math.clamp(around.x + @cos(angle) * distance, config.level_center_x - config.level_half_x, config.level_center_x + config.level_half_x),
         .y = around.y,
-        .z = std.math.clamp(around.z + @sin(angle) * distance, -config.level_half_z, config.level_half_z),
+        .z = std.math.clamp(around.z + @sin(angle) * distance, config.level_center_z - config.level_half_z, config.level_center_z + config.level_half_z),
     };
 }
 
@@ -544,22 +577,30 @@ test "patrol gaze sweep glances to both sides" {
     try std.testing.expectApproxEqAbs(@as(f32, -amp), sweep_at[4], 1e-4);
 }
 
-test "line of sight is blocked by walls but clear in the open" {
+test "vision sees partial cover and loses a fully hidden player" {
     var world_def = b3.b3DefaultWorldDef();
     const world = b3.b3CreateWorld(&world_def);
     defer b3.b3DestroyWorld(world);
 
-    // A level-category wall spanning x[-2,2] at z=0, from the floor up.
+    const config: Config = .{};
+    const hunter_center = b3.b3Pos{ .x = 0, .y = 1.5, .z = 5 };
+    const player_center = b3.b3Pos{ .x = 0, .y = 0.9, .z = -5 };
+
+    // A waist-high level-category box leaves the player's upper body visible.
     var body_def = b3.b3DefaultBodyDef();
-    body_def.position = .{ .x = 0, .y = 1.0, .z = 0 };
-    const body = b3.b3CreateBody(world, &body_def);
+    body_def.position = .{ .x = 0, .y = 0.5, .z = 0 };
+    const low_body = b3.b3CreateBody(world, &body_def);
     var shape_def = b3.b3DefaultShapeDef();
     shape_def.filter.categoryBits = controller.level_category;
-    var hull = b3.b3MakeBoxHull(2.0, 1.0, 0.2);
-    _ = b3.b3CreateHullShape(body, &shape_def, &hull.base);
+    var low_hull = b3.b3MakeBoxHull(2.0, 0.5, 0.2);
+    _ = b3.b3CreateHullShape(low_body, &shape_def, &low_hull.base);
+    try std.testing.expect(playerVisible(config, world, hunter_center, player_center));
 
-    // Clear view entirely on one side of the wall.
-    try std.testing.expect(lineOfSight(world, .{ .x = 0, .y = 1.5, .z = 5 }, .{ .x = 0, .y = 0.9, .z = 8 }));
-    // The wall between the two heads blocks the view.
-    try std.testing.expect(!lineOfSight(world, .{ .x = 0, .y = 1.5, .z = 5 }, .{ .x = 0, .y = 0.9, .z = -5 }));
+    // Extending the same cover above every sample fully hides the player.
+    b3.b3DestroyBody(low_body);
+    body_def.position = .{ .x = 0, .y = 1.5, .z = 0 };
+    const tall_body = b3.b3CreateBody(world, &body_def);
+    var tall_hull = b3.b3MakeBoxHull(2.0, 1.5, 0.2);
+    _ = b3.b3CreateHullShape(tall_body, &shape_def, &tall_hull.base);
+    try std.testing.expect(!playerVisible(config, world, hunter_center, player_center));
 }

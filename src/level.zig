@@ -2,7 +2,8 @@
 //!
 //! Blender owns the scene layout. Each mesh node becomes an oriented Box3D
 //! collision/render box and a required `PlayerSpawn` node defines the start
-//! position, facing direction, and ground height.
+//! position, facing direction, and ground height. An optional `HunterSpawn`
+//! node enables the hunter and defines his starting position.
 
 const std = @import("std");
 const math = @import("math.zig");
@@ -72,6 +73,7 @@ pub const Level = struct {
     player_spawn: Vec3 = .{},
     player_spawn_yaw: f32 = std.math.pi,
     hunter_spawn: Vec3 = .{},
+    hunter_enabled: bool = false,
     save_room_target: Vec3 = .{},
     save_fixtures: [2]Vec3 = @splat(.{}),
     save_fixture_count: usize = 0,
@@ -136,6 +138,10 @@ pub fn hasGameplayMetadata() bool {
     return false;
 }
 
+pub fn hunterEnabled() bool {
+    return current.hunter_enabled;
+}
+
 pub fn insideWalkBounds(x: f32, z: f32) bool {
     return x >= current.walk_min_x and x <= current.walk_max_x and
         z >= current.walk_min_z and z <= current.walk_max_z;
@@ -147,6 +153,12 @@ fn build() !Level {
     result.player_spawn = fromImported(imported.player_spawn orelse return error.PlayerSpawnMissing);
     result.player_spawn_yaw = imported.player_yaw;
     result.ground_y = result.player_spawn.y;
+    if (imported.hunter_spawn) |spawn| {
+        result.hunter_spawn = fromImported(spawn);
+        result.hunter_enabled = true;
+    } else {
+        result.hunter_spawn = result.player_spawn;
+    }
     result.walk_min_x = std.math.inf(f32);
     result.walk_max_x = -std.math.inf(f32);
     result.walk_min_z = std.math.inf(f32);
@@ -178,7 +190,6 @@ fn build() !Level {
 
     // These neutral defaults support reusable systems without placing any
     // old level content into the fresh Blender scene.
-    result.hunter_spawn = result.player_spawn;
     result.save_room_target = result.player_spawn;
     result.save_targets[0] = result.player_spawn;
     result.save_target_count = 1;

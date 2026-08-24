@@ -30,6 +30,7 @@ pub const Scene = struct {
     box_count: usize = 0,
     player_spawn: ?Vec3 = null,
     player_yaw: f32 = std.math.pi,
+    hunter_spawn: ?Vec3 = null,
 
     pub fn boxSlice(self: *const Scene) []const Box {
         return self.boxes[0..self.box_count];
@@ -65,6 +66,13 @@ pub fn load() !Scene {
             if (forward_x * forward_x + forward_z * forward_z > 0.000001) {
                 result.player_yaw = std.math.atan2(forward_x, forward_z);
             }
+            continue;
+        }
+        if (node.name != null and std.mem.eql(u8, std.mem.span(node.name), "HunterSpawn")) {
+            if (result.hunter_spawn != null) return error.DuplicateHunterSpawn;
+            var matrix: [16]f32 = undefined;
+            cgltf.cgltf_node_transform_world(node, &matrix);
+            result.hunter_spawn = transformPoint(matrix, .{});
             continue;
         }
         if (node.mesh == null) continue;

@@ -556,7 +556,7 @@ fn frame() callconv(.c) void {
         while (ticks < max_ticks_per_frame and game.clock.consumeTick()) : (ticks += 1) {
             // Map/menu modes always freeze the player. On the map the hunter
             // is independently paused by default and can be resumed with P.
-            const hunter_sim_active = level.hasGameplayMetadata() and game.menu.kind == .none and !game.inventory_ui.active and (!game.map.active or !game.map.hunter_paused);
+            const hunter_sim_active = level.hunterEnabled() and game.menu.kind == .none and !game.inventory_ui.active and (!game.map.active or !game.map.hunter_paused);
             if (gameplay_active) {
                 controller.update(
                     game.character_config,
@@ -1333,9 +1333,13 @@ fn seedSpawnRandomness() void {
 fn loadValidatedLevel() void {
     level.loadDefault();
     navmesh.buildLevel();
+    game.hunter_config.level_center_x = (level.current.walk_min_x + level.current.walk_max_x) * 0.5;
+    game.hunter_config.level_center_z = (level.current.walk_min_z + level.current.walk_max_z) * 0.5;
+    game.hunter_config.level_half_x = (level.current.walk_max_x - level.current.walk_min_x) * 0.5;
+    game.hunter_config.level_half_z = (level.current.walk_max_z - level.current.walk_min_z) * 0.5;
     // Blender geometry uses imported Box3D collision directly and can extend
     // beyond the optional fixed navigation grid.
-    if (level.hasGameplayMetadata() and !navmesh.validateLevel()) @panic("default level failed navmesh validation");
+    if (!navmesh.validateLevel()) @panic("default level failed navmesh validation");
 }
 
 fn levelPlayerSpawn() b3.b3Pos {
@@ -2576,7 +2580,7 @@ fn initRenderer() void {
 }
 
 fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
-    const hunter_enabled = level.hasGameplayMetadata();
+    const hunter_enabled = level.hunterEnabled();
     // Rebuild the character's instance record from its interpolated position.
     const fall = game.condition.fallAmount(game.condition_config);
     const instance = makeYawPitchedInstance(
