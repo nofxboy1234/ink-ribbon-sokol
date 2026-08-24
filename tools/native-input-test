@@ -21,7 +21,7 @@ STATE_FILE = Path("/tmp/ink-ribbon-native-input.json")
 LOG_FILE = Path("/tmp/ink-ribbon-native-input.log")
 WINDOW_TITLE = "Character Mover"
 ALLOWED_KEYS = {
-    "w", "a", "s", "d", "e", "f", "i", "m", "p", "q", "r", "x", "shift", "f1", "escape",
+    "w", "a", "s", "d", "e", "f", "i", "m", "p", "r", "x", "shift", "f1", "escape",
     "left", "right", "up", "down",
 }
 MAX_HOLD_SECONDS = 30.0
@@ -137,6 +137,10 @@ class XTest:
         self.xtst.XTestFakeButtonEvent(self.display, 1, int(down), 0)
         self.flush()
 
+    def set_right_mouse(self, down: bool) -> None:
+        self.xtst.XTestFakeButtonEvent(self.display, 3, int(down), 0)
+        self.flush()
+
 
 def parse_duration(text: str) -> float:
     try:
@@ -236,7 +240,7 @@ def aim_and_fire(duration: float) -> None:
     driver = XTest()
     try:
         driver.focus_game()
-        driver.set_key("q", True)
+        driver.set_right_mouse(True)
         try:
             # Let the reference-style focus animation settle before firing.
             time.sleep(1.1)
@@ -246,7 +250,7 @@ def aim_and_fire(duration: float) -> None:
             finally:
                 driver.set_left_mouse(False)
         finally:
-            driver.set_key("q", False)
+            driver.set_right_mouse(False)
         time.sleep(0.15)
     finally:
         driver.close()
@@ -259,13 +263,13 @@ def aim_and_move(key: str, duration: float) -> None:
     driver = XTest()
     try:
         driver.focus_game()
-        driver.set_key("q", True)
+        driver.set_right_mouse(True)
         driver.set_key(key, True)
         try:
             time.sleep(duration)
         finally:
             driver.set_key(key, False)
-            driver.set_key("q", False)
+            driver.set_right_mouse(False)
         time.sleep(0.15)
     finally:
         driver.close()

@@ -26,7 +26,7 @@ uses the current native source.
 ```sh
 tools/native-input-test launch
 tools/native-input-test hold a 2.05
-tools/native-input-test hold q 2.0
+tools/native-input-test aim-move w 2.0
 tools/native-input-test fire 0.5
 tools/native-input-test aim-fire 0.75
 tools/native-input-test aim-move d 1.0

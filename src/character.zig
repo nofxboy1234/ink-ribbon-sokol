@@ -748,15 +748,6 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                         game.input.run = true;
                     }
                 },
-                .Q => if (game.menu.kind == .none and !game.map.active) {
-                    if (down and playerActionActive()) return;
-                    game.input.aiming = down;
-                    if (down) {
-                        game.input.run = false;
-                        game.quick_turn.active = false;
-                        camera.cancelRecenter(&game.camera);
-                    }
-                },
                 .R => if (down and !value.key_repeat and game.menu.kind == .none and !game.map.active) {
                     game.input.reload_queued = true;
                 },
@@ -831,20 +822,30 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 else => {},
             }
         },
-        .MOUSE_DOWN => if (value.mouse_button == .LEFT) {
-            if (game.inventory_ui.active) {
-                inventoryClick(value.mouse_x, value.mouse_y);
-            } else if (game.map.active) {
-                selectMapSaveAt(value.mouse_x, value.mouse_y);
-            } else if (game.menu.kind == .none and !playerActionActive()) {
+        .MOUSE_DOWN => switch (value.mouse_button) {
+            .LEFT => {
+                if (game.inventory_ui.active) {
+                    inventoryClick(value.mouse_x, value.mouse_y);
+                } else if (game.map.active) {
+                    selectMapSaveAt(value.mouse_x, value.mouse_y);
+                } else if (game.menu.kind == .none and !playerActionActive()) {
+                    sapp.lockMouse(true);
+                    game.input.firing = true;
+                }
+            },
+            .RIGHT => if (!game.inventory_ui.active and !game.map.active and game.menu.kind == .none and !playerActionActive()) {
                 sapp.lockMouse(true);
-                game.input.firing = true;
-            }
-        } else if (!game.map.active and game.menu.kind == .none) {
-            sapp.lockMouse(true);
+                game.input.aiming = true;
+                game.input.run = false;
+                game.quick_turn.active = false;
+                camera.cancelRecenter(&game.camera);
+            },
+            else => if (!game.map.active and game.menu.kind == .none) sapp.lockMouse(true),
         },
-        .MOUSE_UP => if (value.mouse_button == .LEFT) {
-            game.input.firing = false;
+        .MOUSE_UP => switch (value.mouse_button) {
+            .LEFT => game.input.firing = false,
+            .RIGHT => game.input.aiming = false,
+            else => {},
         },
         .MOUSE_MOVE => if (game.map.active) {
             game.map.cursor = .{ .x = value.mouse_x, .y = value.mouse_y };
