@@ -26,6 +26,13 @@ pub const BuildOptions = struct {
     radius: f32,
     include_hunter_block: bool = true,
     restrict_to_level_bounds: bool = false,
+    // Overhead geometry (doorway lintels) must not seal the floor cells an
+    // actor crosses beneath it: a box whose underside sits at least this far
+    // above `walk_y` is ignored by the bake, matching the height-aware physics
+    // capsules that already pass under it. Defaults to infinity so plain
+    // grids keep treating every above-floor box as solid.
+    head_clearance: f32 = std.math.inf(f32),
+    walk_y: f32 = 0,
 };
 
 pub const HunterInfluence = struct {
@@ -129,6 +136,10 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
                     if (!box.collidable or !box.nav_block or box.is_roof) continue;
                     if (!options.include_hunter_block and box.hunter_block) continue;
                     if (box.center.y + box.half_extents.y <= 0.05) continue;
+                    // Lintels and other overhead spans sit above every actor's
+                    // capsule; blocking them would seal each authored doorway.
+                    if (box.center.y - level.projectedHalfExtent(box, .y) >=
+                        options.walk_y + options.head_clearance) continue;
                     if (aabbXZ(cx, cz, half, box)) {
                         self.blocked[cell] = true;
                         break;
@@ -449,24 +460,73 @@ fn aabbXZ(cx: f32, cz: f32, half: f32, box: level.Box) bool {
 pub var level_nav: Grid(level_cols, level_rows) = .{};
 pub var player_nav: Grid(level_cols, level_rows) = .{};
 
+// buildFromBoxes grows each sampled cell by its own 0.25 m half-width. Only
+// the remainder of an actor radius belongs in the explicit inflation value.
+// Passing the player's full 0.35 m radius here used to turn its effective
+// clearance into 0.60 m and seal otherwise traversable authored doorways.
+const hunter_grid_inflation: f32 = 0.25; // 0.50 m capsule - 0.25 m cell
+const player_grid_inflation: f32 = 0.10; // 0.35 m capsule - 0.25 m cell
+
+// Capsule heights (2 * (half segment + radius) from the controller configs).
+// A doorway lintel must sit above these for its gap to stay open in the bake;
+// author_level.py keeps every lintel at >= 3.1 m so the hunter fits too.
+const hunter_head_clearance: f32 = 3.0; // 2 * (1.00 + 0.50)
+const player_head_clearance: f32 = 1.8; // 2 * (0.55 + 0.35)
+
 pub fn buildLevel(unlocked_doors: u32) void {
     const boxes = level.current.boxSlice();
     // A nav cell already contributes 0.25 m of footprint. The remaining
     // 0.25 m gives the hunter's 0.5 m capsule its true wall clearance without
     // conservatively sealing ordinary doorways.
     level_nav.buildFromBoxesWithOptions(boxes, .{
-        .radius = 0.25,
+        .radius = hunter_grid_inflation,
         .restrict_to_level_bounds = true,
+        .walk_y = level.current.ground_y,
+        .head_clearance = hunter_head_clearance,
     });
     player_nav.buildFromBoxesWithOptions(boxes, .{
-        .radius = 0.35,
+        .radius = player_grid_inflation,
         .include_hunter_block = false,
         .restrict_to_level_bounds = true,
+        .walk_y = level.current.ground_y,
+        .head_clearance = player_head_clearance,
     });
     for (level.current.doorSlice(), 0..) |door, index| {
         if (door.lock == .none or unlocked_doors & (@as(u32, 1) << @intCast(index)) != 0) continue;
-        level_nav.blockDoor(door, 0.25);
-        player_nav.blockDoor(door, 0.35);
+        level_nav.blockDoor(door, hunter_grid_inflation);
+        player_nav.blockDoor(door, player_grid_inflation);
+    }
+}
+
+test "unlocked authored doors connect actors to every save room" {
+    level.loadDefault();
+    buildLevel(std.math.maxInt(u32));
+
+    for (level.current.save_targets[0..level.current.save_target_count], 0..) |target, index| {
+        const player_reachable = player_nav.isReachable(
+            level.current.player_spawn.x,
+            level.current.player_spawn.z,
+            target.x,
+            target.z,
+        );
+        if (!player_reachable) std.debug.print("player cannot reach save {d} at ({d:.2}, {d:.2})\n", .{ index, target.x, target.z });
+        try std.testing.expect(player_reachable);
+    }
+
+    // Check both sides of every doorway directly. A room's furniture may
+    // intentionally keep the large hunter away from a corner fixture, but it
+    // must never split the navigation components at the doorway itself.
+    for (level.current.doorSlice()) |door| {
+        const a = if (door.axis == .x)
+            level.Vec3{ .x = door.position.x, .z = door.position.z - 2.0 }
+        else
+            level.Vec3{ .x = door.position.x - 2.0, .z = door.position.z };
+        const b = if (door.axis == .x)
+            level.Vec3{ .x = door.position.x, .z = door.position.z + 2.0 }
+        else
+            level.Vec3{ .x = door.position.x + 2.0, .z = door.position.z };
+        try std.testing.expect(level_nav.isReachable(a.x, a.z, b.x, b.z));
+        try std.testing.expect(door.height >= 3.1);
     }
 }
 

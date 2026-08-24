@@ -31,8 +31,8 @@ WALL_BOTTOM = FLOOR_TOP
 WALL_HEIGHT = 5.0
 WALL_CENTER_Z = WALL_BOTTOM + WALL_HEIGHT * 0.5
 WALL_THICKNESS = 0.626
-DOOR_WIDTH = 1.48
-DOOR_HEIGHT = 2.65
+DOOR_WIDTH = 1.80
+DOOR_HEIGHT = 3.35
 DOOR_THICKNESS = 0.12
 DOOR_CENTER_Z = FLOOR_TOP + DOOR_HEIGHT * 0.5
 
@@ -168,6 +168,15 @@ if duplicate is not None and source is not None:
     if same_location and same_dimensions:
         bpy.data.objects.remove(duplicate, do_unlink=True)
 
+# The original starting-room doorway was manually scaled to a 2.76 m clear
+# height. Replace its two wall pieces and lintel with the same generated
+# doorway profile as the rest of the level so the 3.0 m hunter capsule has
+# comfortable overhead clearance.
+for original_doorway_piece in ("Cube.003", "Cube.013", "Cube.014"):
+    old_piece = bpy.data.objects.get(original_doorway_piece)
+    if old_piece is not None:
+        bpy.data.objects.remove(old_piece, do_unlink=True)
+
 
 # Floors: a cross hall, a loop around a solid storage island, and three rooms.
 floor_box("Geo_Hall_Lower_Floor", -34.0, 34.0, 10.0, 17.0)
@@ -186,6 +195,7 @@ cube("Roof_Ceiling_All", (0.0, 17.0, 6.2), (68.7, 56.7, 0.4))
 # Outer cross-hall walls leave the existing room's north doorway intact.
 wall_y("Geo_Hall_South_West", -34.0, -13.25, 10.0)
 wall_y("Geo_Hall_South_East", 13.25, 34.0, 10.0)
+doorway_y("Geo_Start_North", -13.25, 13.25, 10.0, 0.03)
 wall_x("Geo_Hall_West_End", -34.0, 10.0, 17.0)
 wall_x("Geo_Hall_East_End", 34.0, 10.0, 17.0)
 # Cap every north-facing dead-end edge of the cross hall. The room and loop
