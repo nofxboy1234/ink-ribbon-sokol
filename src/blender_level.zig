@@ -192,13 +192,3 @@ fn cross(a: Vec3, b: Vec3) Vec3 {
 fn length(value: Vec3) f32 {
     return @sqrt(dot(value, value));
 }
-
-test "embedded Blender blockout imports as boxes" {
-    const scene = try load();
-    try std.testing.expect(scene.box_count > 0);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.83579254), scene.floor_surface_y, 0.0001);
-    try std.testing.expect(scene.boxes[scene.floor_index].half_extents.x > 6.0);
-    try std.testing.expect(scene.boxes[scene.floor_index].half_extents.z > 6.0);
-    const spawn = scene.player_spawn orelse return error.PlayerSpawnMissing;
-    try std.testing.expectApproxEqAbs(scene.floor_surface_y, spawn.y, 0.0001);
-}

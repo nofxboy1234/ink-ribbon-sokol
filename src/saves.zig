@@ -20,7 +20,7 @@ pub const Slot = struct {
     reserve: u16 = 120,
     health: f32 = 100,
     inventory: inventory.State = .{},
-    // Bit N is set after authored world pickup N has been collected.
+    // Bit N is set after world pickup N has been collected.
     collected_pickups: u32 = 0,
     discovered_items: u32 = 0,
     broken_boxes: u32 = 0,
@@ -55,63 +55,7 @@ pub fn loadFromDir(dir: std.Io.Dir, io: std.Io) void {
         .ignore_unknown_fields = true,
     }) catch return;
     defer parsed.deinit();
-    if ((parsed.value.version >= 2 and parsed.value.version <= current_version) and parsed.value.slots.len == slot_count) {
-        slots = parsed.value.slots;
-        // Versions 2/3 predate the grid. Reconstruct their reserve ammunition
-        // as an inventory item and grant one healing item.
-        if (parsed.value.version <= 3) {
-            for (&slots) |*slot| if (slot.occupied) {
-                slot.inventory = inventory.State.defaultLoadout(slot.reserve);
-                slot.health = 100;
-                slot.collected_pickups = 0;
-            };
-        }
-        // Version 8 removes false T-junction doors and appends an explicit
-        // hunter-room door. Preserve state for every surviving physical door,
-        // while carrying the three colored lock states to their new entrances.
-        if (parsed.value.version == 7) {
-            for (&slots) |*slot| if (slot.occupied) {
-                var unlocked = remapDoorMaskV7(slot.unlocked_doors);
-                const colored_mask = doorBit(0) | doorBit(5) | doorBit(10);
-                unlocked &= ~colored_mask;
-                if (slot.unlocked_doors & doorBit(0) != 0) unlocked |= doorBit(0); // pink
-                if (slot.unlocked_doors & doorBit(5) != 0) unlocked |= doorBit(5); // purple
-                if (slot.unlocked_doors & doorBit(9) != 0) unlocked |= doorBit(10); // cyan
-                slot.unlocked_doors = unlocked;
-            };
-        }
-    }
-}
-
-fn doorBit(index: u5) u32 {
-    return @as(u32, 1) << index;
-}
-
-fn remapDoorMaskV7(old: u32) u32 {
-    const mapping = [_]struct { old: u5, new: u5 }{
-        .{ .old = 0, .new = 0 },
-        .{ .old = 1, .new = 1 },
-        .{ .old = 2, .new = 2 },
-        .{ .old = 3, .new = 3 },
-        .{ .old = 4, .new = 4 },
-        .{ .old = 6, .new = 5 },
-        .{ .old = 7, .new = 6 },
-        .{ .old = 8, .new = 7 },
-        .{ .old = 11, .new = 8 },
-        .{ .old = 12, .new = 9 },
-        .{ .old = 13, .new = 10 },
-        .{ .old = 14, .new = 11 },
-        .{ .old = 15, .new = 12 },
-        .{ .old = 16, .new = 13 },
-        .{ .old = 18, .new = 14 },
-        .{ .old = 19, .new = 15 },
-        .{ .old = 21, .new = 16 },
-    };
-    var result: u32 = 0;
-    for (mapping) |entry| {
-        if (old & doorBit(entry.old) != 0) result |= doorBit(entry.new);
-    }
-    return result;
+    if (parsed.value.version == current_version and parsed.value.slots.len == slot_count) slots = parsed.value.slots;
 }
 
 // Write every slot back to disk atomically enough for this game's purposes:
@@ -197,40 +141,6 @@ test "missing save file leaves empty slots" {
     for (slots) |slot| try std.testing.expect(!slot.occupied);
 }
 
-test "version seven door masks migrate to validated door indices" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const io = std.testing.io;
-    var old_slots: [slot_count]Slot = @splat(.{});
-    old_slots[0] = .{
-        .occupied = true,
-        .unlocked_doors = doorBit(0) | doorBit(5) | doorBit(9),
-    };
-    const data = try std.json.Stringify.valueAlloc(
-        std.heap.page_allocator,
-        FileFormat{ .version = 7, .slots = old_slots },
-        .{},
-    );
-    defer std.heap.page_allocator.free(data);
-    try tmp.dir.writeFile(io, .{ .sub_path = file_name, .data = data });
-
-    loadFromDir(tmp.dir, io);
-    try std.testing.expectEqual(doorBit(0) | doorBit(5) | doorBit(10), slots[0].unlocked_doors);
-}
-
-test "version eight transient door fields are ignored" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const data =
-        \\{"version":8,"slots":[{"occupied":true,"unlocked_doors":5,"opened_doors":3,"door_swing_positive":2},{},{},{},{},{},{},{}]}
-    ;
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = file_name, .data = data });
-
-    loadFromDir(tmp.dir, std.testing.io);
-    try std.testing.expect(slots[0].occupied);
-    try std.testing.expectEqual(@as(u32, 5), slots[0].unlocked_doors);
-}
-
 test "corrupt save file leaves empty slots" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -240,37 +150,4 @@ test "corrupt save file leaves empty slots" {
     defer slots[1] = .{};
     loadFromDir(tmp.dir, std.testing.io);
     for (slots) |slot| try std.testing.expect(!slot.occupied);
-}
-
-test "old level saves are ignored" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    var old_slots: [slot_count]Slot = @splat(.{});
-    old_slots[0] = .{ .occupied = true, .x = 15.5, .z = 12.4 };
-    const data = try std.json.Stringify.valueAlloc(
-        std.heap.page_allocator,
-        FileFormat{ .version = 1, .slots = old_slots },
-        .{},
-    );
-    defer std.heap.page_allocator.free(data);
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = file_name, .data = data });
-
-    loadFromDir(tmp.dir, std.testing.io);
-    for (slots) |slot| try std.testing.expect(!slot.occupied);
-}
-
-test "version two saves migrate with a full default loadout" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const data =
-        \\{"version":2,"slots":[{"occupied":true,"x":1,"y":0.9,"z":2,"yaw":3},{},{},{},{},{},{},{}]}
-    ;
-    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = file_name, .data = data });
-    loadFromDir(tmp.dir, std.testing.io);
-    try std.testing.expect(slots[0].occupied);
-    try std.testing.expectEqual(@as(u16, 24), slots[0].magazine);
-    try std.testing.expectEqual(@as(u16, 120), slots[0].reserve);
-    try std.testing.expectEqual(@as(u16, 120), slots[0].inventory.totalAmmo());
-    try std.testing.expectEqual(inventory.ItemKind.health, slots[0].inventory.cells[1].kind);
 }

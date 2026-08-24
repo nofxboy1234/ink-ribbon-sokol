@@ -151,27 +151,6 @@ For longer routes, inject one movement leg at a time and inspect the HUD
 coordinates between legs. This avoids accumulating route errors and provides
 clear evidence of the floor and landing reached.
 
-### Verified left grand-stair route
-
-Starting from the default character pose, the following native 60 FPS route
-reaches the second floor through the Main Hall's left staircase:
-
-1. Hold A for 2.05 seconds.
-2. Hold W for 9.00 seconds.
-
-The route was discovered and checked in these smaller legs:
-
-| Leg | Input | Resulting position |
-| --- | --- | --- |
-| 1 | A, 2.05 s | `(-6.3, 0.9, 17.0)` |
-| 2 | W, 4.00 s | `(-6.3, 1.0, 4.9)` |
-| 3 | W, 2.50 s | `(-6.3, 3.8, -1.7)` |
-| 4 | W, 1.00 s | `(-6.3, 4.9, -4.4)` |
-| 5 | W, 1.50 s | `(-6.3, 6.4, -8.4)` |
-
-A fresh one-shot replay ended at approximately `(-6.4, 6.4, -7.9)`. Small
-differences are expected from input start timing and character acceleration.
-
 ## Cleanup
 
 Stop the launched game with Ctrl-C in its terminal/session. If a test aborts,

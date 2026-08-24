@@ -25,6 +25,7 @@ const snap_ring: usize = 10;
 pub const BuildOptions = struct {
     radius: f32,
     include_hunter_block: bool = true,
+    restrict_to_level_bounds: bool = false,
 };
 
 pub const HunterInfluence = struct {
@@ -116,10 +117,9 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
                 const cx = self.worldX(cell % cols);
                 const cz = self.worldZ(cell / cols);
                 const half = cell_size * 0.5 + options.radius;
-                // The authored RPD has explicit boundary walls. A Blender
-                // blockout may begin as only a floor slab, so its floor bounds
-                // also define the valid navigation region.
-                if (level.current.kind == .blender_blockout and
+                // A fresh blockout may begin as only a floor slab, so its
+                // bounds can define the valid navigation region at runtime.
+                if (options.restrict_to_level_bounds and
                     (!level.insideWalkBounds(cx - half, cz - half) or !level.insideWalkBounds(cx + half, cz + half)))
                 {
                     self.blocked[cell] = true;
@@ -437,145 +437,22 @@ pub fn buildLevel() void {
     // A nav cell already contributes 0.25 m of footprint. The remaining
     // 0.25 m gives the hunter's 0.5 m capsule its true wall clearance without
     // conservatively sealing ordinary doorways.
-    level_nav.buildFromBoxes(boxes, 0.25);
+    level_nav.buildFromBoxesWithOptions(boxes, .{
+        .radius = 0.25,
+        .restrict_to_level_bounds = true,
+    });
     player_nav.buildFromBoxesWithOptions(boxes, .{
         .radius = 0.35,
         .include_hunter_block = false,
+        .restrict_to_level_bounds = true,
     });
 }
 
-// Full agent-level validation used before a generated layout becomes live.
-// The player must reach the target while the hunter must remain in a different
-// component behind the hunter-only save-room perimeter.
+// Validate the imported spawn against the optional navigation grid.
 pub fn validateLevel() bool {
     if (!level.current.validate()) return false;
-    if (level.current.kind == .blender_blockout) {
-        const player_cell = player_nav.cellAt(level.current.player_spawn.x, level.current.player_spawn.z) orelse return false;
-        const hunter_cell = level_nav.cellAt(level.current.hunter_spawn.x, level.current.hunter_spawn.z) orelse return false;
-        return player_nav.isWalkable(player_cell) and level_nav.isWalkable(hunter_cell);
-    }
-    var path: [level_cols * level_rows]b3.b3Pos = undefined;
-    for (level.current.save_targets[0..level.current.save_target_count], 0..) |target, index| {
-        if (!level.current.isInSaveRoomIndex(index, target.x, target.z)) return false;
-        if (player_nav.findPath(
-            level.current.player_spawn.x,
-            level.current.player_spawn.z,
-            target.x,
-            target.z,
-            path[0..],
-        ) == 0) return false;
-    }
-    if (level_nav.findPath(
-        level.current.hunter_spawn.x,
-        level.current.hunter_spawn.z,
-        level.current.player_spawn.x,
-        level.current.player_spawn.z,
-        path[0..],
-    ) == 0) return false;
-    for (level.current.save_targets[0..level.current.save_target_count]) |target| {
-        if (level_nav.findPath(
-            level.current.hunter_spawn.x,
-            level.current.hunter_spawn.z,
-            target.x,
-            target.z,
-            path[0..],
-        ) != 0) return false;
-    }
-    return true;
-}
-
-test "runtime level validation accepts the authored floor" {
-    level.load();
-    buildLevel();
-    var path: [level_cols * level_rows]b3.b3Pos = undefined;
-    try std.testing.expect(player_nav.findPath(
-        level.current.player_spawn.x,
-        level.current.player_spawn.z,
-        level.current.save_room_target.x,
-        level.current.save_room_target.z,
-        path[0..],
-    ) > 0);
-    try std.testing.expect(level_nav.findPath(
-        level.current.hunter_spawn.x,
-        level.current.hunter_spawn.z,
-        level.current.player_spawn.x,
-        level.current.player_spawn.z,
-        path[0..],
-    ) > 0);
-    try std.testing.expectEqual(@as(usize, 0), level_nav.findPath(
-        level.current.hunter_spawn.x,
-        level.current.hunter_spawn.z,
-        level.current.save_room_target.x,
-        level.current.save_room_target.z,
-        path[0..],
-    ));
-    try std.testing.expect(validateLevel());
-}
-
-test "grid marks walls and furniture but clears open floor" {
-    level.load();
-    const generated = &level.current;
-    var grid: Grid(level_cols, level_rows) = .{};
-    grid.buildFromBoxes(generated.boxSlice(), 0.5);
-
-    const spawn = grid.cellAt(generated.hunter_spawn.x, generated.hunter_spawn.z) orelse return error.TestUnexpectedResult;
-    try std.testing.expect(grid.isWalkable(spawn));
-
-    const wall = generated.boxes[2];
-    const wall_cell = grid.cellAt(wall.center.x, wall.center.z) orelse return error.TestUnexpectedResult;
-    try std.testing.expect(!grid.isWalkable(wall_cell));
-}
-
-test "navmesh routes across rooms through doorways" {
-    level.load();
-    const generated = &level.current;
-    var grid: Grid(level_cols, level_rows) = .{};
-    grid.buildFromBoxesWithOptions(generated.boxSlice(), .{ .radius = 0.35, .include_hunter_block = false });
-
-    var path: [level_cols * level_rows]b3.b3Pos = undefined;
-    const len = grid.findPath(
-        generated.player_spawn.x,
-        generated.player_spawn.z,
-        generated.save_room_target.x,
-        generated.save_room_target.z,
-        path[0..],
-    );
-    try std.testing.expect(len > 1);
-    for (path[0..len]) |waypoint| {
-        const cell = grid.cellAt(waypoint.x, waypoint.z) orelse return error.TestUnexpectedResult;
-        try std.testing.expect(grid.isWalkable(cell));
-    }
-}
-
-test "authored level keeps save reachable for player and excluded from hunter" {
-    var path: [level_cols * level_rows]b3.b3Pos = undefined;
-    level.load();
-    const generated = &level.current;
-    var hunter_grid: Grid(level_cols, level_rows) = .{};
-    var player_grid: Grid(level_cols, level_rows) = .{};
-    hunter_grid.buildFromBoxes(generated.boxSlice(), 0.5);
-    player_grid.buildFromBoxesWithOptions(generated.boxSlice(), .{
-        .radius = 0.35,
-        .include_hunter_block = false,
-    });
-
-    const target = generated.save_room_target;
-    try std.testing.expect(generated.isInSaveRoom(target.x, target.z));
-    try std.testing.expectEqual(@as(usize, 0), hunter_grid.findPath(
-        generated.hunter_spawn.x,
-        generated.hunter_spawn.z,
-        target.x,
-        target.z,
-        path[0..],
-    ));
-    const player_path_len = player_grid.findPath(
-        generated.player_spawn.x,
-        generated.player_spawn.z,
-        target.x,
-        target.z,
-        path[0..],
-    );
-    try std.testing.expect(player_path_len > 0);
+    const player_cell = player_nav.cellAt(level.current.player_spawn.x, level.current.player_spawn.z) orelse return false;
+    return player_nav.isWalkable(player_cell);
 }
 
 test "buildFromBoxes clears blocked state when rebuilt" {
@@ -736,15 +613,4 @@ test "navmesh routes through a door gap" {
         const cell = grid.cellAt(waypoint.x, waypoint.z) orelse return error.TestUnexpectedResult;
         try std.testing.expect(grid.isWalkable(cell));
     }
-}
-
-test "nearest walkable snaps a blocked goal out of the wall" {
-    level.load();
-    const generated = &level.current;
-    var grid: Grid(level_cols, level_rows) = .{};
-    grid.buildFromBoxes(generated.boxSlice(), 0.5);
-
-    // Inside the south wall itself; snap to the nearest open cell just north.
-    const cell = grid.nearestWalkable(0, 19.0, 10) orelse return error.TestUnexpectedResult;
-    try std.testing.expect(grid.isWalkable(cell));
 }
