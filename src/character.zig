@@ -1177,7 +1177,10 @@ fn addActorProxy(half_segment: f32, radius: f32, category: u64) b3.b3BodyId {
     const body = b3.b3CreateBody(game.world, &body_def);
     var shape_def = b3.b3DefaultShapeDef();
     shape_def.filter.categoryBits = category;
-    shape_def.filter.maskBits = controller.door_category;
+    shape_def.filter.maskBits = controller.door_category | if (category == controller.player_query_category)
+        controller.hunter_query_category
+    else
+        controller.player_query_category;
     var capsule = b3.b3Capsule{
         .center1 = .{ .y = -half_segment },
         .center2 = .{ .y = half_segment },
@@ -2424,7 +2427,7 @@ fn initRenderer() void {
         .label = "character-map-route-instances",
     });
     game.render.capsule_instances = sg.makeBuffer(.{
-        .size = 3 * @sizeOf(Instance),
+        .size = 6 * @sizeOf(Instance),
         .usage = .{ .stream_update = true },
         .label = "character-capsule-debug-instances",
     });
@@ -2640,14 +2643,13 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         );
     }
     sg.updateBuffer(game.render.map_save_instances, sg.asRange(save_instances[0..level.current.save_target_count]));
-    if (game.debug.draw_physics) updateCapsuleInstances(position);
-
     // Interpolate during gameplay, but use the authoritative pose while paused
     // so the clock's cycling alpha cannot replay the hunter's last movement.
     const hunter_render = if ((game.map.active and game.map.hunter_paused) or game.menu.kind != .none or game.inventory_ui.active or game.condition.hunter_watch_timer > 0)
         game.hunter.position
     else
         hunter.interpolatedPosition(game.hunter, game.clock.alpha());
+    if (game.debug.draw_physics) updateCapsuleInstances(position, hunter_render);
     const knocked_down = game.combat.hunterKnockedDown();
     // The hunter's capsule is taller than his visible rectangle. Keep the
     // capsule seated on the floor for collision, but lower the rendered body
@@ -2845,6 +2847,10 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
     if (game.debug.draw_physics and !game.map.active) {
         drawInstances(game.render.capsule_instances, game.render.capsule_cylinder_range, 0, 1, true);
         drawInstances(game.render.capsule_instances, game.render.capsule_sphere_range, @sizeOf(Instance), 2, true);
+        if (hunter_enabled) {
+            drawInstances(game.render.capsule_instances, game.render.capsule_cylinder_range, 3 * @sizeOf(Instance), 1, true);
+            drawInstances(game.render.capsule_instances, game.render.capsule_sphere_range, 4 * @sizeOf(Instance), 2, true);
+        }
     }
     drawReticle();
     drawInventoryRects();
@@ -3170,28 +3176,49 @@ fn drawInventoryRects() void {
     }
 }
 
-fn updateCapsuleInstances(position: b3.b3Pos) void {
-    const radius = game.character_config.capsule_radius;
-    const half_segment = game.character_config.capsule_half_segment;
-    const color = Vec4{ .x = 0.25, .y = 1.0, .z = 0.55, .w = 0.32 };
+fn updateCapsuleInstances(player_position: b3.b3Pos, hunter_position: b3.b3Pos) void {
+    const player_radius = game.character_config.capsule_radius;
+    const player_half_segment = game.character_config.capsule_half_segment;
+    const hunter_radius = game.hunter_config.capsule_radius;
+    const hunter_half_segment = game.hunter_config.capsule_half_segment;
+    const player_color = Vec4{ .x = 0.25, .y = 1.0, .z = 0.55, .w = 0.32 };
+    const hunter_color_debug = Vec4{ .x = 1.0, .y = 0.32, .z = 0.18, .w = 0.34 };
     const instances = [_]Instance{
         makeScaledInstance(
-            .{ .x = position.x, .y = position.y, .z = position.z },
-            .{ .x = radius, .y = 2 * half_segment, .z = radius },
+            .{ .x = player_position.x, .y = player_position.y, .z = player_position.z },
+            .{ .x = player_radius, .y = 2 * player_half_segment, .z = player_radius },
             0,
-            color,
+            player_color,
         ),
         makeScaledInstance(
-            .{ .x = position.x, .y = position.y - half_segment, .z = position.z },
-            .{ .x = radius, .y = radius, .z = radius },
+            .{ .x = player_position.x, .y = player_position.y - player_half_segment, .z = player_position.z },
+            .{ .x = player_radius, .y = player_radius, .z = player_radius },
             0,
-            color,
+            player_color,
         ),
         makeScaledInstance(
-            .{ .x = position.x, .y = position.y + half_segment, .z = position.z },
-            .{ .x = radius, .y = radius, .z = radius },
+            .{ .x = player_position.x, .y = player_position.y + player_half_segment, .z = player_position.z },
+            .{ .x = player_radius, .y = player_radius, .z = player_radius },
             0,
-            color,
+            player_color,
+        ),
+        makeScaledInstance(
+            .{ .x = hunter_position.x, .y = hunter_position.y, .z = hunter_position.z },
+            .{ .x = hunter_radius, .y = 2 * hunter_half_segment, .z = hunter_radius },
+            0,
+            hunter_color_debug,
+        ),
+        makeScaledInstance(
+            .{ .x = hunter_position.x, .y = hunter_position.y - hunter_half_segment, .z = hunter_position.z },
+            .{ .x = hunter_radius, .y = hunter_radius, .z = hunter_radius },
+            0,
+            hunter_color_debug,
+        ),
+        makeScaledInstance(
+            .{ .x = hunter_position.x, .y = hunter_position.y + hunter_half_segment, .z = hunter_position.z },
+            .{ .x = hunter_radius, .y = hunter_radius, .z = hunter_radius },
+            0,
+            hunter_color_debug,
         ),
     };
     sg.updateBuffer(game.render.capsule_instances, sg.asRange(&instances));
@@ -3429,8 +3456,8 @@ fn drawDeformedActor(instance_buffer: sg.Buffer, with_shadow_texture: bool) void
     sg.draw(0, deformed_box.index_count, 1);
 }
 
-// Draw `count` instances of one mesh from the shared buffers. The debug
-// capsule uses 3 records: cylinder + two spheres, offset through the buffer.
+// Draw `count` instances of one mesh from the shared buffers. Each debug
+// capsule uses three records: a cylinder followed by its two end spheres.
 fn drawInstances(
     instance_buffer: sg.Buffer,
     range: sshape.ElementRange,

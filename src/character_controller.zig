@@ -56,7 +56,7 @@ pub const level_category: u64 = 1 << 0;
 // Used by save-room barriers: collides with (and occludes) the hunter only.
 pub const hunter_block_category: u64 = 1 << 4;
 // Dynamic hinged doors have their own category so actor proxies can push them
-// without the capsule movers seeing one another.
+// while the query-driven player and hunter capsules also collide reciprocally.
 pub const door_category: u64 = 1 << 5;
 
 pub fn update(
@@ -164,7 +164,7 @@ pub fn moveCapsule(
 pub fn hunterFilter() b3.b3QueryFilter {
     var filter = b3.b3DefaultQueryFilter();
     filter.categoryBits = hunter_query_category;
-    filter.maskBits = level_category | hunter_block_category | door_category;
+    filter.maskBits = level_category | hunter_block_category | door_category | player_query_category;
     return filter;
 }
 
@@ -192,7 +192,7 @@ fn collectPlane(_: b3.b3ShapeId, results: [*c]const b3.b3PlaneResult, count: c_i
 fn moverFilter() b3.b3QueryFilter {
     var filter = b3.b3DefaultQueryFilter();
     filter.categoryBits = player_query_category;
-    filter.maskBits = level_category | door_category;
+    filter.maskBits = level_category | door_category | hunter_query_category;
     return filter;
 }
 
@@ -247,4 +247,11 @@ test "diagonal input is normalized" {
 test "angle approach takes the shortest path" {
     const result = approachAngle(3.0, -3.0, 0.1);
     try std.testing.expect(result > 3.0);
+}
+
+test "player and hunter mover filters query one another" {
+    const player_filter = moverFilter();
+    const hunter_filter = hunterFilter();
+    try std.testing.expect(player_filter.maskBits & hunter_query_category != 0);
+    try std.testing.expect(hunter_filter.maskBits & player_query_category != 0);
 }
