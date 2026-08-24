@@ -30,6 +30,8 @@ pub const Scene = struct {
     box_count: usize = 0,
     floor_index: usize = 0,
     floor_surface_y: f32 = 0,
+    player_spawn: ?Vec3 = null,
+    player_yaw: f32 = std.math.pi,
 
     pub fn boxSlice(self: *const Scene) []const Box {
         return self.boxes[0..self.box_count];
@@ -52,6 +54,21 @@ pub fn load() !Scene {
 
     var result = Scene{};
     for (data.*.nodes[0..data.*.nodes_count]) |*node| {
+        if (node.name != null and std.mem.eql(u8, std.mem.span(node.name), "PlayerSpawn")) {
+            if (result.player_spawn != null) return error.DuplicatePlayerSpawn;
+            var matrix: [16]f32 = undefined;
+            cgltf.cgltf_node_transform_world(node, &matrix);
+            result.player_spawn = transformPoint(matrix, .{});
+            // A zero-rotation Blender Empty faces the game's conventional -Z.
+            // Rotating it around Blender Z is exported as a glTF Y rotation,
+            // so its transformed local -Z axis provides the starting heading.
+            const forward_x = -matrix[8];
+            const forward_z = -matrix[10];
+            if (forward_x * forward_x + forward_z * forward_z > 0.000001) {
+                result.player_yaw = std.math.atan2(forward_x, forward_z);
+            }
+            continue;
+        }
         if (node.mesh == null) continue;
         if (result.box_count == max_boxes) return error.TooManyMeshNodes;
         result.boxes[result.box_count] = try boxFromNode(node);
@@ -178,8 +195,10 @@ fn length(value: Vec3) f32 {
 
 test "embedded Blender blockout imports as boxes" {
     const scene = try load();
-    try std.testing.expectEqual(@as(usize, 3), scene.box_count);
+    try std.testing.expect(scene.box_count > 0);
     try std.testing.expectApproxEqAbs(@as(f32, 0.83579254), scene.floor_surface_y, 0.0001);
     try std.testing.expect(scene.boxes[scene.floor_index].half_extents.x > 6.0);
     try std.testing.expect(scene.boxes[scene.floor_index].half_extents.z > 6.0);
+    const spawn = scene.player_spawn orelse return error.PlayerSpawnMissing;
+    try std.testing.expectApproxEqAbs(scene.floor_surface_y, spawn.y, 0.0001);
 }

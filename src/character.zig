@@ -1419,9 +1419,9 @@ fn spawnPlayerAndHunter() void {
     } else {
         const player_spawn = levelPlayerSpawn();
         game.character = controller.State.init(player_spawn);
-        // face -Z, matching the initial camera
-        game.character.yaw = std.math.pi;
+        game.character.yaw = level.current.player_spawn_yaw;
         game.camera = .{};
+        game.camera.yaw = game.character.yaw;
         game.quick_turn = .{};
         game.combat = combat.State.init(game.combat_config, game.combat_config.magazine_capacity, game.combat_config.starting_reserve);
         game.inventory = inventory.State.defaultLoadout(game.combat_config.starting_reserve);
@@ -1926,8 +1926,9 @@ fn respawnAfterCatch() void {
     } else {
         const player_spawn = levelPlayerSpawn();
         game.character = controller.State.init(player_spawn);
-        game.character.yaw = std.math.pi;
+        game.character.yaw = level.current.player_spawn_yaw;
         game.camera = .{};
+        game.camera.yaw = game.character.yaw;
         game.quick_turn = .{};
         game.combat = combat.State.init(game.combat_config, game.combat_config.magazine_capacity, game.combat_config.starting_reserve);
         game.inventory = inventory.State.defaultLoadout(game.combat_config.starting_reserve);

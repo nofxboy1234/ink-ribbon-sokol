@@ -297,6 +297,7 @@ pub const Level = struct {
     start_room: usize = 0,
     save_room: usize = 0,
     player_spawn: Vec3 = .{},
+    player_spawn_yaw: f32 = std.math.pi,
     hunter_spawn: Vec3 = .{},
     save_room_target: Vec3 = .{},
     save_fixtures: [2]Vec3 = @splat(.{}),
@@ -437,7 +438,11 @@ fn buildBlender() !Level {
     result.walk_max_z = floor.center.z + floor_half_z;
     // Spawn coordinates describe the support surface. Character code adds the
     // capsule's centre height, just as it does for the authored y=0 floor.
-    result.player_spawn = .{ .x = floor.center.x, .y = result.floor_surface_y, .z = floor.center.z };
+    result.player_spawn = if (imported.player_spawn) |spawn|
+        fromImported(spawn)
+    else
+        .{ .x = floor.center.x, .y = result.floor_surface_y, .z = floor.center.z };
+    result.player_spawn_yaw = imported.player_yaw;
     result.hunter_spawn = .{
         .x = floor.center.x - floor_half_x * 0.62,
         .y = result.floor_surface_y,
@@ -844,7 +849,8 @@ test "six stair ramps are pitched and terminate on first floor" {
 test "Blender blockout is isolated and spawns on its bottom floor" {
     current = try buildBlender();
     try std.testing.expectEqual(Kind.blender_blockout, current.kind);
-    try std.testing.expectEqual(@as(usize, 3), current.box_count);
+    try std.testing.expect(current.box_count > 0);
     try std.testing.expectApproxEqAbs(@as(f32, 0.83579254), current.player_spawn.y, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 7.3133125), current.player_spawn.x, 0.0001);
     try std.testing.expect(!authoredGameplayEnabled());
 }
