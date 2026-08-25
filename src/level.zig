@@ -297,10 +297,21 @@ fn build() !Level {
             .min_z = center.z - half.z,
             .max_z = center.z + half.z,
         };
-        result.save_targets[result.save_target_count] = if (result.save_fixture_count > result.save_target_count)
-            result.save_fixtures[result.save_target_count]
-        else
-            center;
+        // GLB node order is not the authoring order, so a fixture can never
+        // be paired with its room by index alone. Match each room to the
+        // typewriter fixture contained in its bounds; fall back to the room
+        // center when no fixture sits inside it.
+        var target = center;
+        for (imported.save_fixtures[0..imported.save_fixture_count]) |fixture| {
+            const position = fromImported(fixture);
+            if (position.x >= center.x - half.x and position.x <= center.x + half.x and
+                position.z >= center.z - half.z and position.z <= center.z + half.z)
+            {
+                target = position;
+                break;
+            }
+        }
+        result.save_targets[result.save_target_count] = target;
         result.save_target_count += 1;
     }
 

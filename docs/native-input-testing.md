@@ -41,7 +41,7 @@ tools/native-input-test close
 The gameplay bindings exercised by the helper are Q for quick-turn, RMB to
 aim, LMB to fire while aiming or interact otherwise, Shift to run, Alt/MMB to
 reset the camera, Ctrl/M for the map, Tab/I for inventory, and F for the
-context action. F1-F3 remain developer controls.
+context action. F1-F4 are developer controls (see "Debug keybinds" below).
 
 `look DX DY` injects a bounded relative mouse movement after safely acquiring
 mouse lock. This lets navigation turn the third-person camera before moving so
@@ -53,11 +53,23 @@ approval prompt for every leg.
 
 ## Focus ownership during a test
 
-Prefer keeping the game focused for a complete input and capture sequence. If
-Codex asks the user a question or presents an approval prompt, the user must
-move focus back to the Codex CLI. Before resuming the test, assume the game no
-longer has focus: find its current window ID again, raise it, and send another
-focus click before injecting more input.
+X11 has a single focus per display, so driving the game always takes focus
+from whatever the user is looking at. Two mechanisms keep that cost low and
+make sharing predictable:
+
+- `INK_RIBBON_NO_STEAL=1 tools/native-input-test ...` enables polite mode.
+  Commands never steal focus: each one first checks `_NET_ACTIVE_WINDOW` and
+  only acts while the game window is already focused, failing with a clear
+  message otherwise. Focus the game when you are ready, and take focus back
+  whenever you like — the helper will wait instead of yanking.
+- `tools/native-input-test run hold:f4:0.2 look:640:0 shot:/tmp/x.png`
+  executes a whole scripted batch (hold/look/click/shot/sleep steps) in a
+  single focus acquisition, then returns focus to the desktop. Prefer one
+  `run` over many single commands.
+
+Without polite mode, every command re-focuses the game first, so assume the
+game no longer has focus after you switch windows: the next command re-focuses
+and clicks it before injecting input.
 
 Before focusing the game:
 
@@ -70,6 +82,15 @@ they divide it into separate focus segments. Release every synthetic key
 before pausing for the user. After the user responds, reacquire the game window
 with `wmctrl`, click it through XTest, and only then resume keyboard or mouse
 injection.
+
+## Debug keybinds
+
+- `F1` toggles the physics debug view (capsules and the position HUD).
+- `F2` toggles the hunter between hostile and friendly (no damage).
+- `F3` pauses or resumes the hunter while the map is open.
+- `F4` holds the hunter in every mode: his simulation freezes while the
+  player keeps moving, which is the least intrusive way to test routing,
+  doors, and pickups without interruption.
 
 ## Build and launch
 

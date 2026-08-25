@@ -493,6 +493,9 @@ const GameState = struct {
     player_deformation: deformation.State = .{},
     hunter_deformation: deformation.State = .{},
     hunter_friendly: bool = false,
+    // Debug hold (F4): freezes just the hunter's simulation while the player
+    // keeps moving, so route and door behaviour can be tested uninterrupted.
+    hunter_hold: bool = false,
     audio: game_audio.System = .{},
     audio_buffer: [audio_buffer_frames * audio_channel_count]f32 = @splat(0),
     player_step_distance: f32 = 0,
@@ -602,8 +605,9 @@ fn frame() callconv(.c) void {
         var ticks: usize = 0;
         while (ticks < max_ticks_per_frame and game.clock.consumeTick()) : (ticks += 1) {
             // Map/menu modes always freeze the player. On the map the hunter
-            // is independently paused by default and can be resumed with P.
-            const hunter_sim_active = level.hunterEnabled() and game.menu.kind == .none and !game.inventory_ui.active and (!game.map.active or !game.map.hunter_paused);
+            // is independently paused by default and can be resumed with F3;
+            // F4 holds the hunter in every mode.
+            const hunter_sim_active = level.hunterEnabled() and !game.hunter_hold and game.menu.kind == .none and !game.inventory_ui.active and (!game.map.active or !game.map.hunter_paused);
             if (gameplay_active) {
                 controller.update(
                     game.character_config,
@@ -841,6 +845,9 @@ fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
                 },
                 .F3 => if (down and !value.key_repeat and game.map.active) {
                     game.map.hunter_paused = !game.map.hunter_paused;
+                },
+                .F4 => if (down and !value.key_repeat) {
+                    game.hunter_hold = !game.hunter_hold;
                 },
                 .M, .LEFT_CONTROL, .RIGHT_CONTROL => if (down and !value.key_repeat) toggleMap(),
                 .I, .TAB => if (down and !value.key_repeat and game.menu.kind == .none and !game.map.active and game.condition.canMove() and !playerActionActive()) {
@@ -1790,9 +1797,24 @@ fn doorKey(lock: level.DoorLock) ?inventory.ItemKind {
     };
 }
 
+// Bitmask of locked doors whose key the player carries. A held key makes a
+// door traversable for route planning even while its mesh is still closed:
+// the player can unlock it on the way.
+fn inventoryKeyMask() u32 {
+    var mask: u32 = 0;
+    for (level.current.doorSlice(), 0..) |door, index| {
+        const key = doorKey(door.lock) orelse continue;
+        if (game.inventory.has(key)) mask |= @as(u32, 1) << @intCast(index);
+    }
+    return mask;
+}
+
 fn boxDropPosition(index: usize) Vec3 {
     const box = breakable_defs[index].position;
-    return .{ .x = box.x, .y = 0.18, .z = box.z };
+    // Drops rest on the walk surface. The old test level had its floor top at
+    // y = 0; the authored blockout sits a full metre higher, so an absolute
+    // height here would bury the item inside the floor slab.
+    return .{ .x = box.x, .y = level.current.ground_y + 0.18, .z = box.z };
 }
 
 fn boxDropItem(index: usize) inventory.Item {
@@ -2401,6 +2423,9 @@ fn rebuildMapRoute() void {
     game.map.route_len = 0;
     game.map.route_segment_count = 0;
     game.map.route_upload_pending = true;
+    // Plan through locked doors the player can unlock on the way. This only
+    // reopens doors in the player grid; the hunter must still respect them.
+    navmesh.buildPlayerNav(game.unlocked_doors | inventoryKeyMask());
     const selected = @min(game.map.selected_save, level.current.save_target_count - 1);
     if (level.current.isInSaveRoomIndex(selected, game.character.position.x, game.character.position.z)) {
         game.map.route_status = .arrived;
@@ -3599,6 +3624,11 @@ fn drawHud(position: b3.b3Pos) void {
             sdtx.pos(1.0, 2.2);
             sdtx.color3b(80, 250, 123);
             sdtx.print("HUNTER FRIENDLY (F2 toggles)", .{});
+        }
+        if (game.hunter_hold) {
+            sdtx.pos(1.0, if (game.hunter_friendly) 3.4 else 2.2);
+            sdtx.color3b(255, 170, 60);
+            sdtx.print("HUNTER HELD (F4 toggles)", .{});
         }
         const ammo_x = @max(1.0, sapp.widthf() / 8.0 - 16.0);
         const ammo_y = @max(1.0, sapp.heightf() / 8.0 - 2.0);

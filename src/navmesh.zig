@@ -484,6 +484,22 @@ pub fn buildLevel(unlocked_doors: u32) void {
         .walk_y = level.current.ground_y,
         .head_clearance = hunter_head_clearance,
     });
+    for (level.current.doorSlice(), 0..) |door, index| {
+        if (door.lock == .none or unlocked_doors & (@as(u32, 1) << @intCast(index)) != 0) continue;
+        level_nav.blockDoor(door, hunter_grid_inflation);
+    }
+    bakePlayerNav(unlocked_doors);
+}
+
+// Rebuild just the player grid. The map route uses this to treat doors whose
+// key the player already carries as traversable, without ever opening those
+// doors in the hunter's grid.
+pub fn buildPlayerNav(unlocked_doors: u32) void {
+    bakePlayerNav(unlocked_doors);
+}
+
+fn bakePlayerNav(unlocked_doors: u32) void {
+    const boxes = level.current.boxSlice();
     player_nav.buildFromBoxesWithOptions(boxes, .{
         .radius = player_grid_inflation,
         .include_hunter_block = false,
@@ -493,7 +509,6 @@ pub fn buildLevel(unlocked_doors: u32) void {
     });
     for (level.current.doorSlice(), 0..) |door, index| {
         if (door.lock == .none or unlocked_doors & (@as(u32, 1) << @intCast(index)) != 0) continue;
-        level_nav.blockDoor(door, hunter_grid_inflation);
         player_nav.blockDoor(door, player_grid_inflation);
     }
 }
@@ -528,6 +543,46 @@ test "unlocked authored doors connect actors to every save room" {
         try std.testing.expect(level_nav.isReachable(a.x, a.z, b.x, b.z));
         try std.testing.expect(door.height >= 3.1);
     }
+}
+
+test "player routing opens a locked door once its key is held" {
+    level.loadDefault();
+    buildLevel(0);
+
+    const purple_index = blk: {
+        for (level.current.doorSlice(), 0..) |door, index| {
+            if (door.lock == .purple) break :blk index;
+        }
+        return error.PurpleDoorMissing;
+    };
+    const purple_bit = @as(u32, 1) << @intCast(purple_index);
+    const spawn = level.current.player_spawn;
+    // The purple archive save room is the one whose bounds contain the point
+    // just inside the purple doorway.
+    const purple_room = blk: {
+        for (level.current.doorSlice()) |door| {
+            if (door.lock != .purple) continue;
+            const inside = if (door.axis == .x)
+                level.Vec3{ .x = door.position.x, .z = door.position.z - 2.0 }
+            else
+                level.Vec3{ .x = door.position.x - 2.0, .z = door.position.z };
+            for (0..level.current.save_target_count) |room| {
+                if (level.current.isInSaveRoomIndex(room, inside.x, inside.z)) break :blk room;
+            }
+        }
+        return error.PurpleSaveRoomMissing;
+    };
+    const target = level.current.save_targets[purple_room];
+
+    // Locked: the sealed purple door splits the player's grid.
+    try std.testing.expect(!player_nav.isReachable(spawn.x, spawn.z, target.x, target.z));
+
+    // Holding the key reopens just that door for route planning.
+    buildPlayerNav(purple_bit);
+    try std.testing.expect(player_nav.isReachable(spawn.x, spawn.z, target.x, target.z));
+
+    // The hunter's grid must still treat the door as locked.
+    try std.testing.expect(!level_nav.isReachable(spawn.x, spawn.z, target.x, target.z));
 }
 
 // Validate imported actor spawns against their respective navigation grids.

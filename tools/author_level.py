@@ -129,9 +129,12 @@ def doorway_y(prefix, min_x, max_x, y, center_x):
     gap_max = center_x + DOOR_WIDTH * 0.5 + 0.09
     wall_y(prefix + "_Left", min_x, gap_min, y)
     wall_y(prefix + "_Right", gap_max, max_x, y)
+    # The "Roof_" prefix marks overhead geometry: the runtime hides it on the
+    # top-down map (so it cannot occlude the colored door markers) and the
+    # navmesh bake ignores it, since every actor passes beneath it.
     lintel_height = WALL_HEIGHT - DOOR_HEIGHT
     cube(
-        prefix + "_Lintel",
+        "Roof_" + prefix + "_Lintel",
         (center_x, y, FLOOR_TOP + DOOR_HEIGHT + lintel_height * 0.5),
         (gap_max - gap_min, WALL_THICKNESS, lintel_height),
     )
