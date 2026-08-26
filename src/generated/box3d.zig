@@ -3694,7 +3694,7 @@ pub fn b3LoadWorldId(arg_x: u32) callconv(.c) b3WorldId {
 pub fn b3StoreBodyId(arg_id: b3BodyId) callconv(.c) u64 {
     var id = arg_id;
     _ = &id;
-    return ((@as(u64, @bitCast(@as(c_long, id.index1))) << @intCast(@as(u64, 32))) | (@as(u64, id.world0) << @intCast(@as(u64, 16)))) | @as(u64, id.generation);
+    return ((@as(u64, @as(u32, @bitCast(id.index1))) << @intCast(@as(u64, 32))) | (@as(u64, id.world0) << @intCast(@as(u64, 16)))) | @as(u64, id.generation);
 }
 /// Load a uint64_t into a body id.
 pub fn b3LoadBodyId(arg_x: u64) callconv(.c) b3BodyId {
@@ -3712,7 +3712,7 @@ pub fn b3LoadBodyId(arg_x: u64) callconv(.c) b3BodyId {
 pub fn b3StoreShapeId(arg_id: b3ShapeId) callconv(.c) u64 {
     var id = arg_id;
     _ = &id;
-    return ((@as(u64, @bitCast(@as(c_long, id.index1))) << @intCast(@as(u64, 32))) | (@as(u64, id.world0) << @intCast(@as(u64, 16)))) | @as(u64, id.generation);
+    return ((@as(u64, @as(u32, @bitCast(id.index1))) << @intCast(@as(u64, 32))) | (@as(u64, id.world0) << @intCast(@as(u64, 16)))) | @as(u64, id.generation);
 }
 /// Load a uint64_t into a shape id.
 pub fn b3LoadShapeId(arg_x: u64) callconv(.c) b3ShapeId {
@@ -3730,7 +3730,7 @@ pub fn b3LoadShapeId(arg_x: u64) callconv(.c) b3ShapeId {
 pub fn b3StoreJointId(arg_id: b3JointId) callconv(.c) u64 {
     var id = arg_id;
     _ = &id;
-    return ((@as(u64, @bitCast(@as(c_long, id.index1))) << @intCast(@as(u64, 32))) | (@as(u64, id.world0) << @intCast(@as(u64, 16)))) | @as(u64, id.generation);
+    return ((@as(u64, @as(u32, @bitCast(id.index1))) << @intCast(@as(u64, 32))) | (@as(u64, id.world0) << @intCast(@as(u64, 16)))) | @as(u64, id.generation);
 }
 /// Load a uint64_t into a joint id.
 pub fn b3LoadJointId(arg_x: u64) callconv(.c) b3JointId {

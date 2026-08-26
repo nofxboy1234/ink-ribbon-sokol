@@ -134,6 +134,11 @@ generate_bindings() {
     )
 
     sed -i "s#$project_root/.toolchain/deps/##g" "$generated/box3d.zig" "$generated/cimgui.zig" "$generated/cgltf.zig" "$generated/model_image.zig"
+    # translate-c packs id.index1 (a 32-bit int) into the top half of a u64 via a
+    # @bitCast through c_long, which is 64-bit on the x86_64 translate target but
+    # 32-bit on wasm32, so the resulting binding would not cross-compile. Rebuild
+    # from the 32-bit field directly to stay target-independent.
+    sed -i 's/@as(u64, @bitCast(@as(c_long, id.index1)))/@as(u64, @as(u32, @bitCast(id.index1)))/g' "$generated/box3d.zig"
     mkdir -p "$project_root/src/generated"
     mv "$generated/box3d.zig" "$project_root/src/generated/box3d.zig"
     mv "$generated/cimgui.zig" "$project_root/src/examples/generated/cimgui.zig"
