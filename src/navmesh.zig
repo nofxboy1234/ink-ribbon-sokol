@@ -530,8 +530,11 @@ test "unlocked authored doors connect actors to every save room" {
 
     // Check both sides of every doorway directly. A room's furniture may
     // intentionally keep the large hunter away from a corner fixture, but it
-    // must never split the navigation components at the doorway itself.
+    // must never split the navigation components at the doorway itself. The
+    // one exception is a save room's entrance, which is deliberately sealed
+    // against the hunter, so it is checked separately below.
     for (level.current.doorSlice()) |door| {
+        if (level.current.isSaveRoomDoor(door)) continue;
         const a = if (door.axis == .x)
             level.Vec3{ .x = door.position.x, .z = door.position.z - 2.0 }
         else
@@ -542,6 +545,22 @@ test "unlocked authored doors connect actors to every save room" {
             level.Vec3{ .x = door.position.x + 2.0, .z = door.position.z };
         try std.testing.expect(level_nav.isReachable(a.x, a.z, b.x, b.z));
         try std.testing.expect(door.height >= 3.1);
+    }
+
+    // Each save-room entrance barricades the hunter while the player still
+    // walks through, so the room stays reachable for saving but is sanctuary.
+    for (level.current.doorSlice()) |door| {
+        if (!level.current.isSaveRoomDoor(door)) continue;
+        const a = if (door.axis == .x)
+            level.Vec3{ .x = door.position.x, .z = door.position.z - 2.0 }
+        else
+            level.Vec3{ .x = door.position.x - 2.0, .z = door.position.z };
+        const b = if (door.axis == .x)
+            level.Vec3{ .x = door.position.x, .z = door.position.z + 2.0 }
+        else
+            level.Vec3{ .x = door.position.x + 2.0, .z = door.position.z };
+        try std.testing.expect(!level_nav.isReachable(a.x, a.z, b.x, b.z));
+        try std.testing.expect(player_nav.isReachable(a.x, a.z, b.x, b.z));
     }
 }
 

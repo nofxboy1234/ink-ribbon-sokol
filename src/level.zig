@@ -145,6 +145,28 @@ pub const Level = struct {
         return null;
     }
 
+    // True when a door sits on the perimeter of a save room and is therefore
+    // the room's entrance. Save rooms are sealed against the hunter at these
+    // doorways with hunter-only barriers, so the hunter can never enter.
+    pub fn isSaveRoomDoor(self: *const Level, door: DoorDef) bool {
+        const margin: f32 = 0.75;
+        for (0..self.save_target_count) |index| {
+            const bounds = self.save_bounds[index];
+            const within_x = door.position.x >= bounds.min_x - margin and door.position.x <= bounds.max_x + margin;
+            const within_z = door.position.z >= bounds.min_z - margin and door.position.z <= bounds.max_z + margin;
+            const near_min_x = @abs(door.position.x - bounds.min_x) <= margin;
+            const near_max_x = @abs(door.position.x - bounds.max_x) <= margin;
+            const near_min_z = @abs(door.position.z - bounds.min_z) <= margin;
+            const near_max_z = @abs(door.position.z - bounds.max_z) <= margin;
+            // On a vertical boundary, centred along the wall's length. This
+            // ignores corridors shared with other rooms because the door must
+            // hug the save room's own edge.
+            if ((near_min_x or near_max_x) and within_z) return true;
+            if ((near_min_z or near_max_z) and within_x) return true;
+        }
+        return false;
+    }
+
     pub fn validate(self: *const Level) bool {
         return self.box_count > 0 and self.box_count <= max_boxes and
             self.walk_min_x < self.walk_max_x and self.walk_min_z < self.walk_max_z and
@@ -332,6 +354,32 @@ fn build() !Level {
         const position = fromImported(light.position);
         result.lights[result.light_count] = .{ .x = position.x, .y = position.y, .z = position.z, .w = light.radius };
         result.light_count += 1;
+    }
+
+    // Save rooms are sanctuary: the hunter must not be able to enter them.
+    // Drop an invisible, hunter-only barrier across each save room's doorway
+    // so the hunter's navmesh cells, capsule, and line of sight are all blocked
+    // while the player walks straight through (the player's query mask excludes
+    // the hunter_block category and the player navmesh skips these boxes).
+    for (result.doorSlice()) |door| {
+        if (!result.isSaveRoomDoor(door)) continue;
+        // At least as tall as the hunter's 3.0 m capsule (a doorway is authored
+        // >= 3.1 m), so the barrier always spans the full opening.
+        const height = @max(door.height, 3.1);
+        const half_thickness: f32 = 0.5;
+        const half = if (door.axis == .x)
+            Vec3{ .x = door.width * 0.5, .y = height * 0.5, .z = half_thickness }
+        else
+            Vec3{ .x = half_thickness, .y = height * 0.5, .z = door.width * 0.5 };
+        result.addBox(.{
+            .center = .{ .x = door.position.x, .y = result.ground_y + height * 0.5, .z = door.position.z },
+            .half_extents = half,
+            .color = geometry_color,
+            .visible = false,
+            .collidable = true,
+            .nav_block = true,
+            .hunter_block = true,
+        });
     }
 
     // These neutral defaults support reusable systems without placing any
