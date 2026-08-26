@@ -1,2 +1,0 @@
-vblank_mode=0 zig build run
-zig build run -Dtarget=wasm32-emscripten
