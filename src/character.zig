@@ -411,6 +411,7 @@ const RenderState = struct {
     actor_display_pipeline: sg.Pipeline = .{},
     route_pipeline: sg.Pipeline = .{},
     window_pipeline: sg.Pipeline = .{},
+    map_item_pipeline: sg.Pipeline = .{},
     map_actor_pipeline: sg.Pipeline = .{},
     debug_pipeline: sg.Pipeline = .{},
     reticle_pipeline: sg.Pipeline = .{},
@@ -2732,6 +2733,17 @@ fn initRenderer() void {
         .cull_mode = .BACK,
         .label = "character-map-route-pipeline",
     });
+    // Map item markers are a schematic overlay: always draw them on top of the
+    // level geometry so pickups sitting under an overhang or upstairs ledge are
+    // still visible (they only stand out when debug/discovery reveals them).
+    game.render.map_item_pipeline = sg.makePipeline(.{
+        .shader = route_shader,
+        .layout = route_layout,
+        .depth = .{ .write_enabled = false, .compare = .ALWAYS },
+        .index_type = .UINT16,
+        .cull_mode = .BACK,
+        .label = "character-map-item-pipeline",
+    });
     game.render.window_pipeline = sg.makePipeline(.{
         .shader = route_shader,
         .layout = route_layout,
@@ -3087,6 +3099,11 @@ fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         }
         drawInstances(game.render.map_save_instances, game.render.box_range, 0, level.current.save_target_count, false);
         if (game.render.map_item_instance_count > 0) {
+            sg.applyPipeline(game.render.map_item_pipeline);
+            // The map-item pipeline also skips depth testing, but note that a
+            // fresh applyPipeline() requires re-feeding the uniform block (and
+            // drawInstances only re-applies bindings).
+            sg.applyUniforms(shd.UB_route_vs_params, sg.asRange(&route_params));
             drawInstances(game.render.map_item_instances, game.render.box_range, 0, game.render.map_item_instance_count, false);
         }
         drawInstances(game.render.map_direction_instances, game.render.box_range, 0, map_direction_instance_count, false);
