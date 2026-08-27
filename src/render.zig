@@ -1221,7 +1221,6 @@ pub fn updateCapsuleInstances(player_position: b3.b3Pos, hunter_position: b3.b3P
 pub fn drawHud(position: b3.b3Pos) void {
     const frame_duration = sapp.frameDuration();
     const fps = if (frame_duration > 0) 1.0 / frame_duration else 0;
-    const text_width = 11.0;
     sdtx.canvas(sapp.widthf(), sapp.heightf());
     if (game.menu.kind == .pause) {
         drawRootMenuText("PAUSED", &.{ "RETURN TO GAME", "LOAD GAME", "QUIT GAME" });
@@ -1238,28 +1237,28 @@ pub fn drawHud(position: b3.b3Pos) void {
         sdtx.draw();
         return;
     }
-    sdtx.pos(@max(1.0, sapp.widthf() / 8.0 - text_width - 1.0), 1.0);
+    sdtx.pos(1.0, 1.0);
     sdtx.color3b(255, 255, 255);
     sdtx.print("FPS: {d:>6.1}", .{fps});
     if (game.map.active) {
-        sdtx.pos(1.0, 1.0);
+        sdtx.pos(1.0, 3.4);
         sdtx.color3b(255, 220, 120);
         sdtx.print("MAP (click save room, WASD pans, F3 hunter, CTRL/M exits)", .{});
-        sdtx.pos(1.0, 2.2);
+        sdtx.pos(1.0, 4.6);
         sdtx.print("HUNTER: {s} / {s}", .{
             if (game.map.hunter_paused) "PAUSED" else "MOVING",
             if (game.hunter_friendly) "FRIENDLY" else "HOSTILE",
         });
-        sdtx.pos(1.0, 3.4);
+        sdtx.pos(1.0, 5.8);
         sdtx.print("TARGET SAVE: {d}", .{game.map.selected_save + 1});
         switch (game.map.route_status) {
             .arrived => {
-                sdtx.pos(1.0, 4.6);
+                sdtx.pos(1.0, 7.0);
                 sdtx.color3b(80, 250, 123);
                 sdtx.print("SAVE ROOM REACHED", .{});
             },
             .no_path => {
-                sdtx.pos(1.0, 4.6);
+                sdtx.pos(1.0, 7.0);
                 sdtx.color3b(255, 85, 85);
                 sdtx.print("NO SAFE ROUTE", .{});
             },
@@ -1273,11 +1272,11 @@ pub fn drawHud(position: b3.b3Pos) void {
         }
     } else {
         if (game.debug.draw_physics) {
-            sdtx.pos(1.0, 1.0);
+            sdtx.pos(1.0, 2.2);
             sdtx.print("POS {d:.1} {d:.1} {d:.1}", .{ position.x, position.y, position.z });
         }
         if (game.hunter_friendly) {
-            sdtx.pos(1.0, 2.2);
+            sdtx.pos(1.0, 3.4);
             sdtx.color3b(80, 250, 123);
             sdtx.print("HUNTER FRIENDLY (F2 toggles)", .{});
         }
