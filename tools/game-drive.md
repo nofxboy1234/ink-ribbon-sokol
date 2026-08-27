@@ -1,6 +1,6 @@
 # game-drive.py
 
-Drive the native `ink_ribbon_character` game on a **dedicated, isolated X display**
+Drive the native `ink_ribbon_game` game on a **dedicated, isolated X display**
 so it never steals your desktop's focus or cursor.
 
 ## Why a separate display

@@ -25,7 +25,7 @@ import time
 
 
 ROOT = Path(__file__).resolve().parent.parent
-BINARY = ROOT / "zig-out/bin/ink_ribbon_character"
+BINARY = ROOT / "zig-out/bin/ink_ribbon_game"
 STATE_FILE = Path("/tmp/ink-ribbon-gamedrive.json")
 LOG_FILE = Path("/tmp/ink-ribbon-gamedrive.log")
 WINDOW_TITLE = "Character Mover"

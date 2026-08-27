@@ -408,6 +408,7 @@ pub const RenderState = struct {
     reticle_pipeline: sg.Pipeline = .{},
     ui_rect_pipeline: sg.Pipeline = .{},
     hud_circle_pipeline: sg.Pipeline = .{},
+    axis_gizmo_pipeline: sg.Pipeline = .{},
     post_pipeline: sg.Pipeline = .{},
     post_bindings: sg.Bindings = .{},
     scene_pass: sg.Pass = .{},

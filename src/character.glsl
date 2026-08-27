@@ -456,6 +456,95 @@ void main() {
 
 @program hud_circle reticle_vs hud_circle_fs
 
+@fs axis_gizmo_fs
+layout(binding = 6) uniform axis_gizmo_fs_params {
+    vec4 viewport; // resolution xy
+    vec4 settings; // center xy, radius, line thickness (pixels)
+    vec4 x_axis;   // screen dir xy (pixels at full radius), depth away from viewer
+    vec4 y_axis;
+    vec4 z_axis;
+};
+
+in vec2 uv;
+out vec4 frag_color;
+
+const vec3 AXIS_COLOR_X = vec3(0.949, 0.247, 0.310);
+const vec3 AXIS_COLOR_Y = vec3(0.483, 0.772, 0.208);
+const vec3 AXIS_COLOR_Z = vec3(0.212, 0.506, 0.960);
+const vec3 NEG_FILL = vec3(0.220, 0.220, 0.230);
+
+float sd_segment(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a;
+    vec2 ba = b - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+vec4 over(vec4 under, vec4 layer) {
+    float a = layer.a + under.a * (1.0 - layer.a);
+    vec3 rgb = (layer.rgb * layer.a + under.rgb * under.a * (1.0 - layer.a)) / max(a, 1e-5);
+    return vec4(rgb, a);
+}
+
+vec4 line_layer(vec2 p, vec2 d, vec3 rgb, float th) {
+    float dist = sd_segment(p, -d, d);
+    float mask = 1.0 - smoothstep(th - 0.75, th + 0.75, dist);
+    return vec4(rgb, 0.92 * mask);
+}
+
+vec4 pos_ball_layer(vec2 p, vec2 d, vec3 rgb, float r) {
+    float mask = 1.0 - smoothstep(r - 0.75, r + 0.75, length(p - d));
+    return vec4(rgb, 0.95 * mask);
+}
+
+vec4 neg_ball_layer(vec2 p, vec2 d, vec3 rgb, float r) {
+    float dist = length(p + d);
+    float fill = 1.0 - smoothstep(r - 0.75, r + 0.75, dist);
+    float rim = smoothstep(r - 3.25, r - 2.25, dist);
+    return vec4(mix(NEG_FILL, rgb, rim), fill * mix(0.9, 1.0, rim));
+}
+
+void main() {
+    vec2 pixel = vec2(uv.x * viewport.x, (1.0 - uv.y) * viewport.y); // y down
+    vec2 point = pixel - settings.xy;
+    float radius = settings.z;
+    float thickness = settings.w;
+    float ball_radius = radius * 0.30;
+
+    vec4 acc = vec4(0.0);
+    acc = over(acc, line_layer(point, x_axis.xy, AXIS_COLOR_X, thickness));
+    acc = over(acc, line_layer(point, y_axis.xy, AXIS_COLOR_Y, thickness));
+    acc = over(acc, line_layer(point, z_axis.xy, AXIS_COLOR_Z, thickness));
+
+    // axis handles: negative ends are dark spheres with a colored rim,
+    // positive ends are solid colored spheres; nearest to camera paints last
+    vec3 dep = vec3(x_axis.z, y_axis.z, z_axis.z);
+    int idx_a = dep.x > dep.y && dep.x > dep.z ? 0 : (dep.y > dep.z ? 1 : 2); // farthest
+    int idx_c = dep.x < dep.y && dep.x < dep.z ? 0 : (dep.y < dep.z ? 1 : 2); // nearest
+    int idx_b = 3 - idx_a - idx_c;                                            // middle
+
+    for (int i = 0; i < 3; i++) {
+        int idx = idx_a;
+        if (i == 1) idx = idx_b;
+        if (i == 2) idx = idx_c;
+        vec2 dir = idx == 0 ? x_axis.xy : (idx == 1 ? y_axis.xy : z_axis.xy);
+        vec3 rgb = idx == 0 ? AXIS_COLOR_X : (idx == 1 ? AXIS_COLOR_Y : AXIS_COLOR_Z);
+        acc = over(acc, neg_ball_layer(point, dir, rgb, ball_radius));
+    }
+    for (int i = 0; i < 3; i++) {
+        int idx = idx_a;
+        if (i == 1) idx = idx_b;
+        if (i == 2) idx = idx_c;
+        vec2 dir = idx == 0 ? x_axis.xy : (idx == 1 ? y_axis.xy : z_axis.xy);
+        vec3 rgb = idx == 0 ? AXIS_COLOR_X : (idx == 1 ? AXIS_COLOR_Y : AXIS_COLOR_Z);
+        acc = over(acc, pos_ball_layer(point, dir, rgb, ball_radius));
+    }
+    frag_color = acc;
+}
+@end
+
+@program axis_gizmo reticle_vs axis_gizmo_fs
+
 @fs post_fs
 layout(binding = 5) uniform post_fs_params {
     vec4 post_options; // texel x/y, paused amount, scene brightness

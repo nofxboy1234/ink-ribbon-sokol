@@ -413,6 +413,12 @@ pub fn initRenderer() void {
         .colors = blendingTargets(),
         .label = "character-hud-circle-pipeline",
     });
+    game.render.axis_gizmo_pipeline = sg.makePipeline(.{
+        .shader = sg.makeShader(shd.axisGizmoShaderDesc(sg.queryBackend())),
+        .depth = .{ .write_enabled = false, .compare = .ALWAYS },
+        .colors = blendingTargets(),
+        .label = "character-axis-gizmo-pipeline",
+    });
     game.render.post_pipeline = sg.makePipeline(.{
         .shader = sg.makeShader(shd.postShaderDesc(sg.queryBackend())),
         .label = "character-scene-post-pipeline",
@@ -798,6 +804,7 @@ pub fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
     drawRootMenuRects();
     drawHudShapes();
     drawHud(position);
+    drawAxisGizmo();
     sg.endPass();
     sg.commit();
 }
@@ -934,6 +941,45 @@ pub fn updateImpactInstances() void {
     }
     if (count > 0) sg.updateBuffer(game.render.impact_instances, sg.asRange(instances[0..count]));
     game.render.impact_instance_count = count;
+}
+
+pub fn drawAxisGizmo() void {
+    if (!game.debug.draw_physics or game.map.active or game.menu.kind != .none) return;
+    const scale = sapp.heightf() / 1080.0;
+    const radius = 52.0 * scale;
+    const margin = 16.0 * scale;
+    const thickness = @max(1.5 * scale, 1.25);
+
+    // camera basis, matching Mat4.lookAtRh with a world-up hint
+    const back = Vec3.scale(game.camera.forward, -1);
+    const right = Vec3.normalized(Vec3.cross(.{ .x = 0, .y = 1, .z = 0 }, back));
+    const up = Vec3.cross(back, right);
+
+    var dirs: [3]Vec4 = undefined;
+    const world_axes = [3]Vec3{ .{ .x = 1 }, .{ .y = 1 }, .{ .z = 1 } };
+    for (world_axes, 0..) |axis, index| {
+        dirs[index] = .{
+            .x = Vec3.dot(axis, right) * radius,
+            .y = -Vec3.dot(axis, up) * radius,
+            .z = Vec3.dot(axis, back),
+        };
+    }
+
+    const params: shd.AxisGizmoFsParams = .{
+        .viewport = .{ .x = sapp.widthf(), .y = sapp.heightf() },
+        .settings = .{
+            .x = sapp.widthf() - margin - radius,
+            .y = margin + radius,
+            .z = radius,
+            .w = thickness,
+        },
+        .x_axis = dirs[0],
+        .y_axis = dirs[1],
+        .z_axis = dirs[2],
+    };
+    sg.applyPipeline(game.render.axis_gizmo_pipeline);
+    sg.applyUniforms(shd.UB_axis_gizmo_fs_params, sg.asRange(&params));
+    sg.draw(0, 3, 1);
 }
 
 pub fn drawReticle() void {
