@@ -534,7 +534,12 @@ fn handleKey(value: sapp.Event, down: bool) void {
             moveMenuSlot(1);
         },
         .SPACE => if (down and !value.key_repeat) {
-            if (game.menu.kind != .none) confirmMenu();
+            if (game.menu.kind != .none) {
+                confirmMenu();
+            } else if (game.menu.kind == .none and !game.map.active and game.condition.canMove() and !playerActionActive() and hasBackwardQuickTurnIntent(game.input) and !game.input.aiming and !game.quick_turn.active) {
+                // moving backward: space doubles as an extra quick-turn key
+                beginQuickTurn();
+            }
         },
         .P => if (down and !value.key_repeat) openPause(),
         .ENTER => if (down and !value.key_repeat and game.menu.kind != .none) {
