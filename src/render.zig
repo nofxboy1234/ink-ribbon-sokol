@@ -7,6 +7,7 @@ const hunter = @import("hunter.zig");
 const deformation = @import("character_deformation.zig");
 const deformed_box = @import("deformed_box.zig");
 const shd = @import("generated/character_shader.zig");
+const ig = @import("cimgui");
 const inventory = @import("inventory.zig");
 const saves = @import("saves.zig");
 const state = @import("state.zig");
@@ -18,6 +19,8 @@ const sglue = sokol.glue;
 const slog = sokol.log;
 const sshape = sokol.shape;
 const sdtx = sokol.debugtext;
+const simgui = sokol.imgui;
+const sappimgui = sokol.appimgui;
 const Vec2 = math.Vec2;
 const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
@@ -551,6 +554,7 @@ pub fn recreateSceneTargets(width: i32, height: i32) void {
 }
 
 pub fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
+    const imgui_active = drawDebugFpsWindow(frame_time);
     // render internally at the chosen resolution; the post pass upscales to the
     // native swapchain, Steam-settings-menu style
     const option = presentation.resolutionOption(game.render_resolution);
@@ -808,6 +812,7 @@ pub fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
     drawHudShapes();
     drawHud(position);
     drawAxisGizmo();
+    if (imgui_active) simgui.render();
     sg.endPass();
     sg.commit();
 }
@@ -983,6 +988,44 @@ pub fn drawAxisGizmo() void {
     sg.applyPipeline(game.render.axis_gizmo_pipeline);
     sg.applyUniforms(shd.UB_axis_gizmo_fs_params, sg.asRange(&params));
     sg.draw(0, 3, 1);
+}
+
+var debug_imgui_was_open = false;
+
+pub fn drawDebugFpsWindow(frame_time: f32) bool {
+    const active = game.debug.draw_physics and game.debug.imgui_fps_open;
+    if (active) {
+        sappimgui.trackFrame();
+        simgui.newFrame(.{
+            .width = sapp.width(),
+            .height = sapp.height(),
+            .delta_time = frame_time,
+            .dpi_scale = sapp.dpiScale(),
+        });
+
+        // exact replica of sokol_appimgui.c's sappimgui_draw_hud_window(), driven
+        // by game.debug.imgui_fps_open so the backtick key can always re-open it
+        ig.igSetNextWindowPos(.{ .x = 12.0, .y = 26.0 }, ig.ImGuiCond_Always); // under the POS hud row
+        ig.igSetNextWindowSize(.{ .x = 256.0, .y = 30.0 }, ig.ImGuiCond_Once);
+        ig.igSetNextWindowBgAlpha(0.5);
+        ig.igPushStyleVar(ig.ImGuiStyleVar_WindowRounding, 8.0);
+        const flags = ig.ImGuiWindowFlags_AlwaysAutoResize | ig.ImGuiWindowFlags_NoDecoration;
+        var open = game.debug.imgui_fps_open;
+        if (ig.igBegin("[sapp] Hud", &open, flags)) {
+            sappimgui.drawHudWindowContent();
+        }
+        ig.igPopStyleVar();
+        ig.igEnd();
+        game.debug.imgui_fps_open = open;
+
+        if (!game.debug.imgui_fps_open and debug_imgui_was_open) {
+            // user closed the imgui window with its X button; give gameplay back the mouse
+            sapp.lockMouse(true);
+            sapp.showMouse(false);
+        }
+    }
+    debug_imgui_was_open = active;
+    return active;
 }
 
 pub fn drawReticle() void {
@@ -1222,8 +1265,6 @@ pub fn updateCapsuleInstances(player_position: b3.b3Pos, hunter_position: b3.b3P
 }
 
 pub fn drawHud(position: b3.b3Pos) void {
-    const frame_duration = sapp.frameDuration();
-    const fps = if (frame_duration > 0) 1.0 / frame_duration else 0;
     sdtx.canvas(sapp.widthf(), sapp.heightf());
     if (game.menu.kind == .pause) {
         var resolution_buffer: [48]u8 = undefined;
@@ -1246,28 +1287,25 @@ pub fn drawHud(position: b3.b3Pos) void {
         sdtx.draw();
         return;
     }
-    sdtx.pos(1.0, 1.0);
-    sdtx.color3b(255, 255, 255);
-    sdtx.print("FPS: {d:>6.1}", .{fps});
     if (game.map.active) {
-        sdtx.pos(1.0, 3.4);
+        sdtx.pos(1.0, 1.0);
         sdtx.color3b(255, 220, 120);
         sdtx.print("MAP (click save room, WASD pans, F3 hunter, CTRL/M exits)", .{});
-        sdtx.pos(1.0, 4.6);
+        sdtx.pos(1.0, 2.2);
         sdtx.print("HUNTER: {s} / {s}", .{
             if (game.map.hunter_paused) "PAUSED" else "MOVING",
             if (game.hunter_friendly) "FRIENDLY" else "HOSTILE",
         });
-        sdtx.pos(1.0, 5.8);
+        sdtx.pos(1.0, 3.4);
         sdtx.print("TARGET SAVE: {d}", .{game.map.selected_save + 1});
         switch (game.map.route_status) {
             .arrived => {
-                sdtx.pos(1.0, 7.0);
+                sdtx.pos(1.0, 4.6);
                 sdtx.color3b(80, 250, 123);
                 sdtx.print("SAVE ROOM REACHED", .{});
             },
             .no_path => {
-                sdtx.pos(1.0, 7.0);
+                sdtx.pos(1.0, 4.6);
                 sdtx.color3b(255, 85, 85);
                 sdtx.print("NO SAFE ROUTE", .{});
             },
@@ -1281,11 +1319,12 @@ pub fn drawHud(position: b3.b3Pos) void {
         }
     } else {
         if (game.debug.draw_physics) {
-            sdtx.pos(1.0, 2.2);
+            sdtx.pos(1.0, 1.0);
+            sdtx.color3b(255, 255, 255);
             sdtx.print("POS {d:.1} {d:.1} {d:.1}", .{ position.x, position.y, position.z });
         }
         if (game.hunter_friendly) {
-            sdtx.pos(1.0, 3.4);
+            sdtx.pos(1.0, 2.2);
             sdtx.color3b(80, 250, 123);
             sdtx.print("HUNTER FRIENDLY (F2 toggles)", .{});
         }

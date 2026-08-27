@@ -328,6 +328,7 @@ pub const HunterPunchAction = struct {
 
 pub const DebugState = struct {
     draw_physics: bool = false,
+    imgui_fps_open: bool = true,
 };
 
 pub const ResolutionChoice = enum(u8) { x720 = 0, x1080 = 1, x1440 = 2 };

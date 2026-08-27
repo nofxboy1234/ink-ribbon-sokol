@@ -16,6 +16,7 @@ const camera = @import("third_person_camera.zig");
 const player = @import("player.zig");
 const systems = @import("systems.zig");
 const game_audio = @import("game_audio.zig");
+const ig = @import("cimgui");
 const shd = @import("generated/character_shader.zig");
 
 const sapp = sokol.app;
@@ -25,6 +26,9 @@ const slog = sokol.log;
 const sshape = sokol.shape;
 const sdtx = sokol.debugtext;
 const saudio = sokol.audio;
+const simgui = sokol.imgui;
+const sappimgui = sokol.appimgui;
+const sgimgui = sokol.gfximgui;
 const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
 const Mat4 = math.Mat4;
@@ -240,6 +244,9 @@ fn init() callconv(.c) void {
         },
         .logger = .{ .func = slog.func },
     });
+    sgimgui.setup(.{});
+    sappimgui.setup();
+    simgui.setup(.{ .logger = .{ .func = slog.func } });
     systems.init(game);
     seedSpawnRandomness();
     saves.loadFromCwd(app_io.io());
@@ -387,6 +394,9 @@ fn cleanup() callconv(.c) void {
     game.world = b3.b3_nullWorldId;
     saudio.shutdown();
     sdtx.shutdown();
+    simgui.shutdown();
+    sappimgui.shutdown();
+    sgimgui.shutdown();
     sg.shutdown();
 }
 
@@ -444,6 +454,10 @@ fn activateGameplayInteraction() void {
 
 fn event(event_ptr: [*c]const sapp.Event) callconv(.c) void {
     const value = event_ptr[0];
+    if (game.debug.draw_physics and game.debug.imgui_fps_open) {
+        sappimgui.trackEvent(value);
+        if (simgui.handleEvent(value)) return;
+    }
     switch (value.type) {
         .KEY_DOWN, .KEY_UP => handleKey(value, value.type == .KEY_DOWN),
         .MOUSE_DOWN => handleMouseDown(value),
@@ -491,6 +505,11 @@ fn handleKey(value: sapp.Event, down: bool) void {
         },
         .F1 => if (down and !value.key_repeat) {
             game.debug.draw_physics = !game.debug.draw_physics;
+            syncDebugUiMouseLock();
+        },
+        .GRAVE_ACCENT => if (down and !value.key_repeat and game.debug.draw_physics) {
+            game.debug.imgui_fps_open = !game.debug.imgui_fps_open;
+            syncDebugUiMouseLock();
         },
         .F2 => if (down and !value.key_repeat and game.menu.kind == .none) {
             game.hunter_friendly = !game.hunter_friendly;
@@ -619,6 +638,19 @@ fn closeMenu() void {
         sapp.showMouse(false);
     }
     game.input = .{};
+}
+
+fn syncDebugUiMouseLock() void {
+    // while the imgui debug hud is visible the mouse must be free to click it
+    if (game.debug.draw_physics and game.debug.imgui_fps_open and game.menu.kind == .none) {
+        sapp.lockMouse(false);
+        sapp.showMouse(true);
+    } else if (game.menu.kind == .none) {
+        if (!game.map.active and !game.inventory_ui.active and !playerActionActive()) {
+            sapp.lockMouse(true);
+        }
+        sapp.showMouse(false);
+    }
 }
 
 fn openPause() void {

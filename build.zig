@@ -550,6 +550,7 @@ pub fn build(b: *Build) !void {
             .{ .name = "sokol", .module = dep_sokol.module("sokol") },
             .{ .name = "box3d", .module = box3d_bindings },
             .{ .name = "cgltf", .module = cgltf_bindings },
+            .{ .name = "cimgui", .module = cimgui_bindings },
         },
     });
     game_mod.addAnonymousImport("level_glb", .{

@@ -72,3 +72,12 @@ the game is controlled on its own display.
   position, recentring the cursor so it never stalls at a window edge. Real mice
   (which do fill valuators) are unaffected. This patch is local to this repo's
   dependency checkout; re-fetching the sokol dependency would revert it.
+
+## Additional commands
+
+```bash
+tools/game-drive.py clickat 155 51   # absolute left-click on the game window
+```
+`clickat` warps the cursor to window-relative coordinates (the game is fullscreen
+at the origin of its own display) and presses the left button — useful for
+imgui windows and other on-screen widgets.

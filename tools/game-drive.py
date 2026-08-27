@@ -41,6 +41,7 @@ DISPLAY_NUM = os.environ.get("INK_RIBBON_DISPLAY", "1")
 ALLOWED_KEYS = {
     "w", "a", "s", "d", "f", "i", "m", "p", "q", "r", "shift", "ctrl", "alt", "tab", "enter", "space",
     "f1", "f2", "f3", "f4", "escape",
+    "grave",
     "left", "right", "up", "down",
 }
 MAX_HOLD_SECONDS = 30.0
@@ -234,6 +235,10 @@ class XServer:
 
     def move_mouse(self, dx: int, dy: int) -> None:
         self.xtst.XTestFakeRelativeMotionEvent(self.handle, int(dx), int(dy), 0)
+        self.flush()
+
+    def move_mouse_absolute(self, x: int, y: int) -> None:
+        self.xtst.XTestFakeMotionEvent(self.handle, -1, int(x), int(y), 0)
         self.flush()
 
     def set_button(self, button: int, down: bool) -> None:
@@ -566,6 +571,26 @@ def sequence(items: list[str]) -> None:
         x.close()
 
 
+def click_at(x_coord: int, y_coord: int) -> None:
+    """Move the cursor to an absolute position on the isolated display and left-click.
+
+    Coordinates are window-relative; since the game runs fullscreen at the
+    origin of its own display they are also screen-absolute."""
+    x = connect()
+    try:
+        _ensure_focus(x)
+        x.move_mouse_absolute(x_coord, y_coord)
+        time.sleep(0.05)
+        x.set_button(1, True)
+        try:
+            time.sleep(0.05)
+        finally:
+            x.set_button(1, False)
+        time.sleep(0.15)
+    finally:
+        x.close()
+
+
 def look(dx: int, dy: int) -> None:
     x = connect()
     try:
@@ -779,6 +804,8 @@ def main() -> None:
         hold(rest[0].lower(), float(rest[1]))
     elif command == "sequence":
         sequence(rest)
+    elif command == "clickat" and len(rest) == 2:
+        click_at(int(rest[0]), int(rest[1]))
     elif command == "look" and len(rest) == 2:
         look(int(rest[0]), int(rest[1]))
     elif command == "aimlook" and len(rest) == 2:
