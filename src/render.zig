@@ -949,8 +949,8 @@ pub fn updateImpactInstances() void {
 pub fn drawAxisGizmo() void {
     if (!game.debug.draw_physics or game.map.active or game.menu.kind != .none) return;
     const scale = sapp.heightf() / 1080.0;
-    const radius = 52.0 * scale;
-    const margin = 16.0 * scale;
+    const radius = 26.0 * scale;
+    const margin = 26.0 * scale;
     const thickness = @max(1.5 * scale, 1.25);
 
     // camera basis, matching Mat4.lookAtRh with a world-up hint
