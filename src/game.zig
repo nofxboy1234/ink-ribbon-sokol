@@ -257,7 +257,64 @@ fn init() callconv(.c) void {
     sapp.lockMouse(true);
 }
 
+const debug_telemetry_file = "/tmp/ink-ribbon-debug.json";
+
+var debug_telemetry_accumulator: f32 = 0;
+
+const DebugTelemetry = struct {
+    x: f32 = 0,
+    z: f32 = 0,
+    yaw: f32 = 0,
+    tp: ?[3]f32 = null,
+};
+
+fn writeDebugTelemetry() void {
+    const io = app_io.io();
+    const data = std.json.Stringify.valueAlloc(std.heap.page_allocator, DebugTelemetry{
+        .x = game.character.position.x,
+        .z = game.character.position.z,
+        .yaw = game.character.yaw,
+    }, .{}) catch return;
+    defer std.heap.page_allocator.free(data);
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = debug_telemetry_file, .data = data }) catch {};
+}
+
+fn pollDebugTeleport() void {
+    const io = app_io.io();
+    const contents = std.Io.Dir.cwd().readFileAlloc(
+        io,
+        debug_telemetry_file,
+        std.heap.page_allocator,
+        std.Io.Limit.limited(4096),
+    ) catch return;
+    defer std.heap.page_allocator.free(contents);
+    const parsed = std.json.parseFromSlice(DebugTelemetry, std.heap.page_allocator, contents, .{
+        .ignore_unknown_fields = true,
+    }) catch return;
+    defer parsed.deinit();
+    const target = parsed.value.tp orelse return;
+
+    // teleport: snap the player and reset the orbit camera behind them
+    game.character.previous_position = .{ .x = target[0], .y = game.character.position.y, .z = target[1] };
+    game.character.position = .{ .x = target[0], .y = game.character.position.y, .z = target[1] };
+    game.character.velocity = .{};
+    game.character.yaw = target[2];
+    game.camera = .{};
+    game.camera.yaw = target[2];
+    game.quick_turn = .{};
+    game.input = .{};
+    writeDebugTelemetry();
+}
+
 fn frame() callconv(.c) void {
+    if (game.debug.draw_physics) {
+        debug_telemetry_accumulator += @as(f32, @floatCast(sapp.frameDuration()));
+        if (debug_telemetry_accumulator >= 0.1) {
+            debug_telemetry_accumulator = 0;
+            pollDebugTeleport();
+            writeDebugTelemetry();
+        }
+    }
     const frame_time: f32 = @floatCast(@min(sapp.frameDuration(), max_frame_dt));
     game.clock.addFrame(frame_time);
     updateNoticeTimer(frame_time);

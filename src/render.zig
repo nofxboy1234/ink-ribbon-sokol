@@ -1125,7 +1125,19 @@ pub fn drawHudShapes() void {
         drawHudCircle(game.map.cursor, 11, 2, .{ .x = 1, .y = 1, .z = 1, .w = 0.95 }, false);
         return;
     }
-    const target = game.interaction_target orelse return;
+    const target = game.interaction_target orelse {
+        // save fixtures use the same prompt style as item pickups
+        if (!presentation.nearSaveFixture()) return;
+        const center = interactionPromptCenter();
+        drawHudCircle(center, 15, 2.2, .{ .x = 1, .y = 1, .z = 1, .w = 0.98 }, false);
+        drawUiRect(
+            .{ .x = center.x + 27, .y = center.y - 10, .w = 20, .h = 20 },
+            .{ .x = 1.0, .y = 0.82, .z = 0.22, .w = 1 },
+            .{ .x = 0.9, .y = 0.9, .z = 0.88, .w = 1 },
+            1.5,
+        );
+        return;
+    };
     const center = interactionPromptCenter();
     drawHudCircle(center, 15, 2.2, .{ .x = 1, .y = 1, .z = 1, .w = 0.98 }, false);
     const color = targetColor(target);
@@ -1362,6 +1374,14 @@ pub fn drawHud(position: b3.b3Pos) void {
             sdtx.pos((center.x + 57) / 8.0, (center.y - 5) / 8.0);
             sdtx.color3b(248, 248, 244);
             sdtx.print("{s}", .{targetName(target)});
+        } else if (!game.map.active and presentation.nearSaveFixture()) {
+            const center = interactionPromptCenter();
+            sdtx.pos((center.x - 4) / 8.0, (center.y - 5) / 8.0);
+            sdtx.color3b(248, 248, 244);
+            sdtx.print("F", .{});
+            sdtx.pos((center.x + 57) / 8.0, (center.y - 5) / 8.0);
+            sdtx.color3b(248, 248, 244);
+            sdtx.print("Typewriter", .{});
         }
     }
     switch (game.notice) {
@@ -1385,11 +1405,6 @@ pub fn drawHud(position: b3.b3Pos) void {
         drawInventoryText();
     } else if (game.menu.kind != .none) {
         drawSaveMenu();
-    } else if (!game.map.active and nearSaveFixture()) {
-        const prompt = "PRESS F OR LEFT MOUSE TO SAVE";
-        sdtx.pos(sapp.widthf() / 8.0 / 2.0 - @as(f32, @floatFromInt(prompt.len)) / 2.0, sapp.heightf() / 8.0 - 2.0);
-        sdtx.color3b(255, 220, 120);
-        sdtx.print(prompt, .{});
     }
     sdtx.draw();
 }

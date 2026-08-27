@@ -25,6 +25,7 @@ import time
 
 
 ROOT = Path(__file__).resolve().parent.parent
+TELEMETRY_FILE = Path("/tmp/ink-ribbon-debug.json")
 BINARY = ROOT / "zig-out/bin/ink_ribbon_game"
 STATE_FILE = Path("/tmp/ink-ribbon-gamedrive.json")
 LOG_FILE = Path("/tmp/ink-ribbon-gamedrive.log")
@@ -571,6 +572,106 @@ def sequence(items: list[str]) -> None:
         x.close()
 
 
+def _glb_node_positions() -> dict[str, tuple[float, float, float]]:
+    """Named nodes and their world positions from level/level.glb (JSON chunk)."""
+    import json
+    import struct
+    glb = ROOT / "level" / "level.glb"
+    data = glb.read_bytes()
+    json_len = struct.unpack("<I", data[12:16])[0]
+    doc = json.loads(data[20:20 + json_len].decode("utf-8", errors="ignore"))
+    result: dict[str, tuple[float, float, float]] = {}
+    for node in doc.get("nodes", []):
+        name = node.get("name")
+        translation = node.get("translation")
+        if not name or not translation:
+            continue
+        result[name] = (float(translation[0]), float(translation[1]), float(translation[2]))
+    return result
+
+
+def where(query: str) -> None:
+    matches = {
+        name: position
+        for name, position in _glb_node_positions().items()
+        if query.lower() in name.lower()
+    }
+    if not matches:
+        fail(f"No level nodes match {query!r}")
+    for name, (x, y, z) in sorted(matches.items()):
+        print(f"{name}: x={x:g} y={y:g} z={z:g}")
+
+
+def _write_tp_request(x: float, z: float, yaw: float) -> None:
+    path = Path(TELEMETRY_FILE)
+    try:
+        state_data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        fail("No telemetry from the game yet; enable debug mode (F1) first")
+    if state_data.get("tp") is None and "x" not in state_data:
+        fail("No telemetry from the game yet; enable debug mode (F1) first")
+    state_data["tp"] = [x, z, yaw]
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state_data))
+    tmp.rename(path)
+
+
+def tp(target: str) -> None:
+    """Teleport the debug-mode player: `tp -7 -7 [yaw]` or `tp typewriter01`."""
+    parts = target.split()
+    owned_game_pid()
+    if len(parts) in (2, 3) and all(_is_float(p) for p in parts):
+        x, z = float(parts[0]), float(parts[1])
+        yaw = float(parts[2]) if len(parts) == 3 else 0.0
+    else:
+        matches = {
+            name: position
+            for name, position in _glb_node_positions().items()
+            if target.lower() in name.lower()
+        }
+        if not matches:
+            fail(f"No level nodes match {target!r}")
+        if len(matches) > 1:
+            fail(f"Ambiguous query {target!r}; matches: {', '.join(sorted(matches))}")
+        name, (x, _, z) = next(iter(matches.items()))
+        # face the same way the player would if they had walked there
+        yaw = _facing_toward(x, z)
+        print(f"teleporting to {name} (x={x:g} z={z:g})")
+    _write_tp_request(x, z, yaw)
+    time.sleep(0.4)
+    pos()
+
+
+def _is_float(text: str) -> bool:
+    try:
+        float(text)
+        return True
+    except ValueError:
+        return False
+
+
+def _read_telemetry() -> dict:
+    try:
+        return json.loads(Path(TELEMETRY_FILE).read_text())
+    except (OSError, ValueError):
+        fail("No telemetry from the game yet; enable debug mode (F1) first")
+
+
+def _facing_toward(x: float, z: float) -> float:
+    """Yaw that roughly re-traces the player's last movement (best effort)."""
+    data = _read_telemetry()
+    dx, dz = data.get("x", 0.0) - x, data.get("z", 0.0) - z
+    if dx == 0 and dz == 0:
+        return 0.0
+    import math
+    return math.atan2(-dx, -dz)
+
+
+def pos() -> None:
+    data = _read_telemetry()
+    print(f"x={data.get('x'):g} z={data.get('z'):g} yaw={data.get('yaw'):g}")
+
+
 def click_at(x_coord: int, y_coord: int) -> None:
     """Move the cursor to an absolute position on the isolated display and left-click.
 
@@ -806,6 +907,12 @@ def main() -> None:
         sequence(rest)
     elif command == "clickat" and len(rest) == 2:
         click_at(int(rest[0]), int(rest[1]))
+    elif command == "pos" and not rest:
+        pos()
+    elif command == "where" and len(rest) == 1:
+        where(rest[0])
+    elif command == "tp" and len(rest) >= 1:
+        tp(" ".join(rest))
     elif command == "look" and len(rest) == 2:
         look(int(rest[0]), int(rest[1]))
     elif command == "aimlook" and len(rest) == 2:

@@ -81,3 +81,18 @@ tools/game-drive.py clickat 155 51   # absolute left-click on the game window
 `clickat` warps the cursor to window-relative coordinates (the game is fullscreen
 at the origin of its own display) and presses the left button — useful for
 imgui windows and other on-screen widgets.
+
+## Debug navigation (debug mode / F1 must be on)
+
+The game writes `/tmp/ink-ribbon-debug.json` with the player position when debug
+mode is active, and reads teleport requests back from the same file.
+
+```bash
+tools/game-drive.py pos                      # print player x/z/yaw
+tools/game-drive.py where typewriter         # look up named nodes in level.glb
+tools/game-drive.py tp -7 5.6 0              # teleport to coords (x, z, yaw)
+tools/game-drive.py tp Typewriter_01         # teleport to a named node
+```
+`where`/`tp` resolve names from the level.glb JSON chunk, so any authored object
+(typewriters, pickups, doors) is directly addressable — no Blender round-trip
+needed.
