@@ -1,8 +1,3 @@
-//------------------------------------------------------------------------------
-//  triangle.zig
-//
-//  Vertex buffer, shader, pipeline state object.
-//------------------------------------------------------------------------------
 const sokol = @import("sokol");
 const slog = sokol.log;
 const sg = sokol.gfx;
@@ -21,17 +16,14 @@ export fn init() void {
         .logger = .{ .func = slog.func },
     });
 
-    // create vertex buffer with triangle vertices
     state.bind.vertex_buffers[0] = sg.makeBuffer(.{
         .data = sg.asRange(&[_]f32{
-            // positions         colors
             0.0,  0.5,  0.5, 1.0, 0.0, 0.0, 1.0,
             0.5,  -0.5, 0.5, 0.0, 1.0, 0.0, 1.0,
             -0.5, -0.5, 0.5, 0.0, 0.0, 1.0, 1.0,
         }),
     });
 
-    // create a shader and pipeline object
     state.pip = sg.makePipeline(.{
         .shader = sg.makeShader(shd.triangleShaderDesc(sg.queryBackend())),
         .layout = init: {
@@ -44,7 +36,6 @@ export fn init() void {
 }
 
 export fn frame() void {
-    // default pass-action clears to grey
     sg.beginPass(.{ .swapchain = sglue.swapchain() });
     sg.applyPipeline(state.pip);
     sg.applyBindings(state.bind);
@@ -64,8 +55,7 @@ pub fn main() void {
         .cleanup_cb = cleanup,
         .width = 640,
         .height = 480,
-        // This 2D example never performs depth testing, so it does not need a
-        // depth buffer alongside the window's color buffer.
+
         .depth_format = .NONE,
         .icon = .{ .sokol_default = true },
         .window_title = "triangle.zig",

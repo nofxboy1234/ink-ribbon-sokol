@@ -1,15 +1,3 @@
-//------------------------------------------------------------------------------
-// LearnOpenGL: Advanced OpenGL / Face culling
-//
-// Scene controls:
-//   1 - no culling
-//   2 - cull back faces; counter-clockwise triangles are front-facing
-//   3 - cull front faces; counter-clockwise triangles are front-facing
-//   4 - cull back faces; clockwise triangles are front-facing
-//   5 - cull both sides (demonstrated by skipping the draw)
-//   I - move the camera outside/inside the cube
-//   Space - pause/resume rotation
-//------------------------------------------------------------------------------
 const sokol = @import("sokol");
 const sapp = sokol.app;
 const sg = sokol.gfx;
@@ -47,51 +35,45 @@ const state = struct {
     var rotation_y: f32 = 30;
 };
 
-// Each face has separate vertices so that it can have a distinct colour. The
-// index order below makes every triangle counter-clockwise when viewed from
-// outside that face, matching the LearnOpenGL chapter's corrected cube data.
 const cube_vertices = [_]Vertex{
-    // Back (-Z), red.
     .{ .position = .{ -0.5, -0.5, -0.5 }, .color = .{ 0.55, 0.12, 0.12 } },
     .{ .position = .{ 0.5, -0.5, -0.5 }, .color = .{ 0.55, 0.12, 0.12 } },
     .{ .position = .{ 0.5, 0.5, -0.5 }, .color = .{ 0.55, 0.12, 0.12 } },
     .{ .position = .{ -0.5, 0.5, -0.5 }, .color = .{ 0.55, 0.12, 0.12 } },
-    // Front (+Z), orange.
+
     .{ .position = .{ -0.5, -0.5, 0.5 }, .color = .{ 0.95, 0.32, 0.12 } },
     .{ .position = .{ 0.5, -0.5, 0.5 }, .color = .{ 0.95, 0.32, 0.12 } },
     .{ .position = .{ 0.5, 0.5, 0.5 }, .color = .{ 0.95, 0.32, 0.12 } },
     .{ .position = .{ -0.5, 0.5, 0.5 }, .color = .{ 0.95, 0.32, 0.12 } },
-    // Left (-X), green.
+
     .{ .position = .{ -0.5, -0.5, -0.5 }, .color = .{ 0.16, 0.72, 0.32 } },
     .{ .position = .{ -0.5, 0.5, -0.5 }, .color = .{ 0.16, 0.72, 0.32 } },
     .{ .position = .{ -0.5, 0.5, 0.5 }, .color = .{ 0.16, 0.72, 0.32 } },
     .{ .position = .{ -0.5, -0.5, 0.5 }, .color = .{ 0.16, 0.72, 0.32 } },
-    // Right (+X), blue.
+
     .{ .position = .{ 0.5, -0.5, -0.5 }, .color = .{ 0.14, 0.42, 0.92 } },
     .{ .position = .{ 0.5, 0.5, -0.5 }, .color = .{ 0.14, 0.42, 0.92 } },
     .{ .position = .{ 0.5, 0.5, 0.5 }, .color = .{ 0.14, 0.42, 0.92 } },
     .{ .position = .{ 0.5, -0.5, 0.5 }, .color = .{ 0.14, 0.42, 0.92 } },
-    // Bottom (-Y), purple.
+
     .{ .position = .{ -0.5, -0.5, -0.5 }, .color = .{ 0.60, 0.20, 0.80 } },
     .{ .position = .{ -0.5, -0.5, 0.5 }, .color = .{ 0.60, 0.20, 0.80 } },
     .{ .position = .{ 0.5, -0.5, 0.5 }, .color = .{ 0.60, 0.20, 0.80 } },
     .{ .position = .{ 0.5, -0.5, -0.5 }, .color = .{ 0.60, 0.20, 0.80 } },
-    // Top (+Y), yellow.
+
     .{ .position = .{ -0.5, 0.5, -0.5 }, .color = .{ 0.95, 0.78, 0.16 } },
     .{ .position = .{ -0.5, 0.5, 0.5 }, .color = .{ 0.95, 0.78, 0.16 } },
     .{ .position = .{ 0.5, 0.5, 0.5 }, .color = .{ 0.95, 0.78, 0.16 } },
     .{ .position = .{ 0.5, 0.5, -0.5 }, .color = .{ 0.95, 0.78, 0.16 } },
 };
 
-// Swap the last two vertices of any triangle and its winding reverses. These
-// indices point every geometric face outward with CCW front-face winding.
 const cube_indices = [_]u16{
-    0, 2, 1, 0, 3, 2, // back
-    4, 5, 6, 4, 6, 7, // front
-    8, 10, 9, 8, 11, 10, // left
-    12, 13, 14, 12, 14, 15, // right
-    16, 18, 17, 16, 19, 18, // bottom
-    20, 21, 22, 20, 22, 23, // top
+    0,  2,  1,  0,  3,  2,
+    4,  5,  6,  4,  6,  7,
+    8,  10, 9,  8,  11, 10,
+    12, 13, 14, 12, 14, 15,
+    16, 18, 17, 16, 19, 18,
+    20, 21, 22, 20, 22, 23,
 };
 
 export fn init() void {
@@ -107,8 +89,7 @@ export fn init() void {
         .shader = sg.makeShader(shd.faceCullingShaderDesc(sg.queryBackend())),
         .index_type = .UINT16,
         .depth = .{ .compare = .LESS, .write_enabled = true },
-        // OpenGL defaults to CCW front faces. Sokol defaults to CW, so this
-        // lesson sets CCW explicitly to make the mapping unambiguous.
+
         .face_winding = .CCW,
     };
     desc.layout.attrs[shd.ATTR_face_culling_position].format = .FLOAT3;
@@ -153,9 +134,6 @@ export fn frame() void {
 
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
 
-    // GL_FRONT_AND_BACK removes every triangle. Sokol deliberately has no
-    // equivalent CullMode, so mode 5 demonstrates the result by omitting the
-    // draw call entirely.
     if (state.mode != .both) {
         sg.applyPipeline(switch (state.mode) {
             .none => state.no_culling_pipeline,

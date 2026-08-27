@@ -1,5 +1,3 @@
-//! Fixed-grid survival-horror inventory state.
-
 const std = @import("std");
 
 pub const columns = 5;

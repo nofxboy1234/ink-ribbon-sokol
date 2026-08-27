@@ -1,5 +1,3 @@
-// LearnOpenGL Light Casters: directional light.
-// A directional light has a direction but no position or distance falloff.
 const sokol = @import("sokol");
 const lesson = @import("light_casters.zig");
 

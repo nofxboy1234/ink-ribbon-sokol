@@ -1,11 +1,3 @@
-//! LearnOpenGL "Advanced Data" mapped to sokol_gfx.
-//!
-//! The three triangles look similar, but their vertex bytes are organized in
-//! three different ways:
-//!   left:   one immutable, interleaved buffer
-//!   middle: one immutable buffer containing grouped attribute arrays
-//!   right:  reserved storage replaced once per frame with updateBuffer()
-
 const std = @import("std");
 const sokol = @import("sokol");
 const sapp = sokol.app;
@@ -39,7 +31,6 @@ export fn init() void {
         .logger = .{ .func = slog.func },
     });
 
-    // Interleaved bytes: position, colour, position, colour, ...
     const interleaved = [_]Vertex{
         .{ .position = .{ -0.90, -0.35 }, .color = .{ 1.00, 0.25, 0.20 } },
         .{ .position = .{ -0.40, -0.35 }, .color = .{ 0.20, 1.00, 0.35 } },
@@ -50,8 +41,6 @@ export fn init() void {
         .label = "interleaved vertices",
     });
 
-    // Grouped bytes: all positions first, followed by all colours. The same
-    // buffer is bound twice with different starting offsets.
     const planar = PlanarData{
         .positions = .{
             .{ -0.25, -0.35 }, .{ 0.25, -0.35 }, .{ 0.00, 0.45 },
@@ -68,8 +57,6 @@ export fn init() void {
     state.planar_bindings.vertex_buffers[1] = planar_buffer;
     state.planar_bindings.vertex_buffer_offsets[1] = @offsetOf(PlanarData, "colors");
 
-    // Reserve GPU buffer capacity without initial data. stream_update says the
-    // CPU will replace this buffer every frame.
     state.dynamic_bindings.vertex_buffers[0] = sg.makeBuffer(.{
         .size = @sizeOf([3]Vertex),
         .usage = .{ .vertex_buffer = true, .stream_update = true },
@@ -127,8 +114,6 @@ export fn frame() void {
         .{ .position = .{ 0.65, 0.45 + wave }, .color = .{ 0.30, 0.50, 1.00 } },
     };
 
-    // updateBuffer replaces bytes in storage that was reserved in init().
-    // It is allowed once per buffer per frame.
     sg.updateBuffer(state.dynamic_bindings.vertex_buffers[0], sg.asRange(&streamed));
 
     var pass_action = sg.PassAction{};

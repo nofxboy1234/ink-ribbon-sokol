@@ -1,10 +1,3 @@
-//------------------------------------------------------------------------------
-// LearnOpenGL: Lighting / Colors
-//
-// This recreates the chapter's scene: a coral object cube at the origin and a
-// small white cube at the light's world-space position. This chapter does not
-// calculate directional lighting yet; it only multiplies light and object RGB.
-//------------------------------------------------------------------------------
 const sokol = @import("sokol");
 const slog = sokol.log;
 const sg = sokol.gfx;
@@ -15,18 +8,13 @@ const mat4 = @import("cube_math.zig").Mat4;
 const shd = @import("generated/colors_shader.zig");
 
 const state = struct {
-    // Both objects reuse one cube mesh. They need separate pipelines because the
-    // object and lamp use different fragment shaders.
     var bind: sg.Bindings = .{};
     var object_pipeline: sg.Pipeline = .{};
     var lamp_pipeline: sg.Pipeline = .{};
     var pass_action: sg.PassAction = .{};
 
-    // These values match the LearnOpenGL chapter.
     const light_position = vec3{ .x = 1.2, .y = 1.0, .z = 2.0 };
     const view = mat4.lookat(
-        // The tutorial's camera is movable. This static version starts farther
-        // back and slightly above so both the object and lamp are visible.
         .{ .x = 0.0, .y = 1.0, .z = 6.0 },
         vec3.zero(),
         vec3.up(),
@@ -39,18 +27,14 @@ export fn init() void {
         .logger = .{ .func = slog.func },
     });
 
-    // A position-only cube. Each face has four vertices so its two triangles
-    // can share indices. The object cube and lamp cube both reuse these bytes.
     state.bind.vertex_buffers[0] = sg.makeBuffer(.{
         .data = sg.asRange(&[_]f32{
-            // zig fmt: off
-            -0.5, -0.5, -0.5,   0.5, -0.5, -0.5,   0.5,  0.5, -0.5,  -0.5,  0.5, -0.5,
-            -0.5, -0.5,  0.5,   0.5, -0.5,  0.5,   0.5,  0.5,  0.5,  -0.5,  0.5,  0.5,
-            -0.5, -0.5, -0.5,  -0.5,  0.5, -0.5,  -0.5,  0.5,  0.5,  -0.5, -0.5,  0.5,
-             0.5, -0.5, -0.5,   0.5,  0.5, -0.5,   0.5,  0.5,  0.5,   0.5, -0.5,  0.5,
-            -0.5, -0.5, -0.5,  -0.5, -0.5,  0.5,   0.5, -0.5,  0.5,   0.5, -0.5, -0.5,
-            -0.5,  0.5, -0.5,  -0.5,  0.5,  0.5,   0.5,  0.5,  0.5,   0.5,  0.5, -0.5,
-            // zig fmt: on
+            -0.5, -0.5, -0.5, 0.5,  -0.5, -0.5, 0.5,  0.5,  -0.5, -0.5, 0.5,  -0.5,
+            -0.5, -0.5, 0.5,  0.5,  -0.5, 0.5,  0.5,  0.5,  0.5,  -0.5, 0.5,  0.5,
+            -0.5, -0.5, -0.5, -0.5, 0.5,  -0.5, -0.5, 0.5,  0.5,  -0.5, -0.5, 0.5,
+            0.5,  -0.5, -0.5, 0.5,  0.5,  -0.5, 0.5,  0.5,  0.5,  0.5,  -0.5, 0.5,
+            -0.5, -0.5, -0.5, -0.5, -0.5, 0.5,  0.5,  -0.5, 0.5,  0.5,  -0.5, -0.5,
+            -0.5, 0.5,  -0.5, -0.5, 0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  -0.5,
         }),
     });
     state.bind.index_buffer = sg.makeBuffer(.{
@@ -65,9 +49,6 @@ export fn init() void {
         }),
     });
 
-    // A pipeline is Sokol's bundle of shader program, vertex-input layout,
-    // depth rules, culling, and other fixed draw state. This replaces much of
-    // the repeated OpenGL bind/configure state in the chapter.
     state.object_pipeline = makePipeline(
         sg.makeShader(shd.objectShaderDesc(sg.queryBackend())),
         shd.ATTR_object_position,
@@ -105,8 +86,6 @@ export fn frame() void {
     const projection = mat4.persp(45.0, aspect, 0.1, 100.0);
     const view_projection = mat4.mul(projection, state.view);
 
-    // The large object stays at the world origin, so its model matrix is the
-    // identity matrix: local and world coordinates are currently identical.
     const object_vs_params = shd.VsParams{
         .mvp = mat4.mul(view_projection, mat4.identity()),
     };
@@ -115,8 +94,6 @@ export fn frame() void {
         .light_color = .{ 1.0, 1.0, 1.0, 1.0 },
     };
 
-    // Translate the marker to the actual light position, and scale the unit cube
-    // to one fifth of its original size. Translation is applied after scaling.
     const lamp_model = mat4.mul(
         mat4.translate(state.light_position),
         uniformScale(0.2),
@@ -127,16 +104,12 @@ export fn frame() void {
 
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
 
-    // Draw the coral object. Its fragment shader multiplies white light by the
-    // coral reflection color: (1,1,1) * (1,0.5,0.31) = (1,0.5,0.31).
     sg.applyPipeline(state.object_pipeline);
     sg.applyBindings(state.bind);
     sg.applyUniforms(shd.UB_vs_params, sg.asRange(&object_vs_params));
     sg.applyUniforms(shd.UB_object_fs_params, sg.asRange(&object_fs_params));
     sg.draw(0, 36, 1);
 
-    // Reuse the mesh with the lamp pipeline. Its fragment shader always emits
-    // white, so it visually marks the position used by later lighting examples.
     sg.applyPipeline(state.lamp_pipeline);
     sg.applyBindings(state.bind);
     sg.applyUniforms(shd.UB_vs_params, sg.asRange(&lamp_vs_params));

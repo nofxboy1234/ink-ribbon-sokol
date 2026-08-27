@@ -1,10 +1,3 @@
-//! Runtime level data imported exclusively from `level/level.glb`.
-//!
-//! Blender owns the scene layout. Each mesh node becomes an oriented Box3D
-//! collision/render box and a required `PlayerSpawn` node defines the start
-//! position, facing direction, and ground height. An optional `HunterSpawn`
-//! node enables the hunter and defines his starting position.
-
 const std = @import("std");
 const math = @import("math.zig");
 const blender_level = @import("blender_level.zig");
@@ -16,9 +9,6 @@ pub const Vec4 = math.Vec4;
 pub const max_boxes = blender_level.max_boxes;
 pub const light_capacity = blender_level.max_lights;
 
-// Runtime metadata arrays remain empty until equivalent nodes are authored in
-// Blender and added to the importer. They keep the reusable interaction and
-// rendering systems independent from any hard-coded level layout.
 pub const DoorAxis = enum { x, z };
 pub const DoorLock = enum { none, purple, pink, cyan };
 pub const DoorDef = struct {
@@ -145,9 +135,6 @@ pub const Level = struct {
         return null;
     }
 
-    // True when a door sits on the perimeter of a save room and is therefore
-    // the room's entrance. Save rooms are sealed against the hunter at these
-    // doorways with hunter-only barriers, so the hunter can never enter.
     pub fn isSaveRoomDoor(self: *const Level, door: DoorDef) bool {
         const margin: f32 = 0.75;
         for (0..self.save_target_count) |index| {
@@ -158,9 +145,7 @@ pub const Level = struct {
             const near_max_x = @abs(door.position.x - bounds.max_x) <= margin;
             const near_min_z = @abs(door.position.z - bounds.min_z) <= margin;
             const near_max_z = @abs(door.position.z - bounds.max_z) <= margin;
-            // On a vertical boundary, centred along the wall's length. This
-            // ignores corridors shared with other rooms because the door must
-            // hug the save room's own edge.
+
             if ((near_min_x or near_max_x) and within_z) return true;
             if ((near_min_z or near_max_z) and within_x) return true;
         }
@@ -187,8 +172,6 @@ pub fn loadDefault() void {
     current = build() catch |err| std.debug.panic("failed to import level/level.glb: {s}", .{@errorName(err)});
 }
 
-// Items, doors, save fixtures, and hunter encounters will be enabled once
-// their metadata is authored in Blender rather than hard-coded in Zig.
 pub fn hasGameplayMetadata() bool {
     return current.door_count > 0 or current.pickup_count > 0 or current.breakable_count > 0 or current.save_fixture_count > 0;
 }
@@ -245,9 +228,6 @@ fn build() !Level {
             .is_roof = box.is_roof,
         };
 
-        // Geometry whose top is at the spawn's ground plane supports walking;
-        // geometry extending above that plane is an obstacle for navigation.
-        // This avoids guessing which arbitrarily named mesh is the floor.
         converted.nav_block = converted.center.y + projectedHalfExtent(converted, .y) > result.ground_y + 0.05;
         result.addBox(converted);
 
@@ -319,10 +299,7 @@ fn build() !Level {
             .min_z = center.z - half.z,
             .max_z = center.z + half.z,
         };
-        // GLB node order is not the authoring order, so a fixture can never
-        // be paired with its room by index alone. Match each room to the
-        // typewriter fixture contained in its bounds; fall back to the room
-        // center when no fixture sits inside it.
+
         var target = center;
         for (imported.save_fixtures[0..imported.save_fixture_count]) |fixture| {
             const position = fromImported(fixture);
@@ -356,15 +333,9 @@ fn build() !Level {
         result.light_count += 1;
     }
 
-    // Save rooms are sanctuary: the hunter must not be able to enter them.
-    // Drop an invisible, hunter-only barrier across each save room's doorway
-    // so the hunter's navmesh cells, capsule, and line of sight are all blocked
-    // while the player walks straight through (the player's query mask excludes
-    // the hunter_block category and the player navmesh skips these boxes).
     for (result.doorSlice()) |door| {
         if (!result.isSaveRoomDoor(door)) continue;
-        // At least as tall as the hunter's 3.0 m capsule (a doorway is authored
-        // >= 3.1 m), so the barrier always spans the full opening.
+
         const height = @max(door.height, 3.1);
         const half_thickness: f32 = 0.5;
         const half = if (door.axis == .x)
@@ -382,8 +353,6 @@ fn build() !Level {
         });
     }
 
-    // These neutral defaults support reusable systems without placing any
-    // old level content into the fresh Blender scene.
     result.save_room_target = if (result.save_target_count > 0) result.save_targets[0] else result.player_spawn;
     if (result.save_target_count == 0) {
         result.save_targets[0] = result.player_spawn;

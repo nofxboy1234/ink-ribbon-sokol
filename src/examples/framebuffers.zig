@@ -1,18 +1,3 @@
-//------------------------------------------------------------------------------
-// LearnOpenGL: Advanced OpenGL / Framebuffers
-//
-// This scene performs two render passes:
-//   1. Draw two textured cubes and a floor into an offscreen texture.
-//   2. Draw that texture over one full-screen quad, optionally filtering it.
-//
-// Scene controls:
-//   1 - normal framebuffer texture
-//   2 - inverted colours
-//   3 - grayscale
-//   4 - sharpen kernel
-//   5 - blur kernel
-//   6 - edge-detection kernel
-//------------------------------------------------------------------------------
 const model_image = @import("model_image");
 const sokol = @import("sokol");
 const sapp = sokol.app;
@@ -54,8 +39,6 @@ const state = struct {
     var floor_bindings: sg.Bindings = .{};
     var screen_bindings: sg.Bindings = .{};
 
-    // One image can have more than one view. The colour image has an
-    // attachment view for pass 1 and a texture view for pass 2.
     var color_image: sg.Image = .{};
     var depth_image: sg.Image = .{};
     var color_attachment_view: sg.View = .{};
@@ -68,7 +51,6 @@ const state = struct {
 };
 
 const cube_vertices = [_]SceneVertex{
-    // Back and front.
     .{ .position = .{ -0.5, -0.5, -0.5 }, .uv = .{ 0, 0 } },
     .{ .position = .{ 0.5, -0.5, -0.5 }, .uv = .{ 1, 0 } },
     .{ .position = .{ 0.5, 0.5, -0.5 }, .uv = .{ 1, 1 } },
@@ -77,7 +59,7 @@ const cube_vertices = [_]SceneVertex{
     .{ .position = .{ 0.5, -0.5, 0.5 }, .uv = .{ 1, 0 } },
     .{ .position = .{ 0.5, 0.5, 0.5 }, .uv = .{ 1, 1 } },
     .{ .position = .{ -0.5, 0.5, 0.5 }, .uv = .{ 0, 1 } },
-    // Left and right.
+
     .{ .position = .{ -0.5, -0.5, -0.5 }, .uv = .{ 0, 0 } },
     .{ .position = .{ -0.5, 0.5, -0.5 }, .uv = .{ 1, 0 } },
     .{ .position = .{ -0.5, 0.5, 0.5 }, .uv = .{ 1, 1 } },
@@ -86,7 +68,7 @@ const cube_vertices = [_]SceneVertex{
     .{ .position = .{ 0.5, 0.5, -0.5 }, .uv = .{ 1, 0 } },
     .{ .position = .{ 0.5, 0.5, 0.5 }, .uv = .{ 1, 1 } },
     .{ .position = .{ 0.5, -0.5, 0.5 }, .uv = .{ 0, 1 } },
-    // Bottom and top.
+
     .{ .position = .{ -0.5, -0.5, -0.5 }, .uv = .{ 0, 0 } },
     .{ .position = .{ -0.5, -0.5, 0.5 }, .uv = .{ 1, 0 } },
     .{ .position = .{ 0.5, -0.5, 0.5 }, .uv = .{ 1, 1 } },
@@ -112,8 +94,6 @@ const floor_vertices = [_]SceneVertex{
 
 const floor_indices = [_]u16{ 0, 1, 2, 0, 2, 3 };
 
-// Two triangles cover normalized device coordinates from -1 to +1. No camera
-// or matrix is needed because these positions are already in clip space.
 const screen_vertices = [_]ScreenVertex{
     .{ .position = .{ -1, -1 }, .uv = .{ 0, 0 } },
     .{ .position = .{ 1, -1 }, .uv = .{ 1, 0 } },
@@ -140,8 +120,7 @@ export fn init() void {
     var scene_pipeline_desc: sg.PipelineDesc = .{
         .shader = sg.makeShader(shd.sceneShaderDesc(sg.queryBackend())),
         .index_type = .UINT16,
-        // The offscreen target is deliberately single-sampled. These formats
-        // must match the images attached to its pass.
+
         .sample_count = 1,
         .depth = .{
             .pixel_format = .DEPTH,
@@ -223,9 +202,6 @@ fn decodeTexture(encoded: []const u8) sg.View {
     return sg.makeView(.{ .texture = .{ .image = image } });
 }
 
-// Recreate screen-sized attachments after a window or browser-canvas resize.
-// The attachment and texture views refer to the same colour image but describe
-// two different ways that image will be used by the GPU.
 fn recreateOffscreenTargets(width: i32, height: i32) void {
     if (width == state.target_width and height == state.target_height) return;
 
@@ -277,8 +253,6 @@ export fn frame() void {
     const view = Mat4.lookat(.{ .x = 0, .y = 1.2, .z = 5 }, .{ .x = 0, .y = 0, .z = -1 }, Vec3.up());
     const view_projection = Mat4.mul(projection, view);
 
-    // Pass 1: the scene is rendered offscreen. Nothing from this pass is shown
-    // by the window directly; its colour fragments are stored in color_image.
     state.offscreen_pass.action = state.offscreen_action;
     sg.beginPass(state.offscreen_pass);
     sg.applyPipeline(state.scene_pipeline);
@@ -291,8 +265,6 @@ export fn frame() void {
     drawSceneObject(view_projection, Mat4.identity(), floor_indices.len);
     sg.endPass();
 
-    // Pass 2: return to the window's swapchain and cover it with one quad. Its
-    // fragment shader reads the completed colour image from pass 1.
     const screen_params = shd.ScreenFsParams{
         .post_options = .{
             @floatFromInt(@backingInt(state.effect)),

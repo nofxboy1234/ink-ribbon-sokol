@@ -1,9 +1,3 @@
-//------------------------------------------------------------------------------
-// LearnOpenGL: Lighting / Light casters
-//
-// Shared renderer for three small entry points. Keeping the geometry, camera,
-// and material identical makes it easier to compare only the light model.
-//------------------------------------------------------------------------------
 const std = @import("std");
 const sokol = @import("sokol");
 const slog = sokol.log;
@@ -43,8 +37,6 @@ const state = struct {
     var lamp_pipeline: sg.Pipeline = .{};
     var pass_action: sg.PassAction = .{};
 
-    // These are the ten positions used by LearnOpenGL. Every draw uses the
-    // same cube vertex buffer but gets a different model matrix.
     const cube_positions = [_]vec3{
         .{ .x = 0.0, .y = 0.0, .z = 0.0 },
         .{ .x = 2.0, .y = 5.0, .z = -15.0 },
@@ -65,42 +57,37 @@ pub fn init() void {
         .logger = .{ .func = slog.func },
     });
 
-    // Four vertices per face let each face have its own normal and complete UV
-    // range. The index buffer then turns each group of four into two triangles.
     state.bind.vertex_buffers[0] = sg.makeBuffer(.{
         .data = sg.asRange(&[_]Vertex{
-            // zig fmt: off
-            // -Z face
-            .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{  0.0,  0.0, -1.0 }, .uv = .{ 0.0, 0.0 } },
-            .{ .position = .{  0.5, -0.5, -0.5 }, .normal = .{  0.0,  0.0, -1.0 }, .uv = .{ 1.0, 0.0 } },
-            .{ .position = .{  0.5,  0.5, -0.5 }, .normal = .{  0.0,  0.0, -1.0 }, .uv = .{ 1.0, 1.0 } },
-            .{ .position = .{ -0.5,  0.5, -0.5 }, .normal = .{  0.0,  0.0, -1.0 }, .uv = .{ 0.0, 1.0 } },
-            // +Z face
-            .{ .position = .{ -0.5, -0.5,  0.5 }, .normal = .{  0.0,  0.0,  1.0 }, .uv = .{ 0.0, 0.0 } },
-            .{ .position = .{  0.5, -0.5,  0.5 }, .normal = .{  0.0,  0.0,  1.0 }, .uv = .{ 1.0, 0.0 } },
-            .{ .position = .{  0.5,  0.5,  0.5 }, .normal = .{  0.0,  0.0,  1.0 }, .uv = .{ 1.0, 1.0 } },
-            .{ .position = .{ -0.5,  0.5,  0.5 }, .normal = .{  0.0,  0.0,  1.0 }, .uv = .{ 0.0, 1.0 } },
-            // -X face
-            .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{ -1.0,  0.0,  0.0 }, .uv = .{ 0.0, 0.0 } },
-            .{ .position = .{ -0.5,  0.5, -0.5 }, .normal = .{ -1.0,  0.0,  0.0 }, .uv = .{ 1.0, 0.0 } },
-            .{ .position = .{ -0.5,  0.5,  0.5 }, .normal = .{ -1.0,  0.0,  0.0 }, .uv = .{ 1.0, 1.0 } },
-            .{ .position = .{ -0.5, -0.5,  0.5 }, .normal = .{ -1.0,  0.0,  0.0 }, .uv = .{ 0.0, 1.0 } },
-            // +X face
-            .{ .position = .{  0.5, -0.5, -0.5 }, .normal = .{  1.0,  0.0,  0.0 }, .uv = .{ 0.0, 0.0 } },
-            .{ .position = .{  0.5,  0.5, -0.5 }, .normal = .{  1.0,  0.0,  0.0 }, .uv = .{ 1.0, 0.0 } },
-            .{ .position = .{  0.5,  0.5,  0.5 }, .normal = .{  1.0,  0.0,  0.0 }, .uv = .{ 1.0, 1.0 } },
-            .{ .position = .{  0.5, -0.5,  0.5 }, .normal = .{  1.0,  0.0,  0.0 }, .uv = .{ 0.0, 1.0 } },
-            // -Y face
-            .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{  0.0, -1.0,  0.0 }, .uv = .{ 0.0, 0.0 } },
-            .{ .position = .{ -0.5, -0.5,  0.5 }, .normal = .{  0.0, -1.0,  0.0 }, .uv = .{ 1.0, 0.0 } },
-            .{ .position = .{  0.5, -0.5,  0.5 }, .normal = .{  0.0, -1.0,  0.0 }, .uv = .{ 1.0, 1.0 } },
-            .{ .position = .{  0.5, -0.5, -0.5 }, .normal = .{  0.0, -1.0,  0.0 }, .uv = .{ 0.0, 1.0 } },
-            // +Y face
-            .{ .position = .{ -0.5,  0.5, -0.5 }, .normal = .{  0.0,  1.0,  0.0 }, .uv = .{ 0.0, 0.0 } },
-            .{ .position = .{ -0.5,  0.5,  0.5 }, .normal = .{  0.0,  1.0,  0.0 }, .uv = .{ 1.0, 0.0 } },
-            .{ .position = .{  0.5,  0.5,  0.5 }, .normal = .{  0.0,  1.0,  0.0 }, .uv = .{ 1.0, 1.0 } },
-            .{ .position = .{  0.5,  0.5, -0.5 }, .normal = .{  0.0,  1.0,  0.0 }, .uv = .{ 0.0, 1.0 } },
-            // zig fmt: on
+            .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{ 0.0, 0.0, -1.0 }, .uv = .{ 0.0, 0.0 } },
+            .{ .position = .{ 0.5, -0.5, -0.5 }, .normal = .{ 0.0, 0.0, -1.0 }, .uv = .{ 1.0, 0.0 } },
+            .{ .position = .{ 0.5, 0.5, -0.5 }, .normal = .{ 0.0, 0.0, -1.0 }, .uv = .{ 1.0, 1.0 } },
+            .{ .position = .{ -0.5, 0.5, -0.5 }, .normal = .{ 0.0, 0.0, -1.0 }, .uv = .{ 0.0, 1.0 } },
+
+            .{ .position = .{ -0.5, -0.5, 0.5 }, .normal = .{ 0.0, 0.0, 1.0 }, .uv = .{ 0.0, 0.0 } },
+            .{ .position = .{ 0.5, -0.5, 0.5 }, .normal = .{ 0.0, 0.0, 1.0 }, .uv = .{ 1.0, 0.0 } },
+            .{ .position = .{ 0.5, 0.5, 0.5 }, .normal = .{ 0.0, 0.0, 1.0 }, .uv = .{ 1.0, 1.0 } },
+            .{ .position = .{ -0.5, 0.5, 0.5 }, .normal = .{ 0.0, 0.0, 1.0 }, .uv = .{ 0.0, 1.0 } },
+
+            .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{ -1.0, 0.0, 0.0 }, .uv = .{ 0.0, 0.0 } },
+            .{ .position = .{ -0.5, 0.5, -0.5 }, .normal = .{ -1.0, 0.0, 0.0 }, .uv = .{ 1.0, 0.0 } },
+            .{ .position = .{ -0.5, 0.5, 0.5 }, .normal = .{ -1.0, 0.0, 0.0 }, .uv = .{ 1.0, 1.0 } },
+            .{ .position = .{ -0.5, -0.5, 0.5 }, .normal = .{ -1.0, 0.0, 0.0 }, .uv = .{ 0.0, 1.0 } },
+
+            .{ .position = .{ 0.5, -0.5, -0.5 }, .normal = .{ 1.0, 0.0, 0.0 }, .uv = .{ 0.0, 0.0 } },
+            .{ .position = .{ 0.5, 0.5, -0.5 }, .normal = .{ 1.0, 0.0, 0.0 }, .uv = .{ 1.0, 0.0 } },
+            .{ .position = .{ 0.5, 0.5, 0.5 }, .normal = .{ 1.0, 0.0, 0.0 }, .uv = .{ 1.0, 1.0 } },
+            .{ .position = .{ 0.5, -0.5, 0.5 }, .normal = .{ 1.0, 0.0, 0.0 }, .uv = .{ 0.0, 1.0 } },
+
+            .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{ 0.0, -1.0, 0.0 }, .uv = .{ 0.0, 0.0 } },
+            .{ .position = .{ -0.5, -0.5, 0.5 }, .normal = .{ 0.0, -1.0, 0.0 }, .uv = .{ 1.0, 0.0 } },
+            .{ .position = .{ 0.5, -0.5, 0.5 }, .normal = .{ 0.0, -1.0, 0.0 }, .uv = .{ 1.0, 1.0 } },
+            .{ .position = .{ 0.5, -0.5, -0.5 }, .normal = .{ 0.0, -1.0, 0.0 }, .uv = .{ 0.0, 1.0 } },
+
+            .{ .position = .{ -0.5, 0.5, -0.5 }, .normal = .{ 0.0, 1.0, 0.0 }, .uv = .{ 0.0, 0.0 } },
+            .{ .position = .{ -0.5, 0.5, 0.5 }, .normal = .{ 0.0, 1.0, 0.0 }, .uv = .{ 1.0, 0.0 } },
+            .{ .position = .{ 0.5, 0.5, 0.5 }, .normal = .{ 0.0, 1.0, 0.0 }, .uv = .{ 1.0, 1.0 } },
+            .{ .position = .{ 0.5, 0.5, -0.5 }, .normal = .{ 0.0, 1.0, 0.0 }, .uv = .{ 0.0, 1.0 } },
         }),
     });
     state.bind.index_buffer = sg.makeBuffer(.{
@@ -171,16 +158,12 @@ fn makeTextureView(pixels: []const u8) sg.View {
 
 pub fn frame(comptime scene: Scene) void {
     const aspect = sapp.widthf() / sapp.heightf();
-    // cube_math.persp accepts a horizontal FOV. 58.1 degrees at 4:3 is the
-    // equivalent of LearnOpenGL/GLM's 45-degree vertical FOV.
+
     const camera = cameraForScene(scene);
     const projection = mat4.persp(58.1, aspect, 0.1, 100.0);
     const view = mat4.lookat(camera.position, camera.target, vec3.up());
     const view_projection = mat4.mul(projection, view);
 
-    // Directional light has no meaningful position. Point light uses the
-    // chapter's earlier lamp position. Spotlight attaches both its position
-    // and direction to the camera, making it behave like a flashlight.
     const light_position = switch (scene) {
         .directional => vec3.zero(),
         .point => vec3{ .x = 1.2, .y = 1.0, .z = 2.0 },
@@ -218,7 +201,7 @@ pub fn frame(comptime scene: Scene) void {
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
     sg.applyPipeline(state.pipeline);
     sg.applyBindings(state.bind);
-    // The flashlight/material values are shared by all ten crates this frame.
+
     sg.applyUniforms(shd.UB_lighting_fs_params, sg.asRange(&lighting_fs_params));
 
     for (state.cube_positions, 0..) |position, index| {
@@ -229,15 +212,12 @@ pub fn frame(comptime scene: Scene) void {
             .mvp = mat4.mul(view_projection, model),
             .model = model,
         };
-        // Only the model/MVP changes between crates. The vertex buffer and
-        // textures stay bound, which is a common pattern for repeated meshes.
+
         sg.applyUniforms(shd.UB_object_vs_params, sg.asRange(&object_vs_params));
         sg.draw(0, 36, 1);
     }
 
     if (scene == .point) {
-        // The small white cube makes the point light's world-space position
-        // visible, just like the final point-light frame in the chapter.
         const lamp_model = mat4.mul(mat4.translate(light_position), uniformScale(0.2));
         const lamp_vs_params = shd.LampVsParams{
             .mvp = mat4.mul(view_projection, lamp_model),
@@ -259,20 +239,16 @@ const Camera = struct {
 
 fn cameraForScene(comptime scene: Scene) Camera {
     return switch (scene) {
-        // Pulled back so the ten separated crates fit into the frame, as in
-        // the chapter's final directional-light image.
         .directional => .{
             .position = .{ .x = 0.0, .y = 0.0, .z = 6.0 },
             .target = .{ .x = 0.0, .y = 0.0, .z = 0.0 },
         },
-        // Slightly raised and pulled back. This keeps the point-light marker
-        // on the right while collecting most crates near the middle.
+
         .point => .{
             .position = .{ .x = -1.7, .y = 1.0, .z = 9.0 },
             .target = .{ .x = 0.0, .y = 0.0, .z = -3.0 },
         },
-        // Close and aimed to the right of the origin, producing the crowded,
-        // off-centre flashlight composition of the final spotlight frame.
+
         .spotlight => .{
             .position = .{ .x = -0.35, .y = 0.15, .z = 2.55 },
             .target = .{ .x = 0.85, .y = -0.15, .z = 0.0 },

@@ -43,8 +43,6 @@ pub const State = struct {
 
 pub const plane_capacity = 16;
 
-// Query callbacks write into this fixed scratch buffer. Keeping transient planes
-// out of State makes the hot character data compact and avoids frame allocations.
 pub const MoverScratch = struct {
     planes: [plane_capacity]b3.b3CollisionPlane = @splat(.{}),
     count: usize = 0,
@@ -53,10 +51,9 @@ pub const MoverScratch = struct {
 pub const player_query_category: u64 = 1 << 1;
 pub const hunter_query_category: u64 = 1 << 3;
 pub const level_category: u64 = 1 << 0;
-// Used by save-room barriers: collides with (and occludes) the hunter only.
+
 pub const hunter_block_category: u64 = 1 << 4;
-// Dynamic hinged doors have their own category so actor proxies can push them
-// while the query-driven player and hunter capsules also collide reciprocally.
+
 pub const door_category: u64 = 1 << 5;
 
 pub fn update(
@@ -82,18 +79,13 @@ pub fn update(
 
     state.velocity.x = approach(state.velocity.x, target.x, horizontalRate(config, move, dt));
     state.velocity.z = approach(state.velocity.z, target.z, horizontalRate(config, move, dt));
-    // Contact planes support the capsule while grounded. Applying gravity here
-    // would be clipped along a ramp and continuously create downhill motion.
+
     if (state.grounded) {
         state.velocity.y = 0;
     } else {
         state.velocity.y -= config.gravity * dt;
     }
 
-    // Facing follows RE2R movement rules: while walking the body turns to face
-    // away from the camera (camera-forward) for any input direction, so the
-    // camera-relative translation below reads as strafing; while running the
-    // body turns toward the camera-relative movement direction instead.
     if (input.aiming or lengthSquared(wish) > 0.0001) {
         const target_yaw = if (input.run and !input.aiming)
             std.math.atan2(wish.x, wish.z)
@@ -107,8 +99,6 @@ pub fn update(
     const desired_position = offset(state.position, scale(state.velocity, dt));
     moveCapsule(scratch, world, &state.position, &capsule, subPos(desired_position, state.position), moverFilter(), config.solve_iterations);
 
-    // Refresh planes at the final pose: these are the contacts used for both
-    // grounding and velocity clipping during the next tick.
     collectPlanes(scratch, world, state.position, &capsule, moverFilter());
     state.grounded = false;
     for (scratch.planes[0..scratch.count]) |plane| {
@@ -133,9 +123,6 @@ fn localCapsule(config: Config) b3.b3Capsule {
     };
 }
 
-// Slide a capsule from its current position along `delta`, resolving contact
-// with level geometry via plane solving and shape casting. Shared by the
-// player controller and the hunter AI, which move explicitly (no rigid body).
 pub fn moveCapsule(
     scratch: *MoverScratch,
     world: b3.b3WorldId,
@@ -146,9 +133,7 @@ pub fn moveCapsule(
     iterations: u8,
 ) void {
     var i: u8 = 0;
-    // Resolve toward one fixed destination, so each iteration only moves the
-    // remaining distance and never re-applies the full displacement (which
-    // would multiply movement speed by the iteration count in open space).
+
     const desired = offset(position.*, delta);
     while (i < iterations) : (i += 1) {
         collectPlanes(scratch, world, position.*, capsule, filter);
@@ -168,9 +153,6 @@ pub fn hunterFilter() b3.b3QueryFilter {
     return filter;
 }
 
-// Query the final capsule pose for a supporting contact. Query-driven actors
-// use this after moving so they remain seated on floors and begin falling as
-// soon as they leave an unsupported edge.
 pub fn capsuleGrounded(
     scratch: *MoverScratch,
     world: b3.b3WorldId,
@@ -237,11 +219,6 @@ fn approachAngle(value: f32, target: f32, amount: f32) f32 {
     return value + delta;
 }
 
-/// Shared vector/position arithmetic over Box3D's native types. These are
-/// equivalent to the Vec3 methods in math.zig, but operate on b3.b3Vec3 and
-/// b3.b3Pos so the mover and hunter systems can compose without converting.
-/// b3.b3Pos is a b3.b3Vec3 with an extra padding member, so a position offset
-/// is the same component-wise addition used by the physics query movers.
 pub fn add(a: b3.b3Vec3, b: b3.b3Vec3) b3.b3Vec3 {
     return .{ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z };
 }

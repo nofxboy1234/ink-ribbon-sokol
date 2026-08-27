@@ -1,36 +1,17 @@
-//! Grid navigation mesh with A* pathfinding, the same approach the RE Engine
-//! uses for Mr X in Resident Evil 2 Remake: a walkability map baked from the
-//! level's collision geometry, searched with A*, returning a route the
-//! character's own movement walks waypoint by waypoint.
-//!
-//! The level is a set of axis-aligned boxes, so a uniform grid is an exact
-//! navmesh proxy. Every cell whose footprint (grown by the agent's capsule
-//! radius) touches a collidable, above-floor box is marked blocked; the floor
-//! slab and roof never block, and non-collidable decor is ignored. Paths are
-//! 8-connected with corner-cut prevention so routes stay clean through doors.
-
 const std = @import("std");
 const b3 = @import("box3d");
 const level = @import("level.zig");
 
-// Maximum authored footprint at 0.5 m resolution. The current Blender level
-// occupies x ~= [-34, 34], z ~= [-45, 11], with a margin for later edits.
 pub const level_cols = 160;
 pub const level_rows = 128;
 
-// How many cells around the start/goal A* will snap to when the exact cell is
-// blocked (e.g. a patrol point inside a wall) or outside the grid.
 const snap_ring: usize = 10;
 
 pub const BuildOptions = struct {
     radius: f32,
     include_hunter_block: bool = true,
     restrict_to_level_bounds: bool = false,
-    // Overhead geometry (doorway lintels) must not seal the floor cells an
-    // actor crosses beneath it: a box whose underside sits at least this far
-    // above `walk_y` is ignored by the bake, matching the height-aware physics
-    // capsules that already pass under it. Defaults to infinity so plain
-    // grids keep treating every above-floor box as solid.
+
     head_clearance: f32 = std.math.inf(f32),
     walk_y: f32 = 0,
 };
@@ -56,19 +37,16 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
 
         const OpenEntry = struct { cell: usize, f: f32 };
 
-        // Walkability map (baked once from the level geometry).
         blocked: [N]bool = @splat(false),
 
-        // A* scratch, owned by the grid so findPath needs no allocation.
         open: [N]OpenEntry = undefined,
         open_count: usize = 0,
-        // Heap position of each cell currently in the open set, or -1.
+
         open_index: [N]i32 = @splat(-1),
         g_cost: [N]f32 = undefined,
         came_from: [N]i32 = @splat(-1),
         closed: [N]bool = @splat(false),
-        // Connected-component id per walkable cell, so an unreachable goal can
-        // be rejected instantly instead of by a full search.
+
         component: [N]i32 = @splat(-1),
         components_valid: bool = false,
 
@@ -110,9 +88,6 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
             return !self.blocked[cell];
         }
 
-        // Mark every cell whose expanded footprint overlaps a blocking box.
-        // Only collidable, non-roof boxes whose top rises above the walk
-        // surface block navigation; the floor slab and roof are ignored.
         pub fn buildFromBoxes(self: *Self, boxes: []const level.Box, radius: f32) void {
             self.buildFromBoxesWithOptions(boxes, .{ .radius = radius });
         }
@@ -124,8 +99,7 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
                 const cx = self.worldX(cell % cols);
                 const cz = self.worldZ(cell / cols);
                 const half = cell_size * 0.5 + options.radius;
-                // A fresh blockout may begin as only a floor slab, so its
-                // bounds can define the valid navigation region at runtime.
+
                 if (options.restrict_to_level_bounds and
                     (!level.insideWalkBounds(cx, cz) or !level.supportsWalk(cx, cz)))
                 {
@@ -136,8 +110,7 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
                     if (!box.collidable or !box.nav_block or box.is_roof) continue;
                     if (!options.include_hunter_block and box.hunter_block) continue;
                     if (box.center.y + box.half_extents.y <= 0.05) continue;
-                    // Lintels and other overhead spans sit above every actor's
-                    // capsule; blocking them would seal each authored doorway.
+
                     if (box.center.y - level.projectedHalfExtent(box, .y) >=
                         options.walk_y + options.head_clearance) continue;
                     if (aabbXZ(cx, cz, half, box)) {
@@ -165,10 +138,6 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
             }
         }
 
-        // Tag every walkable cell with its connected component. A* connectivity
-        // (cardinal moves always allowed, diagonals only with both orthogonals
-        // open) is exactly 4-connectivity, so two cells are A* reachable from
-        // each other iff they share a component.
         pub fn computeComponents(self: *Self) void {
             @setRuntimeSafety(false);
             @memset(self.component[0..], -1);
@@ -205,14 +174,10 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
             self.components_valid = true;
         }
 
-        // The nearest walkable cell to (x, z), scanning outward in square rings.
         pub fn nearestWalkable(self: *Self, x: f32, z: f32, max_ring: usize) ?usize {
             return self.nearestWalkableInner(x, z, max_ring, null);
         }
 
-        // The same snapped start cell used by an influenced path query. Map
-        // rendering uses this to avoid drawing an unchecked connector from a
-        // conservatively blocked player cell into the returned route.
         pub fn nearestWalkableWithInfluence(self: *Self, x: f32, z: f32, influence: HunterInfluence) ?usize {
             return self.nearestWalkableInner(x, z, snap_ring, influence);
         }
@@ -223,8 +188,7 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
             const cz = std.math.clamp(z, min_z, max_z);
             var start_col: i32 = @intFromFloat(@floor((cx - min_x) / cell_size));
             var start_row: i32 = @intFromFloat(@floor((cz - min_z) / cell_size));
-            // Clamp the cell, not the world coordinate, so a point on the outer
-            // edge still snaps to the innermost cell.
+
             start_col = std.math.clamp(start_col, 0, cols - 1);
             start_row = std.math.clamp(start_row, 0, rows - 1);
             var ring: usize = 0;
@@ -248,17 +212,10 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
             return null;
         }
 
-        // A* from the nearest walkable cell to (start_x, start_z) to the
-        // nearest walkable cell to (goal_x, goal_z). Writes cell-center
-        // waypoints (start cell excluded, goal included) into `out` and returns
-        // the count; 0 when unreachable or both ends snap to the same cell.
         pub fn findPath(self: *Self, start_x: f32, start_z: f32, goal_x: f32, goal_z: f32, out: []b3.b3Pos) usize {
             return self.findPathInner(start_x, start_z, goal_x, goal_z, out, null);
         }
 
-        // Constant-time reachability after the component labels have been
-        // built. Unlike findPath, this also returns true when both points land
-        // in the same cell and does not run A* merely to validate authored data.
         pub fn isReachable(self: *Self, start_x: f32, start_z: f32, goal_x: f32, goal_z: f32) bool {
             const start = self.nearestWalkable(start_x, start_z, snap_ring) orelse return false;
             const goal = self.nearestWalkable(goal_x, goal_z, snap_ring) orelse return false;
@@ -266,10 +223,6 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
             return self.component[start] == self.component[goal];
         }
 
-        // A* with one circular hunter influence. The hard radius excludes every
-        // cell whose square footprint touches it. The nonnegative danger cost
-        // is added to base edge costs and falls linearly to zero at the danger
-        // radius, leaving the octile heuristic admissible.
         pub fn findPathWithInfluence(self: *Self, start_x: f32, start_z: f32, goal_x: f32, goal_z: f32, out: []b3.b3Pos, influence: HunterInfluence) usize {
             return self.findPathInner(start_x, start_z, goal_x, goal_z, out, influence);
         }
@@ -280,7 +233,7 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
             const goal = self.nearestWalkableInner(goal_x, goal_z, snap_ring, influence) orelse return 0;
             if (start == goal) return 0;
             if (!self.components_valid) self.computeComponents();
-            // Unreachable goal: reject it without searching.
+
             if (self.component[start] != self.component[goal]) return 0;
 
             @memset(self.g_cost[0..], std.math.floatMax(f32));
@@ -310,9 +263,7 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
                         if (nc < 0 or nc >= cols or nr < 0 or nr >= rows) continue;
                         const neighbor: usize = @intCast(@as(i32, nr) * cols + nc);
                         if (self.blocked[neighbor] or self.isHardBlocked(neighbor, influence) or self.closed[neighbor]) continue;
-                        // Corner-cut prevention: a diagonal step needs both
-                        // orthogonal neighbours open under both baked and
-                        // dynamic blocking so paths don't clip walls or danger.
+
                         if (dc != 0 and dr != 0) {
                             const beside_col: usize = @intCast(cur_col + dc);
                             const beside_row: usize = @intCast(cur_row + dr);
@@ -379,8 +330,6 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
             return steps;
         }
 
-        // Exact octile distance between two cells: a consistent heuristic, so
-        // A* expands each cell at most once.
         fn heuristic(self: *Self, a: usize, b: usize) f32 {
             _ = self;
             const dc: f32 = @floatFromInt(@abs(@as(i32, @intCast(a % cols)) - @as(i32, @intCast(b % cols))));
@@ -450,34 +399,23 @@ pub fn Grid(comptime cols: comptime_int, comptime rows: comptime_int) type {
     };
 }
 
-// True when the XZ square around (cx, cz) overlaps the box's XZ footprint.
 fn aabbXZ(cx: f32, cz: f32, half: f32, box: level.Box) bool {
     return @abs(cx - box.center.x) <= level.projectedHalfExtent(box, .x) + half and
         @abs(cz - box.center.z) <= level.projectedHalfExtent(box, .z) + half;
 }
 
-// Shared fixed-size grids, rebuilt whenever the runtime level changes.
 pub var level_nav: Grid(level_cols, level_rows) = .{};
 pub var player_nav: Grid(level_cols, level_rows) = .{};
 
-// buildFromBoxes grows each sampled cell by its own 0.25 m half-width. Only
-// the remainder of an actor radius belongs in the explicit inflation value.
-// Passing the player's full 0.35 m radius here used to turn its effective
-// clearance into 0.60 m and seal otherwise traversable authored doorways.
-const hunter_grid_inflation: f32 = 0.25; // 0.50 m capsule - 0.25 m cell
-const player_grid_inflation: f32 = 0.10; // 0.35 m capsule - 0.25 m cell
+const hunter_grid_inflation: f32 = 0.25;
+const player_grid_inflation: f32 = 0.10;
 
-// Capsule heights (2 * (half segment + radius) from the controller configs).
-// A doorway lintel must sit above these for its gap to stay open in the bake;
-// author_level.py keeps every lintel at >= 3.1 m so the hunter fits too.
-const hunter_head_clearance: f32 = 3.0; // 2 * (1.00 + 0.50)
-const player_head_clearance: f32 = 1.8; // 2 * (0.55 + 0.35)
+const hunter_head_clearance: f32 = 3.0;
+const player_head_clearance: f32 = 1.8;
 
 pub fn buildLevel(unlocked_doors: u32) void {
     const boxes = level.current.boxSlice();
-    // A nav cell already contributes 0.25 m of footprint. The remaining
-    // 0.25 m gives the hunter's 0.5 m capsule its true wall clearance without
-    // conservatively sealing ordinary doorways.
+
     level_nav.buildFromBoxesWithOptions(boxes, .{
         .radius = hunter_grid_inflation,
         .restrict_to_level_bounds = true,
@@ -491,9 +429,6 @@ pub fn buildLevel(unlocked_doors: u32) void {
     bakePlayerNav(unlocked_doors);
 }
 
-// Rebuild just the player grid. The map route uses this to treat doors whose
-// key the player already carries as traversable, without ever opening those
-// doors in the hunter's grid.
 pub fn buildPlayerNav(unlocked_doors: u32) void {
     bakePlayerNav(unlocked_doors);
 }
@@ -528,11 +463,6 @@ test "unlocked authored doors connect actors to every save room" {
         try std.testing.expect(player_reachable);
     }
 
-    // Check both sides of every doorway directly. A room's furniture may
-    // intentionally keep the large hunter away from a corner fixture, but it
-    // must never split the navigation components at the doorway itself. The
-    // one exception is a save room's entrance, which is deliberately sealed
-    // against the hunter, so it is checked separately below.
     for (level.current.doorSlice()) |door| {
         if (level.current.isSaveRoomDoor(door)) continue;
         const a = if (door.axis == .x)
@@ -547,8 +477,6 @@ test "unlocked authored doors connect actors to every save room" {
         try std.testing.expect(door.height >= 3.1);
     }
 
-    // Each save-room entrance barricades the hunter while the player still
-    // walks through, so the room stays reachable for saving but is sanctuary.
     for (level.current.doorSlice()) |door| {
         if (!level.current.isSaveRoomDoor(door)) continue;
         const a = if (door.axis == .x)
@@ -576,8 +504,7 @@ test "player routing opens a locked door once its key is held" {
     };
     const purple_bit = @as(u32, 1) << @intCast(purple_index);
     const spawn = level.current.player_spawn;
-    // The purple archive save room is the one whose bounds contain the point
-    // just inside the purple doorway.
+
     const purple_room = blk: {
         for (level.current.doorSlice()) |door| {
             if (door.lock != .purple) continue;
@@ -593,18 +520,14 @@ test "player routing opens a locked door once its key is held" {
     };
     const target = level.current.save_targets[purple_room];
 
-    // Locked: the sealed purple door splits the player's grid.
     try std.testing.expect(!player_nav.isReachable(spawn.x, spawn.z, target.x, target.z));
 
-    // Holding the key reopens just that door for route planning.
     buildPlayerNav(purple_bit);
     try std.testing.expect(player_nav.isReachable(spawn.x, spawn.z, target.x, target.z));
 
-    // The hunter's grid must still treat the door as locked.
     try std.testing.expect(!level_nav.isReachable(spawn.x, spawn.z, target.x, target.z));
 }
 
-// Validate imported actor spawns against their respective navigation grids.
 pub fn validateLevel() bool {
     if (!level.current.validate()) return false;
     const player_cell = player_nav.cellAt(level.current.player_spawn.x, level.current.player_spawn.z) orelse return false;
@@ -761,7 +684,7 @@ test "navmesh routes through a door gap" {
     var grid: Grid(12, 12) = .{};
     var row: usize = 0;
     while (row < 12) : (row += 1) {
-        if (row == 5 or row == 6) continue; // two-cell door
+        if (row == 5 or row == 6) continue;
         grid.blocked[row * 12 + 6] = true;
     }
 

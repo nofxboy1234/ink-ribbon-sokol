@@ -17,8 +17,7 @@ pub const Config = struct {
     hip_fov_degrees: f32 = 58,
     aim_fov_degrees: f32 = 50,
     aim_transition_rate: f32 = 12,
-    // Vertical aiming primarily rotates the sightline from shoulder height.
-    // Retaining only a little boom orbit avoids lifting the camera into roofs.
+
     aim_vertical_orbit_scale: f32 = 0.15,
     pitch_min: f32 = -0.65,
     pitch_max: f32 = 0.75,
@@ -89,7 +88,7 @@ pub fn update(
     }
 
     const forward: Vec3 = .{ .x = @sin(state.visual_yaw), .y = 0, .z = @cos(state.visual_yaw) };
-    // In this right-handed Y-up world, screen-right is forward cross up.
+
     const right: Vec3 = .{ .x = -forward.z, .y = 0, .z = forward.x };
     state.basis = .{
         .forward = .{ .x = forward.x, .y = 0, .z = forward.z },
@@ -136,9 +135,6 @@ pub fn addRecoil(state: *State, amount: f32) void {
     state.recoil_pitch = @max(-0.12, state.recoil_pitch - amount);
 }
 
-// Return the shoulder camera to the actor's forward heading. The target angles
-// move first and the existing visual-angle smoothing follows them, avoiding a
-// snap even when the camera begins near the angle wrap at +/-pi.
 pub fn beginRecenter(state: *State, actor_yaw: f32) void {
     state.recenter_yaw = actor_yaw;
     state.recentering = true;

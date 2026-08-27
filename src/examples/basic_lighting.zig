@@ -1,9 +1,3 @@
-//------------------------------------------------------------------------------
-// LearnOpenGL: Lighting / Basic Lighting
-//
-// This builds on colors.zig by adding the three parts of the Phong lighting
-// model: ambient, diffuse, and specular. Lighting is calculated per fragment.
-//------------------------------------------------------------------------------
 const sokol = @import("sokol");
 const slog = sokol.log;
 const sg = sokol.gfx;
@@ -24,7 +18,6 @@ const state = struct {
     var lamp_pipeline: sg.Pipeline = .{};
     var pass_action: sg.PassAction = .{};
 
-    // Match the Colors chapter's light position and keep the simple fixed camera.
     const light_position = vec3{ .x = 1.2, .y = 1.0, .z = 2.0 };
     const camera_position = vec3{ .x = 0.0, .y = 1.0, .z = 6.0 };
     const view = mat4.lookat(camera_position, vec3.zero(), vec3.up());
@@ -36,43 +29,37 @@ export fn init() void {
         .logger = .{ .func = slog.func },
     });
 
-    // Every face has its own four vertices because a cube corner belongs to
-    // three faces with three different normals. A normal is a unit direction
-    // perpendicular to its face.
     state.bind.vertex_buffers[0] = sg.makeBuffer(.{
         .data = sg.asRange(&[_]Vertex{
-            // zig fmt: off
-            // -Z face
-            .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{  0.0,  0.0, -1.0 } },
-            .{ .position = .{  0.5, -0.5, -0.5 }, .normal = .{  0.0,  0.0, -1.0 } },
-            .{ .position = .{  0.5,  0.5, -0.5 }, .normal = .{  0.0,  0.0, -1.0 } },
-            .{ .position = .{ -0.5,  0.5, -0.5 }, .normal = .{  0.0,  0.0, -1.0 } },
-            // +Z face
-            .{ .position = .{ -0.5, -0.5,  0.5 }, .normal = .{  0.0,  0.0,  1.0 } },
-            .{ .position = .{  0.5, -0.5,  0.5 }, .normal = .{  0.0,  0.0,  1.0 } },
-            .{ .position = .{  0.5,  0.5,  0.5 }, .normal = .{  0.0,  0.0,  1.0 } },
-            .{ .position = .{ -0.5,  0.5,  0.5 }, .normal = .{  0.0,  0.0,  1.0 } },
-            // -X face
-            .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{ -1.0,  0.0,  0.0 } },
-            .{ .position = .{ -0.5,  0.5, -0.5 }, .normal = .{ -1.0,  0.0,  0.0 } },
-            .{ .position = .{ -0.5,  0.5,  0.5 }, .normal = .{ -1.0,  0.0,  0.0 } },
-            .{ .position = .{ -0.5, -0.5,  0.5 }, .normal = .{ -1.0,  0.0,  0.0 } },
-            // +X face
-            .{ .position = .{  0.5, -0.5, -0.5 }, .normal = .{  1.0,  0.0,  0.0 } },
-            .{ .position = .{  0.5,  0.5, -0.5 }, .normal = .{  1.0,  0.0,  0.0 } },
-            .{ .position = .{  0.5,  0.5,  0.5 }, .normal = .{  1.0,  0.0,  0.0 } },
-            .{ .position = .{  0.5, -0.5,  0.5 }, .normal = .{  1.0,  0.0,  0.0 } },
-            // -Y face
-            .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{  0.0, -1.0,  0.0 } },
-            .{ .position = .{ -0.5, -0.5,  0.5 }, .normal = .{  0.0, -1.0,  0.0 } },
-            .{ .position = .{  0.5, -0.5,  0.5 }, .normal = .{  0.0, -1.0,  0.0 } },
-            .{ .position = .{  0.5, -0.5, -0.5 }, .normal = .{  0.0, -1.0,  0.0 } },
-            // +Y face
-            .{ .position = .{ -0.5,  0.5, -0.5 }, .normal = .{  0.0,  1.0,  0.0 } },
-            .{ .position = .{ -0.5,  0.5,  0.5 }, .normal = .{  0.0,  1.0,  0.0 } },
-            .{ .position = .{  0.5,  0.5,  0.5 }, .normal = .{  0.0,  1.0,  0.0 } },
-            .{ .position = .{  0.5,  0.5, -0.5 }, .normal = .{  0.0,  1.0,  0.0 } },
-            // zig fmt: on
+            .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{ 0.0, 0.0, -1.0 } },
+            .{ .position = .{ 0.5, -0.5, -0.5 }, .normal = .{ 0.0, 0.0, -1.0 } },
+            .{ .position = .{ 0.5, 0.5, -0.5 }, .normal = .{ 0.0, 0.0, -1.0 } },
+            .{ .position = .{ -0.5, 0.5, -0.5 }, .normal = .{ 0.0, 0.0, -1.0 } },
+
+            .{ .position = .{ -0.5, -0.5, 0.5 }, .normal = .{ 0.0, 0.0, 1.0 } },
+            .{ .position = .{ 0.5, -0.5, 0.5 }, .normal = .{ 0.0, 0.0, 1.0 } },
+            .{ .position = .{ 0.5, 0.5, 0.5 }, .normal = .{ 0.0, 0.0, 1.0 } },
+            .{ .position = .{ -0.5, 0.5, 0.5 }, .normal = .{ 0.0, 0.0, 1.0 } },
+
+            .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{ -1.0, 0.0, 0.0 } },
+            .{ .position = .{ -0.5, 0.5, -0.5 }, .normal = .{ -1.0, 0.0, 0.0 } },
+            .{ .position = .{ -0.5, 0.5, 0.5 }, .normal = .{ -1.0, 0.0, 0.0 } },
+            .{ .position = .{ -0.5, -0.5, 0.5 }, .normal = .{ -1.0, 0.0, 0.0 } },
+
+            .{ .position = .{ 0.5, -0.5, -0.5 }, .normal = .{ 1.0, 0.0, 0.0 } },
+            .{ .position = .{ 0.5, 0.5, -0.5 }, .normal = .{ 1.0, 0.0, 0.0 } },
+            .{ .position = .{ 0.5, 0.5, 0.5 }, .normal = .{ 1.0, 0.0, 0.0 } },
+            .{ .position = .{ 0.5, -0.5, 0.5 }, .normal = .{ 1.0, 0.0, 0.0 } },
+
+            .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{ 0.0, -1.0, 0.0 } },
+            .{ .position = .{ -0.5, -0.5, 0.5 }, .normal = .{ 0.0, -1.0, 0.0 } },
+            .{ .position = .{ 0.5, -0.5, 0.5 }, .normal = .{ 0.0, -1.0, 0.0 } },
+            .{ .position = .{ 0.5, -0.5, -0.5 }, .normal = .{ 0.0, -1.0, 0.0 } },
+
+            .{ .position = .{ -0.5, 0.5, -0.5 }, .normal = .{ 0.0, 1.0, 0.0 } },
+            .{ .position = .{ -0.5, 0.5, 0.5 }, .normal = .{ 0.0, 1.0, 0.0 } },
+            .{ .position = .{ 0.5, 0.5, 0.5 }, .normal = .{ 0.0, 1.0, 0.0 } },
+            .{ .position = .{ 0.5, 0.5, -0.5 }, .normal = .{ 0.0, 1.0, 0.0 } },
         }),
     });
     state.bind.index_buffer = sg.makeBuffer(.{
@@ -114,8 +101,7 @@ fn makeObjectPipeline() sg.Pipeline {
 
 fn makeLampPipeline() sg.Pipeline {
     var desc = commonPipelineDesc(sg.makeShader(shd.lampShaderDesc(sg.queryBackend())));
-    // The lamp ignores normals, but it reads positions from the same interleaved
-    // buffer, so the stride must still skip the normal stored after each position.
+
     desc.layout.buffers[0].stride = @sizeOf(Vertex);
     desc.layout.attrs[shd.ATTR_lamp_position].format = .FLOAT3;
     return sg.makePipeline(desc);

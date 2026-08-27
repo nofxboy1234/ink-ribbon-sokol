@@ -1,10 +1,3 @@
-//! Persistent save slots for the typewriter save stations.
-//!
-//! Eight numbered slots in the spirit of Resident Evil 2 Remake. A slot
-//! records pose, ammunition, health, inventory layout, discovered items,
-//! collected pickups, broken containers, and randomized container drops.
-//! All slots live in one JSON file so a single read/write keeps them consistent.
-
 const std = @import("std");
 const inventory = @import("inventory.zig");
 
@@ -20,20 +13,20 @@ pub const Slot = struct {
     reserve: u16 = 0,
     health: f32 = 100,
     inventory: inventory.State = .{},
-    // Bit N is set after world pickup N has been collected.
+
     collected_pickups: u32 = 0,
     discovered_items: u32 = 0,
     broken_boxes: u32 = 0,
-    // Broken-box outcomes are stored once so loading cannot reroll a box.
+
     box_drops_present: u32 = 0,
     box_drops_health: u32 = 0,
     collected_box_drops: u32 = 0,
-    // Door angles are transient Box3D state; only permanent unlocks persist.
+
     unlocked_doors: u32 = 0,
     elapsed_active_seconds: f64 = 0,
     damage_events: u32 = 0,
     deaths: u32 = 0,
-    // Unix epoch seconds when the slot was written, for the slot list UI.
+
     timestamp: i64 = 0,
 };
 
@@ -48,8 +41,6 @@ const FileFormat = struct {
     slots: [slot_count]Slot = @splat(.{}),
 };
 
-// Read all slots from disk. A missing or corrupt file simply leaves every
-// slot empty; saving is never blocked by load problems.
 pub fn loadFromDir(dir: std.Io.Dir, io: std.Io) void {
     slots = @splat(.{});
     const contents = dir.readFileAlloc(io, file_name, std.heap.page_allocator, std.Io.Limit.limited(file_limit)) catch return;
@@ -61,8 +52,6 @@ pub fn loadFromDir(dir: std.Io.Dir, io: std.Io) void {
     if (parsed.value.version == current_version and parsed.value.slots.len == slot_count) slots = parsed.value.slots;
 }
 
-// Write every slot back to disk atomically enough for this game's purposes:
-// dump to a temp name, then rename over the real file.
 pub fn writeToDir(dir: std.Io.Dir, io: std.Io) !void {
     const data = try std.json.Stringify.valueAlloc(
         std.heap.page_allocator,

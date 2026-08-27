@@ -1,5 +1,3 @@
-//! Player health and deterministic punch/recovery presentation state.
-
 const std = @import("std");
 
 pub const Config = struct {

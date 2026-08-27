@@ -1,9 +1,3 @@
-//! Player-actor module, mirroring `hunter.zig` for the player character.
-//!
-//! Owns the per-frame player systems: quick-turn, the per-tick player step
-//! (movement + footsteps + door pushing), and the shared controller state.
-//! The orchestrator injects the scene state once (`init`).
-
 const std = @import("std");
 const controller = @import("character_controller.zig");
 const camera = @import("third_person_camera.zig");
@@ -27,7 +21,7 @@ pub fn updateQuickTurn(dt: f32) void {
     if (!game.quick_turn.active) return;
     game.quick_turn.timer += dt;
     const t = std.math.clamp(game.quick_turn.timer / game.quick_turn.duration, 0, 1);
-    // Smoothstep: accelerate into the turn, then ease to a stop.
+
     const eased = t * t * (3.0 - 2.0 * t);
     game.character.yaw = game.quick_turn.character_start + (game.quick_turn.character_target - game.quick_turn.character_start) * eased;
     game.camera.yaw = game.quick_turn.camera_start + (game.quick_turn.camera_target - game.quick_turn.camera_start) * eased;
@@ -57,8 +51,6 @@ pub fn beginQuickTurn() void {
 }
 
 pub fn stepPlayer() void {
-    // The controller always advances gravity and collision; it simply receives
-    // empty input while the player is stunned or mid-animation.
     const can_move = game.condition.canMove() and !playerActionActive();
     controller.update(
         game.character_config,

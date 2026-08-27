@@ -1,5 +1,3 @@
-//! Deterministic aiming, ammunition, and hunter damage state.
-
 const std = @import("std");
 
 pub const Config = struct {

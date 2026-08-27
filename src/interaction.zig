@@ -1,9 +1,3 @@
-//! World-object interaction, combat firing, and breakable boxes.
-//!
-//! Resolves the interaction target in front of the player, drives the pickup /
-//! kick actions, spawns box debris, and handles the weapon raycast / impact
-//! visuals. Receives the shared scene state by dependency injection (`init`).
-
 const std = @import("std");
 const b3 = @import("box3d");
 const math = @import("math.zig");

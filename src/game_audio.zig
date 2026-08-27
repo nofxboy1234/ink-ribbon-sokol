@@ -1,10 +1,3 @@
-//! Small allocation-free procedural sound-effect mixer.
-//!
-//! Gameplay queues one-shot voices on the main thread, then `mix` feeds Sokol
-//! Audio's push queue. Keeping both operations on one thread avoids locks and
-//! makes the same effects available in native and WebAssembly builds without
-//! shipping or decoding external audio assets.
-
 const std = @import("std");
 
 pub const Event = enum {
@@ -58,7 +51,7 @@ pub const System = struct {
                 chosen = voice;
                 break;
             }
-            // If every slot is occupied, replace the voice nearest its end.
+
             if (voice.frame * chosen.frame_count > chosen.frame * voice.frame_count) chosen = voice;
         }
 
@@ -74,7 +67,6 @@ pub const System = struct {
         };
     }
 
-    /// Fill interleaved output samples and advance every active one-shot.
     pub fn mix(self: *System, output: []f32, frame_count: usize, channel_count: usize) void {
         std.debug.assert(channel_count > 0);
         std.debug.assert(output.len >= frame_count * channel_count);
@@ -88,8 +80,7 @@ pub const System = struct {
                 voice.frame += 1;
                 if (voice.frame >= voice.frame_count) voice.active = false;
             }
-            // A soft-ish master limiter leaves headroom when several effects
-            // coincide without flattening quieter footsteps.
+
             sample = std.math.clamp(sample * 0.72, -0.96, 0.96);
             for (0..channel_count) |channel| output[frame_index * channel_count + channel] = sample;
         }
@@ -166,8 +157,7 @@ fn voiceSample(voice: Voice, sample_rate: f32) f32 {
         },
         .heal => blk: {
             const fade = @sin(std.math.pi * progress);
-            // A soft spray transient followed by a rising two-note shimmer
-            // makes consuming the first-aid item distinct from picking it up.
+
             const spray = noise * pulse(time, 0.16, 0.18) * 0.12;
             const tone_a = @sin(tau * (420.0 * time + 85.0 * time * time));
             const tone_b = @sin(tau * (630.0 * time + 145.0 * time * time));
@@ -189,7 +179,6 @@ fn voiceSample(voice: Voice, sample_rate: f32) f32 {
             break :blk (thud + scrape) * fastAttack(progress, 0.04);
         },
         .door_open => blk: {
-            // A short latch click followed by a pitched wooden hinge creak.
             const latch = pulse(time, 0.025, 0.022) * (noise * 0.22 + @sin(tau * 720.0 * time) * 0.12);
             const creak_envelope = @sin(std.math.pi * progress);
             const creak = (@sin(tau * (118.0 - 46.0 * progress) * time) * 0.12 + noise * 0.075) * creak_envelope;

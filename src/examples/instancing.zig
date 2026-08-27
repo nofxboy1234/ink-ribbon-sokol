@@ -1,5 +1,3 @@
-//! LearnOpenGL Instancing mapped to sokol_gfx.
-
 const sokol = @import("sokol");
 const sapp = sokol.app;
 const sg = sokol.gfx;
@@ -91,8 +89,7 @@ fn makeIndexPipeline() sg.Pipeline {
 
 fn makeBufferPipeline() sg.Pipeline {
     var layout = baseLayout(shd.ATTR_buffer_grid_position, shd.ATTR_buffer_grid_color0);
-    // Buffer 0 advances for every quad corner. Buffer 1 advances only when the
-    // GPU starts the next copy of the quad.
+
     layout.buffers[1] = .{ .stride = @sizeOf(Instance), .step_func = .PER_INSTANCE };
     layout.attrs[shd.ATTR_buffer_grid_instance_offset] = .{
         .buffer_index = 1,
@@ -126,7 +123,7 @@ export fn frame() void {
     sg.beginPass(.{ .action = action, .swapchain = sglue.swapchain() });
     sg.applyPipeline(if (state.use_instance_buffer) state.buffer_pipeline else state.index_pipeline);
     sg.applyBindings(state.bindings);
-    // Six mesh vertices are reused for 100 instances in one draw command.
+
     sg.draw(0, quad.len, instance_count);
     sg.endPass();
     sg.commit();

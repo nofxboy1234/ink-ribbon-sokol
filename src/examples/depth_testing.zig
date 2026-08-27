@@ -1,10 +1,3 @@
-//------------------------------------------------------------------------------
-// LearnOpenGL: Advanced OpenGL / Depth testing
-//
-// Scene controls:
-//   Z - toggle normal colour and linear depth visualization
-//   D - toggle LESS and ALWAYS depth comparisons
-//------------------------------------------------------------------------------
 const model_image = @import("model_image");
 const sokol = @import("sokol");
 const sapp = sokol.app;
@@ -35,7 +28,6 @@ const state = struct {
 };
 
 const cube_vertices = [_]Vertex{
-    // Back and front faces.
     .{ .position = .{ -0.5, -0.5, -0.5 }, .uv = .{ 0, 0 } },
     .{ .position = .{ 0.5, -0.5, -0.5 }, .uv = .{ 1, 0 } },
     .{ .position = .{ 0.5, 0.5, -0.5 }, .uv = .{ 1, 1 } },
@@ -44,7 +36,7 @@ const cube_vertices = [_]Vertex{
     .{ .position = .{ 0.5, -0.5, 0.5 }, .uv = .{ 1, 0 } },
     .{ .position = .{ 0.5, 0.5, 0.5 }, .uv = .{ 1, 1 } },
     .{ .position = .{ -0.5, 0.5, 0.5 }, .uv = .{ 0, 1 } },
-    // Left and right faces.
+
     .{ .position = .{ -0.5, -0.5, -0.5 }, .uv = .{ 0, 0 } },
     .{ .position = .{ -0.5, 0.5, -0.5 }, .uv = .{ 1, 0 } },
     .{ .position = .{ -0.5, 0.5, 0.5 }, .uv = .{ 1, 1 } },
@@ -53,7 +45,7 @@ const cube_vertices = [_]Vertex{
     .{ .position = .{ 0.5, 0.5, -0.5 }, .uv = .{ 1, 0 } },
     .{ .position = .{ 0.5, 0.5, 0.5 }, .uv = .{ 1, 1 } },
     .{ .position = .{ 0.5, -0.5, 0.5 }, .uv = .{ 0, 1 } },
-    // Bottom and top faces.
+
     .{ .position = .{ -0.5, -0.5, -0.5 }, .uv = .{ 0, 0 } },
     .{ .position = .{ -0.5, -0.5, 0.5 }, .uv = .{ 1, 0 } },
     .{ .position = .{ 0.5, -0.5, 0.5 }, .uv = .{ 1, 1 } },
@@ -94,8 +86,6 @@ export fn init() void {
     pipeline_desc.layout.attrs[shd.ATTR_depth_testing_texcoord0].format = .FLOAT2;
     state.depth_pipeline = sg.makePipeline(pipeline_desc);
 
-    // Sokol pipeline state is immutable. To change GL_LESS to GL_ALWAYS we
-    // create another pipeline and choose between them when recording draws.
     pipeline_desc.depth.compare = .ALWAYS;
     state.always_pipeline = sg.makePipeline(pipeline_desc);
 
@@ -103,8 +93,7 @@ export fn init() void {
         .load_action = .CLEAR,
         .clear_value = .{ .r = 0.1, .g = 0.1, .b = 0.1, .a = 1 },
     };
-    // Like glClear(GL_DEPTH_BUFFER_BIT), discard last frame's depths and put
-    // the farthest representable value into every depth-buffer pixel.
+
     state.pass_action.depth = .{ .load_action = .CLEAR, .clear_value = 1.0 };
 }
 
@@ -157,8 +146,6 @@ export fn frame() void {
     sg.applyPipeline(if (state.depth_always) state.always_pipeline else state.depth_pipeline);
     sg.applyUniforms(shd.UB_fs_params, sg.asRange(&fs_params));
 
-    // Draw the cubes first. With LESS, nearer fragments remain visible. With
-    // ALWAYS, the floor drawn afterward overwrites them, just like the chapter.
     sg.applyBindings(state.cube_bindings);
     drawObject(view_projection, Mat4.translate(.{ .x = -1, .y = 0, .z = -1 }), cube_indices.len);
     drawObject(view_projection, Mat4.translate(.{ .x = 2, .y = 0, .z = 0 }), cube_indices.len);

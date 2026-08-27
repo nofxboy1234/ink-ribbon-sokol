@@ -1,11 +1,3 @@
-//! Minimal glTF blockout importer.
-//!
-//! Blender remains the level editor and exports `level/level.glb`.  The game
-//! embeds that file, uses cgltf to read its scene graph, and treats every mesh
-//! node as an oriented box derived from the POSITION accessor bounds.  This is
-//! intentionally a blockout path: arbitrary production meshes can be added to
-//! the renderer later without changing the collision-oriented authoring flow.
-
 const std = @import("std");
 const cgltf = @import("cgltf");
 
@@ -81,9 +73,6 @@ pub const Scene = struct {
     }
 };
 
-// The build graph exposes the file as an anonymous import so it can remain in
-// the user-facing `level/` authoring directory rather than being copied under
-// `src/` merely to satisfy Zig's package-path boundary.
 const embedded_glb = @embedFile("level_glb");
 
 pub fn load() !Scene {
@@ -103,9 +92,7 @@ pub fn load() !Scene {
             var matrix: [16]f32 = undefined;
             cgltf.cgltf_node_transform_world(node, &matrix);
             result.player_spawn = transformPoint(matrix, .{});
-            // A zero-rotation Blender Empty faces the game's conventional -Z.
-            // Rotating it around Blender Z is exported as a glTF Y rotation,
-            // so its transformed local -Z axis provides the starting heading.
+
             const forward_x = -matrix[8];
             const forward_z = -matrix[10];
             if (forward_x * forward_x + forward_z * forward_z > 0.000001) {
@@ -121,9 +108,7 @@ pub fn load() !Scene {
             result.hunter_yaw = yawFromMatrix(matrix);
             continue;
         }
-        // Blender-only scale guide. The authoring exporter excludes this, but
-        // ignoring it here too prevents an accidental export from becoming a
-        // large invisible collider in the playable level.
+
         if (std.mem.eql(u8, name, "PlayerPlaceHolder")) continue;
         if (std.mem.startsWith(u8, name, "Trigger_SaveRoom_")) {
             if (result.save_room_count == max_trigger_volumes) return error.TooManySaveRooms;
@@ -271,9 +256,7 @@ fn boxFromNode(node: *const cgltf.cgltf_node) !Box {
     basis_x = scale(basis_x, 1.0 / scale_x);
     basis_y = scale(basis_y, 1.0 / scale_y);
     basis_z = scale(basis_z, 1.0 / scale_z);
-    // Reflections cannot be represented by Box3D's rotation quaternion.  The
-    // Blender workflow applies scale before export, so reject a negative-scale
-    // node rather than silently producing mismatched visuals and collision.
+
     if (dot(cross(basis_x, basis_y), basis_z) < 0.999) return error.UnsupportedTransform;
 
     const local_center = Vec3{

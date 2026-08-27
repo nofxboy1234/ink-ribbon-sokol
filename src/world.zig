@@ -1,9 +1,3 @@
-//! Level construction, physics world, doors, and run lifecycle.
-//!
-//! Owns the Box3D bodies (level boxes, breakables, doors, actor proxies) and
-//! the spawn / save / restart logic that re-seats the actors and resets a run.
-//! Receives the shared scene state by dependency injection (`init`).
-
 const std = @import("std");
 const b3 = @import("box3d");
 const sokol = @import("sokol");
@@ -152,8 +146,6 @@ const mapWorldAtScreen = presentation.mapWorldAtScreen;
 const nearSaveFixture = presentation.nearSaveFixture;
 
 pub fn initPhysics() void {
-    // Give every visible, collidable level box and stair step a Box3D body so
-    // the character and camera can collide against them.
     var world_def = b3.b3DefaultWorldDef();
     game.world = b3.b3CreateWorld(&world_def);
     for (level.current.boxSlice()) |box| if (box.collidable) addStaticBox(box);
@@ -181,11 +173,9 @@ pub fn addStaticBox(box: level.Box) void {
     const body = b3.b3CreateBody(game.world, &body_def);
     var shape_def = b3.b3DefaultShapeDef();
     if (box.hunter_block) {
-        // Save-room barrier: only the hunter's capsule collides with it.
         shape_def.filter.categoryBits = controller.hunter_block_category;
         shape_def.filter.maskBits = controller.hunter_query_category;
     } else {
-        // The character and camera query these boxes; other objects ignore them.
         shape_def.filter.categoryBits = controller.level_category;
         shape_def.filter.maskBits = controller.player_query_category | camera.camera_query_category | controller.hunter_query_category;
     }
@@ -304,9 +294,6 @@ pub fn replaceDoorJoint(index: usize, unlocked: bool) void {
     const old_joint = game.door_joints[index];
     if (b3.b3Joint_IsValid(old_joint)) b3.b3DestroyJoint(old_joint, true);
 
-    // Revolute joints rotate around their local Z axis. Rotate both joint
-    // frames so that axis becomes world Y, while keeping their initial frames
-    // coincident for either authored door orientation.
     const door = level.current.doors[index];
     const rotation = yawRotation(doorBaseYaw(door));
     const vertical_hinge_frame = b3.b3Quat{ .v = .{ .x = -@sin(std.math.pi * 0.25) }, .s = @cos(std.math.pi * 0.25) };
@@ -439,9 +426,7 @@ pub fn openDoorInHunterPath() void {
             nearest_distance = distance;
         }
     }
-    // The navmesh decides which doorway the route crosses. Activation itself
-    // uses proximity because the next conservative grid waypoint can sit just
-    // before the leaf and briefly point away from it.
+
     if (nearest) |index| {
         applyDoorPush(index, game.hunter.position);
         game.door_ai_push_cooldown[index] = door_ai_push_cooldown_seconds;
@@ -510,8 +495,7 @@ pub fn loadValidatedLevel() void {
     game.hunter_config.level_center_z = (level.current.walk_min_z + level.current.walk_max_z) * 0.5;
     game.hunter_config.level_half_x = (level.current.walk_max_x - level.current.walk_min_x) * 0.5;
     game.hunter_config.level_half_z = (level.current.walk_max_z - level.current.walk_min_z) * 0.5;
-    // Blender geometry uses imported Box3D collision directly and can extend
-    // beyond the optional fixed navigation grid.
+
     if (!navmesh.validateLevel()) @panic("default level failed navmesh validation");
 }
 
@@ -549,7 +533,7 @@ pub fn placePlayerFromSlot(slot: saves.Slot) void {
     game.character.velocity = .{};
     game.character.grounded = false;
     game.character.yaw = slot.yaw;
-    // Re-seat the shoulder camera behind the restored heading.
+
     game.camera = .{};
     game.camera.yaw = slot.yaw;
     game.quick_turn = .{};
@@ -699,7 +683,6 @@ pub fn seedSpawnRandomness() void {
     const entropy = @as(u64, @intCast(@intFromPtr(&stack_marker))) ^ @as(u64, @intCast(@intFromPtr(&game)));
     hunter.seedRandom(@truncate(entropy));
 }
-
 
 pub fn updateHunterFootsteps() void {
     const dx = game.hunter.position.x - game.hunter.previous_position.x;

@@ -1,5 +1,3 @@
-//! LearnOpenGL "Advanced GLSL" mapped to sokol_gfx and sokol-shdc.
-
 const sokol = @import("sokol");
 const sapp = sokol.app;
 const sg = sokol.gfx;
@@ -20,14 +18,12 @@ const state = struct {
 };
 
 const cube_positions = [_]f32{
-    // zig fmt: off
-    -0.5, -0.5, -0.5,   0.5, -0.5, -0.5,   0.5,  0.5, -0.5,  -0.5,  0.5, -0.5,
-    -0.5, -0.5,  0.5,   0.5, -0.5,  0.5,   0.5,  0.5,  0.5,  -0.5,  0.5,  0.5,
-    -0.5, -0.5, -0.5,  -0.5,  0.5, -0.5,  -0.5,  0.5,  0.5,  -0.5, -0.5,  0.5,
-     0.5, -0.5, -0.5,   0.5,  0.5, -0.5,   0.5,  0.5,  0.5,   0.5, -0.5,  0.5,
-    -0.5, -0.5, -0.5,  -0.5, -0.5,  0.5,   0.5, -0.5,  0.5,   0.5, -0.5, -0.5,
-    -0.5,  0.5, -0.5,  -0.5,  0.5,  0.5,   0.5,  0.5,  0.5,   0.5,  0.5, -0.5,
-    // zig fmt: on
+    -0.5, -0.5, -0.5, 0.5,  -0.5, -0.5, 0.5,  0.5,  -0.5, -0.5, 0.5,  -0.5,
+    -0.5, -0.5, 0.5,  0.5,  -0.5, 0.5,  0.5,  0.5,  0.5,  -0.5, 0.5,  0.5,
+    -0.5, -0.5, -0.5, -0.5, 0.5,  -0.5, -0.5, 0.5,  0.5,  -0.5, -0.5, 0.5,
+    0.5,  -0.5, -0.5, 0.5,  0.5,  -0.5, 0.5,  0.5,  0.5,  0.5,  -0.5, 0.5,
+    -0.5, -0.5, -0.5, -0.5, -0.5, 0.5,  0.5,  -0.5, 0.5,  0.5,  -0.5, -0.5,
+    -0.5, 0.5,  -0.5, -0.5, 0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  -0.5,
 };
 
 const cube_indices = [_]u16{
@@ -76,7 +72,7 @@ export fn init() void {
         },
         .index_type = .UINT16,
         .depth = .{ .compare = .LESS_EQUAL, .write_enabled = true },
-        // Keep both windings so gl_FrontFacing remains useful to the shader.
+
         .cull_mode = .NONE,
         .label = "advanced-glsl cubes",
     });
@@ -106,8 +102,6 @@ export fn frame() void {
     sg.applyPipeline(state.cube_pipeline);
     sg.applyBindings(state.cube_bindings);
 
-    // The camera matrix is calculated once; each draw combines it with that
-    // cube's model matrix before uploading the resulting MVP block.
     drawCube(view_projection, .{ .x = -1.15, .y = 0.9, .z = 0.0 }, .{ 1.0, 0.15, 0.12, 1.0 });
     drawCube(view_projection, .{ .x = 1.15, .y = 0.9, .z = 0.0 }, .{ 0.15, 0.85, 0.22, 1.0 });
     drawCube(view_projection, .{ .x = -1.15, .y = -0.9, .z = 0.0 }, .{ 0.15, 0.35, 1.0, 1.0 });

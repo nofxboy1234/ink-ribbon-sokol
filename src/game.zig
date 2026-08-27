@@ -1,9 +1,3 @@
-//! Data-oriented character mover scene.
-//!
-//! Plain state is kept separate from the systems that transform it. Box3D owns
-//! collision geometry, Sokol owns rendering, and the character capsule moves
-//! explicitly while a kinematic proxy transfers its contacts to dynamic doors.
-
 const std = @import("std");
 const b3 = @import("box3d");
 const sokol = @import("sokol");
@@ -34,7 +28,6 @@ const saudio = sokol.audio;
 const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
 const Mat4 = math.Mat4;
-
 
 const state = @import("state.zig");
 const presentation = @import("presentation.zig");
@@ -146,8 +139,6 @@ const fbool = state.fbool;
 const smoothstep = state.smoothstep;
 const rgb = state.rgb;
 
-// Re-export the shared declarations so the orchestrator can keep
-// referencing them by their short names.
 const fixed_dt = state.fixed_dt;
 const max_frame_dt = state.max_frame_dt;
 const max_ticks_per_frame = state.max_ticks_per_frame;
@@ -259,23 +250,12 @@ fn init() callconv(.c) void {
     sapp.lockMouse(true);
 }
 
-// Advance the quick-turn swing at render cadence. The controller may update on
-// fixed simulation ticks, but orientation is presentation-only here; updating
-// it once per rendered frame avoids visible 60 Hz stepping on faster displays.
-
-// Signed shortest turn from forward toward the held keyboard direction. In
-// this yaw convention local right is negative rotation: S+A is +135 degrees,
-// S+D is -135 degrees, and S alone uses the deterministic +180-degree case.
-
-
-
 fn frame() callconv(.c) void {
     const frame_time: f32 = @floatCast(@min(sapp.frameDuration(), max_frame_dt));
     game.clock.addFrame(frame_time);
     updateNoticeTimer(frame_time);
     updateCombatVisuals(frame_time);
 
-    // Menus freeze the round exactly like map mode does.
     const gameplay_active = !game.map.active and game.menu.kind == .none and !game.inventory_ui.active;
     if (gameplay_active) game.run_stats.elapsed_active_seconds += @as(f64, frame_time);
 
@@ -303,33 +283,24 @@ fn updateNoticeTimer(frame_time: f32) void {
     if (game.notice_timer == 0) game.notice = .none;
 }
 
-// Release a bounded number of fixed 1/60 s ticks and return the interpolated
-// render position. Each tick advances the player, combat, hunter, and doors.
 fn runSimulationTicks(gameplay_active: bool) b3.b3Pos {
     var ticks: usize = 0;
     while (ticks < max_ticks_per_frame and game.clock.consumeTick()) : (ticks += 1) {
-        // Map/menu modes always freeze the player. On the map the hunter is
-        // independently paused by default and can be resumed with F3; F4 holds
-        // the hunter in every mode.
         const hunter_sim_active = level.hunterEnabled() and !game.hunter_hold and game.menu.kind == .none and !game.inventory_ui.active and (!game.map.active or !game.map.hunter_paused);
         if (!stepFixedTick(gameplay_active, hunter_sim_active)) break;
         if (gameplay_active or hunter_sim_active) stepDoorPhysics(gameplay_active, hunter_sim_active);
     }
-    // Discard excess backlog after the bounded catch-up budget.
+
     if (ticks == max_ticks_per_frame and game.clock.accumulator >= fixed_dt) {
         game.clock.accumulator = @mod(game.clock.accumulator, fixed_dt);
     }
-    // The clock keeps consuming ticks while the map or a menu is open so no
-    // backlog accumulates. Render the exact paused pose instead of using its
-    // cycling interpolation alpha, which would replay the last movement.
+
     return if (gameplay_active)
         controller.interpolatedPosition(game.character, game.clock.alpha())
     else
         game.character.position;
 }
 
-// Advance one fixed simulation tick. Returns false when the player is defeated
-// (which respawns them), so the tick loop stops.
 fn stepFixedTick(gameplay_active: bool, hunter_sim_active: bool) bool {
     if (gameplay_active) {
         stepPlayer();
@@ -344,7 +315,6 @@ fn stepFixedTick(gameplay_active: bool, hunter_sim_active: bool) bool {
     if (hunter_sim_active) stepHunter();
     return true;
 }
-
 
 fn stepCombat() void {
     if (!game.condition.canMove() or playerActionActive()) return;
@@ -391,7 +361,6 @@ fn stepHunter() void {
 
 fn updateView(frame_time: f32, render_position: b3.b3Pos) void {
     if (game.map.active) {
-        // WASD pans the map camera around the level.
         const pan_speed = map_pan_speed * frame_time;
         game.map.pan.x += (fbool(game.input.right) - fbool(game.input.left)) * pan_speed;
         game.map.pan.z += (fbool(game.input.back) - fbool(game.input.forward)) * pan_speed;
@@ -453,8 +422,7 @@ fn toggleMap() void {
     }
     sapp.lockMouse(!game.map.active);
     sapp.showMouse(game.map.active);
-    // Drop held keys so the map doesn't immediately pan and gameplay doesn't
-    // resume with the character moving.
+
     game.input = .{};
 }
 
@@ -515,7 +483,6 @@ fn handleKey(value: sapp.Event, down: bool) void {
             if (down) camera.cancelRecenter(&game.camera);
         },
         .LEFT_SHIFT, .RIGHT_SHIFT => if (down and !value.key_repeat and game.input.moving() and game.menu.kind == .none and !game.map.active) {
-            // Arm running when Shift accompanies a movement key.
             game.input.run = true;
         },
         .LEFT_ALT, .RIGHT_ALT => if (down and !value.key_repeat) resetCameraBehindCharacter(),
@@ -632,117 +599,11 @@ fn handleUnfocused() void {
     sapp.showMouse(true);
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// The characters are query-driven capsule movers rather than simulated rigid
-// bodies. Their kinematic proxies block a closing leaf, while this contact
-// force carries sustained walk/run intent into the hinge after the mover has
-// reached the panel and can no longer advance its proxy through it.
-
-
-
-// Mix ASLR-derived addresses into the PRNG seed: both a stack local and the
-// global game state live at different addresses in each process.
-
-
-
-
-// Index of the most recently written occupied save slot, if any.
-
-// Teleport the player onto a recorded pose. The static world never changes,
-// so a saved position is always a valid capsule spot.
-
-// Place the player at the authored spawn with a fresh character, camera,
-// weapon, and cleared world-progression bits. `magazine` and `reserve` seed
-// the weapon from the caller (0 on a restart, the configured starting reserve
-// on a new run or respawn). Run stats and the HUD notice are caller-owned.
-
-// Clear the transient per-round fields shared by a fresh start, a restart,
-// and a respawn. Values the caller owns (ammo, run stats, weapon reserve,
-// HUD notice) and the world-sync passes are established around this.
-
-// Place both actors, then reset the round. The player resumes from the most
-// recent save when one exists; otherwise they start at the level's spawn.
-
-
-// Send the hunter back to his authored spawn room facing the player, with a
-// fresh patrol destination so he sets off walking immediately.
-
-// The hunter catches the player when their capsules touch horizontally.
-
-
-// During the player's knockdown the hunter holds position and tracks them,
-// recreating the deliberate pause after Mr X's punch.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// Bitmask of locked doors whose key the player carries. A held key makes a
-// door traversable for route planning even while its mesh is still closed:
-// the player can unlock it on the way.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 const playerActionActive = state.playerActionActive;
-
-// Defeated: restore the most recent save (or the initial loadout) and move the
-// hunter home so the next chase starts fairly.
-
-// True while the character stands within the interaction area of a typewriter.
 
 fn openMenu(kind: MenuKind) void {
     game.menu = .{ .kind = kind, .slot = 0 };
-    // Drop held keys so gameplay doesn't resume with the character moving.
+
     game.input = .{};
     game.camera.aim_alpha = 0;
     game.combat.focus = 0;
@@ -800,10 +661,6 @@ fn menuClick(x: f32, y: f32) void {
     hoverMenu(x, y);
     if (rootMenuItemRect(game.menu.slot).contains(x, y)) confirmMenu();
 }
-
-
-
-
 
 fn openInventory() void {
     game.inventory_ui = .{ .active = true };
@@ -874,7 +731,6 @@ fn moveMenuSlot(delta: i32) void {
     game.menu.slot = @intCast(@mod(current + delta + count, count));
 }
 
-// Clear the selected slot (when it holds a save) and persist the change.
 fn deleteSelectedSlot() void {
     if (game.menu.kind != .save and game.menu.kind != .load) return;
     if (!saves.slots[game.menu.slot].occupied) return;
@@ -883,14 +739,11 @@ fn deleteSelectedSlot() void {
         game.notice = .deleted;
         game.notice_timer = notice_seconds;
     } else |_| {
-        // The slot is cleared in memory either way, but flag the disk trouble.
         game.notice = .save_failed;
         game.notice_timer = notice_seconds;
     }
 }
 
-// Apply the highlighted slot: write the player's pose into it (save) or
-// teleport the player to it (load), then close the window.
 fn confirmMenu() void {
     switch (game.menu.kind) {
         .none => return,
@@ -954,8 +807,7 @@ fn rebuildMapRoute() void {
     game.map.route_len = 0;
     game.map.route_segment_count = 0;
     game.map.route_upload_pending = true;
-    // Plan through locked doors the player can unlock on the way. This only
-    // reopens doors in the player grid; the hunter must still respect them.
+
     navmesh.buildPlayerNav(game.unlocked_doors | inventoryKeyMask());
     const selected = @min(game.map.selected_save, level.current.save_target_count - 1);
     if (level.current.isInSaveRoomIndex(selected, game.character.position.x, game.character.position.z)) {
@@ -1020,68 +872,8 @@ fn rebuildMapRoute() void {
     game.map.route_status = .found;
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// Centered transient HUD message on its own row near the top of the screen.
-
-// Centered RE2R-style slot list: eight numbered lines, cursor on the selected
-// one, EMPTY or a date stamp per row.
-
-// "YYYY-MM-DD HH:MM" in local wall-clock-free UTC from epoch seconds.
-
-
-
-
-
-
-// Draw `count` instances of one mesh from the shared buffers. Each debug
-// capsule uses three records: a cylinder followed by its two end spheres.
-
-
-
-// Half-extents -> full scale (a unit box spans -1..1 before scaling).
-
-// Like makeScaledInstance, but pitched about the X axis (used by level boxes,
-// which the level data leans over rather than yawing).
-
-
-// Full actor orientation used by the knockdown presentation: pitch happens in
-// character-local space, then yaw keeps the fall aligned with the actor.
-
-
-
-
-// Orthographic top-down view of the level, centred on the map pan position.
-// North (-Z) points up on screen; the roof is hidden so interiors are visible.
 fn mapViewProjection() Mat4 {
-    const half_h = mapHalfHeight(); // covers z +-19
+    const half_h = mapHalfHeight();
     const center = game.map.pan;
     const eye = Vec3{ .x = center.x, .y = 80, .z = center.z };
     const at = Vec3{ .x = center.x, .y = 0, .z = center.z };
@@ -1091,11 +883,7 @@ fn mapViewProjection() Mat4 {
     return Mat4.mul(view, projection);
 }
 
-
-
-// The save-file APIs need an Io instance; the app owns one for its lifetime.
 var app_io: std.Io.Threaded = undefined;
-
 
 fn selectMapSaveAt(screen_x: f32, screen_y: f32) void {
     const world = mapWorldAtScreen(screen_x, screen_y);
@@ -1114,7 +902,7 @@ pub fn main() void {
         .event_cb = event,
         .width = 1280,
         .height = 720,
-        // Sokol implements desktop fullscreen as a borderless fullscreen window.
+
         .fullscreen = true,
         .sample_count = 4,
         .icon = .{ .sokol_default = true },
@@ -1144,7 +932,7 @@ test "keyboard quick turn chooses shortest backward direction" {
     try std.testing.expectApproxEqAbs(std.math.pi, keyboardQuickTurnDelta(false, false), tolerance);
     try std.testing.expectApproxEqAbs(std.math.pi * 0.75, keyboardQuickTurnDelta(true, false), tolerance);
     try std.testing.expectApproxEqAbs(-std.math.pi * 0.75, keyboardQuickTurnDelta(false, true), tolerance);
-    // Opposing lateral keys cancel back to a straight 180-degree turn.
+
     try std.testing.expectApproxEqAbs(std.math.pi, keyboardQuickTurnDelta(true, true), tolerance);
 }
 

@@ -1,16 +1,3 @@
-//------------------------------------------------------------------------------
-// LearnOpenGL: Advanced OpenGL / Cubemaps
-//
-// Scene controls:
-//   1 - ordinary cube material
-//   2 - reflected environment
-//   3 - refracted environment (air into glass)
-//   Space - pause/resume cube rotation
-//
-// The frame draws the object first and the skybox last. The skybox uses a
-// far-plane depth and does not write depth, matching the chapter's optimized
-// rendering order.
-//------------------------------------------------------------------------------
 const std = @import("std");
 const model_image = @import("model_image");
 const sokol = @import("sokol");
@@ -40,52 +27,47 @@ const state = struct {
     var rotation_y: f32 = 25;
 };
 
-// Each face has its own vertices because its four vertices share one normal.
 const cube_vertices = [_]CubeVertex{
-    // Back (-Z).
     .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{ 0, 0, -1 } },
     .{ .position = .{ 0.5, -0.5, -0.5 }, .normal = .{ 0, 0, -1 } },
     .{ .position = .{ 0.5, 0.5, -0.5 }, .normal = .{ 0, 0, -1 } },
     .{ .position = .{ -0.5, 0.5, -0.5 }, .normal = .{ 0, 0, -1 } },
-    // Front (+Z).
+
     .{ .position = .{ -0.5, -0.5, 0.5 }, .normal = .{ 0, 0, 1 } },
     .{ .position = .{ 0.5, -0.5, 0.5 }, .normal = .{ 0, 0, 1 } },
     .{ .position = .{ 0.5, 0.5, 0.5 }, .normal = .{ 0, 0, 1 } },
     .{ .position = .{ -0.5, 0.5, 0.5 }, .normal = .{ 0, 0, 1 } },
-    // Left (-X).
+
     .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{ -1, 0, 0 } },
     .{ .position = .{ -0.5, 0.5, -0.5 }, .normal = .{ -1, 0, 0 } },
     .{ .position = .{ -0.5, 0.5, 0.5 }, .normal = .{ -1, 0, 0 } },
     .{ .position = .{ -0.5, -0.5, 0.5 }, .normal = .{ -1, 0, 0 } },
-    // Right (+X).
+
     .{ .position = .{ 0.5, -0.5, -0.5 }, .normal = .{ 1, 0, 0 } },
     .{ .position = .{ 0.5, 0.5, -0.5 }, .normal = .{ 1, 0, 0 } },
     .{ .position = .{ 0.5, 0.5, 0.5 }, .normal = .{ 1, 0, 0 } },
     .{ .position = .{ 0.5, -0.5, 0.5 }, .normal = .{ 1, 0, 0 } },
-    // Bottom (-Y).
+
     .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{ 0, -1, 0 } },
     .{ .position = .{ -0.5, -0.5, 0.5 }, .normal = .{ 0, -1, 0 } },
     .{ .position = .{ 0.5, -0.5, 0.5 }, .normal = .{ 0, -1, 0 } },
     .{ .position = .{ 0.5, -0.5, -0.5 }, .normal = .{ 0, -1, 0 } },
-    // Top (+Y).
+
     .{ .position = .{ -0.5, 0.5, -0.5 }, .normal = .{ 0, 1, 0 } },
     .{ .position = .{ -0.5, 0.5, 0.5 }, .normal = .{ 0, 1, 0 } },
     .{ .position = .{ 0.5, 0.5, 0.5 }, .normal = .{ 0, 1, 0 } },
     .{ .position = .{ 0.5, 0.5, -0.5 }, .normal = .{ 0, 1, 0 } },
 };
 
-// Every triangle is counter-clockwise when viewed from outside the cube.
 const cube_indices = [_]u16{
-    0, 2, 1, 0, 3, 2, // back
-    4, 5, 6, 4, 6, 7, // front
-    8, 10, 9, 8, 11, 10, // left
-    12, 13, 14, 12, 14, 15, // right
-    16, 18, 17, 16, 19, 18, // bottom
-    20, 21, 22, 20, 22, 23, // top
+    0,  2,  1,  0,  3,  2,
+    4,  5,  6,  4,  6,  7,
+    8,  10, 9,  8,  11, 10,
+    12, 13, 14, 12, 14, 15,
+    16, 18, 17, 16, 19, 18,
+    20, 21, 22, 20, 22, 23,
 };
 
-// The chapter's skybox vertices. These are drawn without indices because each
-// group of three positions already describes one triangle.
 const skybox_vertices = [_][3]f32{
     .{ -1, 1, -1 },  .{ -1, -1, -1 }, .{ 1, -1, -1 },
     .{ 1, -1, -1 },  .{ 1, 1, -1 },   .{ -1, 1, -1 },
@@ -139,11 +121,9 @@ export fn init() void {
 
     var skybox_pipeline_desc: sg.PipelineDesc = .{
         .shader = sg.makeShader(shd.skyboxShaderDesc(sg.queryBackend())),
-        // The skybox shader forces depth to 1.0, so equality must pass. It is
-        // only a background and therefore must not change the depth buffer.
+
         .depth = .{ .compare = .LESS_EQUAL, .write_enabled = false },
-        // We are looking at the cube from inside. With culling disabled, its
-        // interior triangles remain visible regardless of their winding.
+
         .cull_mode = .NONE,
     };
     skybox_pipeline_desc.layout.attrs[shd.ATTR_skybox_position].format = .FLOAT3;
@@ -157,15 +137,13 @@ export fn init() void {
 }
 
 fn makeCubemap() sg.Image {
-    // Sokol packs the six surfaces of each mip level into one byte range in
-    // this exact order: +X, -X, +Y, -Y, +Z, -Z.
     const encoded_faces = [_][]const u8{
-        @embedFile("assets/cubemaps/right.jpg"), // +X
-        @embedFile("assets/cubemaps/left.jpg"), // -X
-        @embedFile("assets/cubemaps/top.jpg"), // +Y
-        @embedFile("assets/cubemaps/bottom.jpg"), // -Y
-        @embedFile("assets/cubemaps/front.jpg"), // +Z
-        @embedFile("assets/cubemaps/back.jpg"), // -Z
+        @embedFile("assets/cubemaps/right.jpg"),
+        @embedFile("assets/cubemaps/left.jpg"),
+        @embedFile("assets/cubemaps/top.jpg"),
+        @embedFile("assets/cubemaps/bottom.jpg"),
+        @embedFile("assets/cubemaps/front.jpg"),
+        @embedFile("assets/cubemaps/back.jpg"),
     };
 
     var width: c_int = 0;
@@ -239,8 +217,6 @@ export fn frame() void {
         },
     };
 
-    // Remove translation from the skybox view. The environment rotates with
-    // the camera but never appears closer when the camera moves.
     var skybox_view = view;
     skybox_view.m[3][0] = 0;
     skybox_view.m[3][1] = 0;
@@ -251,14 +227,12 @@ export fn frame() void {
 
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
 
-    // Opaque scene geometry fills the colour and depth buffers first.
     sg.applyPipeline(state.object_pipeline);
     sg.applyBindings(state.object_bindings);
     sg.applyUniforms(shd.UB_object_vs_params, sg.asRange(&object_params));
     sg.applyUniforms(shd.UB_object_fs_params, sg.asRange(&material_params));
     sg.draw(0, cube_indices.len, 1);
 
-    // The far-depth skybox fills only pixels where no object was drawn.
     sg.applyPipeline(state.skybox_pipeline);
     sg.applyBindings(state.skybox_bindings);
     sg.applyUniforms(shd.UB_skybox_vs_params, sg.asRange(&skybox_params));

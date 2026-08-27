@@ -1,9 +1,3 @@
-//------------------------------------------------------------------------------
-// Textured cube
-//
-// This is the pinned sokol-zig texcube example adapted to use this project's
-// local math module and build-generated shader module.
-//------------------------------------------------------------------------------
 const sokol = @import("sokol");
 const slog = sokol.log;
 const sg = sokol.gfx;
@@ -22,9 +16,6 @@ const state = struct {
     const view: mat4 = mat4.lookat(.{ .x = 0.0, .y = 1.5, .z = 6.0 }, vec3.zero(), vec3.up());
 };
 
-// Each vertex stores a position, a packed RGBA colour, and packed UV texture
-// coordinates. `extern` gives the struct a predictable C-compatible layout,
-// which lets the graphics pipeline interpret its bytes reliably.
 const Vertex = extern struct { x: f32, y: f32, z: f32, color: u32, u: i16, v: i16 };
 
 export fn init() void {
@@ -33,45 +24,40 @@ export fn init() void {
         .logger = .{ .func = slog.func },
     });
 
-    // Create an immutable vertex buffer. Normalized integer formats keep colour
-    // and UV data compact while presenting floating-point values to the shader.
     state.bind.vertex_buffers[0] = sg.makeBuffer(.{
         .data = sg.asRange(&[_]Vertex{
-            // zig fmt: off
-            .{ .x = -1.0, .y = -1.0, .z = -1.0, .color = 0xFF0000FF, .u = 0,     .v = 0 },
-            .{ .x =  1.0, .y = -1.0, .z = -1.0, .color = 0xFF0000FF, .u = 32767, .v = 0 },
-            .{ .x =  1.0, .y =  1.0, .z = -1.0, .color = 0xFF0000FF, .u = 32767, .v = 32767 },
-            .{ .x = -1.0, .y =  1.0, .z = -1.0, .color = 0xFF0000FF, .u = 0,     .v = 32767 },
+            .{ .x = -1.0, .y = -1.0, .z = -1.0, .color = 0xFF0000FF, .u = 0, .v = 0 },
+            .{ .x = 1.0, .y = -1.0, .z = -1.0, .color = 0xFF0000FF, .u = 32767, .v = 0 },
+            .{ .x = 1.0, .y = 1.0, .z = -1.0, .color = 0xFF0000FF, .u = 32767, .v = 32767 },
+            .{ .x = -1.0, .y = 1.0, .z = -1.0, .color = 0xFF0000FF, .u = 0, .v = 32767 },
 
-            .{ .x = -1.0, .y = -1.0, .z =  1.0, .color = 0xFF00FF00, .u = 0,     .v = 0 },
-            .{ .x =  1.0, .y = -1.0, .z =  1.0, .color = 0xFF00FF00, .u = 32767, .v = 0 },
-            .{ .x =  1.0, .y =  1.0, .z =  1.0, .color = 0xFF00FF00, .u = 32767, .v = 32767 },
-            .{ .x = -1.0, .y =  1.0, .z =  1.0, .color = 0xFF00FF00, .u = 0,     .v = 32767 },
+            .{ .x = -1.0, .y = -1.0, .z = 1.0, .color = 0xFF00FF00, .u = 0, .v = 0 },
+            .{ .x = 1.0, .y = -1.0, .z = 1.0, .color = 0xFF00FF00, .u = 32767, .v = 0 },
+            .{ .x = 1.0, .y = 1.0, .z = 1.0, .color = 0xFF00FF00, .u = 32767, .v = 32767 },
+            .{ .x = -1.0, .y = 1.0, .z = 1.0, .color = 0xFF00FF00, .u = 0, .v = 32767 },
 
-            .{ .x = -1.0, .y = -1.0, .z = -1.0, .color = 0xFFFF0000, .u = 0,     .v = 0 },
-            .{ .x = -1.0, .y =  1.0, .z = -1.0, .color = 0xFFFF0000, .u = 32767, .v = 0 },
-            .{ .x = -1.0, .y =  1.0, .z =  1.0, .color = 0xFFFF0000, .u = 32767, .v = 32767 },
-            .{ .x = -1.0, .y = -1.0, .z =  1.0, .color = 0xFFFF0000, .u = 0,     .v = 32767 },
+            .{ .x = -1.0, .y = -1.0, .z = -1.0, .color = 0xFFFF0000, .u = 0, .v = 0 },
+            .{ .x = -1.0, .y = 1.0, .z = -1.0, .color = 0xFFFF0000, .u = 32767, .v = 0 },
+            .{ .x = -1.0, .y = 1.0, .z = 1.0, .color = 0xFFFF0000, .u = 32767, .v = 32767 },
+            .{ .x = -1.0, .y = -1.0, .z = 1.0, .color = 0xFFFF0000, .u = 0, .v = 32767 },
 
-            .{ .x =  1.0, .y = -1.0, .z = -1.0, .color = 0xFFFF007F, .u = 0,     .v = 0 },
-            .{ .x =  1.0, .y =  1.0, .z = -1.0, .color = 0xFFFF007F, .u = 32767, .v = 0 },
-            .{ .x =  1.0, .y =  1.0, .z =  1.0, .color = 0xFFFF007F, .u = 32767, .v = 32767 },
-            .{ .x =  1.0, .y = -1.0, .z =  1.0, .color = 0xFFFF007F, .u = 0,     .v = 32767 },
+            .{ .x = 1.0, .y = -1.0, .z = -1.0, .color = 0xFFFF007F, .u = 0, .v = 0 },
+            .{ .x = 1.0, .y = 1.0, .z = -1.0, .color = 0xFFFF007F, .u = 32767, .v = 0 },
+            .{ .x = 1.0, .y = 1.0, .z = 1.0, .color = 0xFFFF007F, .u = 32767, .v = 32767 },
+            .{ .x = 1.0, .y = -1.0, .z = 1.0, .color = 0xFFFF007F, .u = 0, .v = 32767 },
 
-            .{ .x = -1.0, .y = -1.0, .z = -1.0, .color = 0xFFFF7F00, .u = 0,     .v = 0 },
-            .{ .x = -1.0, .y = -1.0, .z =  1.0, .color = 0xFFFF7F00, .u = 32767, .v = 0 },
-            .{ .x =  1.0, .y = -1.0, .z =  1.0, .color = 0xFFFF7F00, .u = 32767, .v = 32767 },
-            .{ .x =  1.0, .y = -1.0, .z = -1.0, .color = 0xFFFF7F00, .u = 0,     .v = 32767 },
+            .{ .x = -1.0, .y = -1.0, .z = -1.0, .color = 0xFFFF7F00, .u = 0, .v = 0 },
+            .{ .x = -1.0, .y = -1.0, .z = 1.0, .color = 0xFFFF7F00, .u = 32767, .v = 0 },
+            .{ .x = 1.0, .y = -1.0, .z = 1.0, .color = 0xFFFF7F00, .u = 32767, .v = 32767 },
+            .{ .x = 1.0, .y = -1.0, .z = -1.0, .color = 0xFFFF7F00, .u = 0, .v = 32767 },
 
-            .{ .x = -1.0, .y =  1.0, .z = -1.0, .color = 0xFF007FFF, .u = 0,     .v = 0 },
-            .{ .x = -1.0, .y =  1.0, .z =  1.0, .color = 0xFF007FFF, .u = 32767, .v = 0 },
-            .{ .x =  1.0, .y =  1.0, .z =  1.0, .color = 0xFF007FFF, .u = 32767, .v = 32767 },
-            .{ .x =  1.0, .y =  1.0, .z = -1.0, .color = 0xFF007FFF, .u = 0,     .v = 32767 },
-            // zig fmt: on
+            .{ .x = -1.0, .y = 1.0, .z = -1.0, .color = 0xFF007FFF, .u = 0, .v = 0 },
+            .{ .x = -1.0, .y = 1.0, .z = 1.0, .color = 0xFF007FFF, .u = 32767, .v = 0 },
+            .{ .x = 1.0, .y = 1.0, .z = 1.0, .color = 0xFF007FFF, .u = 32767, .v = 32767 },
+            .{ .x = 1.0, .y = 1.0, .z = -1.0, .color = 0xFF007FFF, .u = 0, .v = 32767 },
         }),
     });
 
-    // Six faces, two triangles per face, and three indices per triangle.
     state.bind.index_buffer = sg.makeBuffer(.{
         .usage = .{ .index_buffer = true },
         .data = sg.asRange(&[_]u16{
@@ -84,8 +70,6 @@ export fn init() void {
         }),
     });
 
-    // An image owns the 4x4 checkerboard texels. A texture view exposes that
-    // image to the shader at the binding slot generated by sokol-shdc.
     state.bind.views[shd.VIEW_tex] = sg.makeView(.{
         .texture = .{
             .image = sg.makeImage(.{
@@ -105,8 +89,6 @@ export fn init() void {
         },
     });
 
-    // The sampler describes filtering and wrapping independently of the image.
-    // Its defaults use nearest filtering and repeat wrapping.
     state.bind.samplers[shd.SMP_smp] = sg.makeSampler(.{});
 
     state.pip = sg.makePipeline(.{

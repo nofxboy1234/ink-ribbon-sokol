@@ -1,11 +1,3 @@
-//------------------------------------------------------------------------------
-// LearnOpenGL: Advanced OpenGL / Blending
-//
-// Scene controls:
-//   1 - alpha-discard grass (fully visible or fully absent)
-//   2 - blended windows in the deliberately wrong, unsorted order
-//   3 - blended windows sorted from farthest to nearest
-//------------------------------------------------------------------------------
 const model_image = @import("model_image");
 const sokol = @import("sokol");
 const sapp = sokol.app;
@@ -31,8 +23,6 @@ const LessonMode = enum {
 const camera_position = Vec3{ .x = 0, .y = 0, .z = 3 };
 const camera_target = Vec3{ .x = 0, .y = 0, .z = 2 };
 
-// These are the positions from the LearnOpenGL chapter. The same quads are
-// used for grass in mode 1 and semi-transparent windows in modes 2 and 3.
 const transparent_positions = [_]Vec3{
     .{ .x = -1.5, .y = 0.0, .z = -0.48 },
     .{ .x = 1.5, .y = 0.0, .z = 0.51 },
@@ -54,7 +44,6 @@ const state = struct {
 };
 
 const cube_vertices = [_]Vertex{
-    // Back and front faces.
     .{ .position = .{ -0.5, -0.5, -0.5 }, .uv = .{ 0, 0 } },
     .{ .position = .{ 0.5, -0.5, -0.5 }, .uv = .{ 1, 0 } },
     .{ .position = .{ 0.5, 0.5, -0.5 }, .uv = .{ 1, 1 } },
@@ -63,7 +52,7 @@ const cube_vertices = [_]Vertex{
     .{ .position = .{ 0.5, -0.5, 0.5 }, .uv = .{ 1, 0 } },
     .{ .position = .{ 0.5, 0.5, 0.5 }, .uv = .{ 1, 1 } },
     .{ .position = .{ -0.5, 0.5, 0.5 }, .uv = .{ 0, 1 } },
-    // Left and right faces.
+
     .{ .position = .{ -0.5, -0.5, -0.5 }, .uv = .{ 0, 0 } },
     .{ .position = .{ -0.5, 0.5, -0.5 }, .uv = .{ 1, 0 } },
     .{ .position = .{ -0.5, 0.5, 0.5 }, .uv = .{ 1, 1 } },
@@ -72,7 +61,7 @@ const cube_vertices = [_]Vertex{
     .{ .position = .{ 0.5, 0.5, -0.5 }, .uv = .{ 1, 0 } },
     .{ .position = .{ 0.5, 0.5, 0.5 }, .uv = .{ 1, 1 } },
     .{ .position = .{ 0.5, -0.5, 0.5 }, .uv = .{ 0, 1 } },
-    // Bottom and top faces.
+
     .{ .position = .{ -0.5, -0.5, -0.5 }, .uv = .{ 0, 0 } },
     .{ .position = .{ -0.5, -0.5, 0.5 }, .uv = .{ 1, 0 } },
     .{ .position = .{ 0.5, -0.5, 0.5 }, .uv = .{ 1, 1 } },
@@ -97,8 +86,6 @@ const floor_vertices = [_]Vertex{
 };
 const floor_indices = [_]u16{ 0, 1, 2, 0, 2, 3 };
 
-// This quad stands upright in the XY plane. Its origin is at the middle of
-// the left edge, matching the chapter's geometry and positions.
 const transparent_vertices = [_]Vertex{
     .{ .position = .{ 0.0, 0.5, 0.0 }, .uv = .{ 0, 0 } },
     .{ .position = .{ 0.0, -0.5, 0.0 }, .uv = .{ 0, 1 } },
@@ -112,8 +99,7 @@ export fn init() void {
 
     state.cube_bindings = makeBindings(&cube_vertices, &cube_indices, @embedFile("assets/depth_testing/marble.jpg"), .REPEAT);
     state.floor_bindings = makeBindings(&floor_vertices, &floor_indices, @embedFile("assets/depth_testing/metal.png"), .REPEAT);
-    // Clamp alpha textures at their edge. Repeating would let filtering mix
-    // opaque texels from the opposite edge into a transparent border.
+
     state.grass_bindings = makeBindings(&transparent_vertices, &transparent_indices, @embedFile("assets/blending/grass.png"), .CLAMP_TO_EDGE);
     state.window_bindings = makeBindings(&transparent_vertices, &transparent_indices, @embedFile("assets/blending/window.png"), .CLAMP_TO_EDGE);
 
@@ -124,9 +110,6 @@ export fn init() void {
     pipeline_desc.shader = sg.makeShader(shd.cutoutShaderDesc(sg.queryBackend()));
     state.cutout_pipeline = sg.makePipeline(pipeline_desc);
 
-    // This is glEnable(GL_BLEND) plus
-    // glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA), expressed as
-    // immutable Sokol pipeline state.
     pipeline_desc.shader = sampled_shader;
     pipeline_desc.colors[0].blend = .{
         .enabled = true,
@@ -152,8 +135,7 @@ fn basePipelineDesc(shader: sg.Shader) sg.PipelineDesc {
         .index_type = .UINT16,
         .depth = .{ .compare = .LESS, .write_enabled = true },
     };
-    // Both generated programs assign these inputs to the same slots. Using
-    // the sampled program's reflection constants describes that shared layout.
+
     desc.layout.attrs[shd.ATTR_sampled_position].format = .FLOAT3;
     desc.layout.attrs[shd.ATTR_sampled_texcoord0].format = .FLOAT2;
     return desc;
@@ -208,8 +190,6 @@ export fn frame() void {
 
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
 
-    // Opaque objects go first. Their ordinary depth writes establish the
-    // solid scene that later transparent fragments will blend over.
     sg.applyPipeline(state.opaque_pipeline);
     sg.applyBindings(state.cube_bindings);
     drawObject(view_projection, Mat4.translate(.{ .x = -1, .y = 0, .z = -1 }), cube_indices.len);
@@ -230,8 +210,6 @@ export fn frame() void {
             drawTransparentObjects(view_projection, &transparent_positions);
         },
         .sorted_windows => {
-            // Standard alpha blending depends on what is already in the
-            // framebuffer, so draw far windows before near windows.
             const positions = sortBackToFront(transparent_positions);
             sg.applyPipeline(state.blended_pipeline);
             sg.applyBindings(state.window_bindings);
@@ -260,8 +238,6 @@ fn distanceSquared(position: Vec3) f32 {
     return Vec3.dot(from_camera, from_camera);
 }
 
-// Five items do not need a complicated sorting utility. This insertion sort
-// places the greatest camera distance first and the smallest distance last.
 fn sortBackToFront(positions: [transparent_positions.len]Vec3) [transparent_positions.len]Vec3 {
     var result = positions;
     var index: usize = 1;

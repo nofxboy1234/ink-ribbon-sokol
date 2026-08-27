@@ -1,11 +1,3 @@
-//------------------------------------------------------------------------------
-// LearnOpenGL: Lighting / Multiple lights
-//
-// The earlier lessons calculated one light. This lesson sends six lights to
-// one fragment shader: one directional light, four point lights, and the
-// camera's spotlight. The shader calculates each contribution separately and
-// adds them together.
-//------------------------------------------------------------------------------
 const std = @import("std");
 const sokol = @import("sokol");
 const slog = sokol.log;
@@ -39,8 +31,6 @@ const state = struct {
     var lamp_pipeline: sg.Pipeline = .{};
     var pass_action: sg.PassAction = .{};
 
-    // Static approximation of the movable camera used for the chapter's final
-    // screenshot. Its position/direction also define the flashlight.
     const camera_position = vec3{ .x = -0.35, .y = 0.15, .z = 2.9 };
     const camera_target = vec3{ .x = 0.75, .y = -0.15, .z = 0.0 };
 
@@ -57,8 +47,6 @@ const state = struct {
         .{ .x = -1.3, .y = 1.0, .z = -1.5 },
     };
 
-    // This array is new in the Multiple Lights chapter. Its four elements are
-    // uploaded together, used by the shader loop, and drawn as white markers.
     const point_light_positions = [_]vec3{
         .{ .x = 0.7, .y = 0.2, .z = 2.0 },
         .{ .x = 2.3, .y = -3.3, .z = -4.0 },
@@ -173,8 +161,6 @@ export fn frame() void {
     const projection = mat4.persp(58.1, sapp.widthf() / sapp.heightf(), 0.1, 100.0);
     const view_projection = mat4.mul(projection, view);
 
-    // These values match the chapter's uniforms. A Sokol uniform block uploads
-    // them together instead of calling glUniform separately for every field.
     const lighting = shd.LightingFsParams{
         .material_properties = .{ 32.0, 0.0, 0.0, 0.0 },
         .directional_direction = .{ -0.2, -1.0, -0.3, 0.0 },
@@ -220,8 +206,6 @@ export fn frame() void {
         sg.draw(0, 36, 1);
     }
 
-    // The four visible white cubes identify the four point-light positions.
-    // The directional light has no position, and the spotlight is the camera.
     sg.applyPipeline(state.lamp_pipeline);
     sg.applyBindings(state.bind);
     for (state.point_light_positions) |position| {

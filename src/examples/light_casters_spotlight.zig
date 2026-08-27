@@ -1,5 +1,3 @@
-// LearnOpenGL Light Casters: smooth-edged camera flashlight.
-// A spotlight is a point light restricted to a cone.
 const sokol = @import("sokol");
 const lesson = @import("light_casters.zig");
 

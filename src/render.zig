@@ -1,10 +1,3 @@
-//! Renderer and presentation for the character mover scene.
-//!
-//! Receives the GameState by dependency injection (init) and owns every Sokol
-//! draw call, pipeline, GPU buffer, instance record, and the HUD / inventory /
-//! menu / map overlay drawing. It imports only shared state and presentation
-//! helpers, never the orchestrator, so the dependency graph stays acyclic.
-
 const std = @import("std");
 const b3 = @import("box3d");
 const sokol = @import("sokol");
@@ -38,7 +31,6 @@ const mapWorldAtScreen = presentation.mapWorldAtScreen;
 const nearSaveFixture = presentation.nearSaveFixture;
 var game: *state.GameState = undefined;
 
-/// Inject the shared scene state. Called once from the orchestrator's init.
 pub fn init(g: *state.GameState) void {
     game = g;
 }
@@ -215,8 +207,7 @@ pub fn initRenderer() void {
         .indices = .{ .buffer = sshape.asRange(&indices) },
         .disable = .{ .texcoords = true, .colors = true },
     };
-    // Build all meshes into one shared vertex/index buffer, one shape at a
-    // time. Each shape's element range records where it lives in the buffer.
+
     sshape.buildBox(&builder, .{ .width = 1, .height = 1, .depth = 1 });
     game.render.box_range = sshape.elementRange(builder);
     sshape.buildCylinder(&builder, .{ .radius = 1, .height = 1, .slices = 16, .stacks = 1 });
@@ -236,8 +227,6 @@ pub fn initRenderer() void {
         .label = "character-deformed-actor-indices",
     });
 
-    // Runtime-sized instance counts are uploaded into capacity buffers whenever
-    // the level is (re)loaded. The roof remains separate for map mode.
     game.render.level_instances = sg.makeBuffer(.{
         .size = level.max_boxes * @sizeOf(Instance),
         .usage = .{ .stream_update = true },
@@ -249,7 +238,7 @@ pub fn initRenderer() void {
         .label = "character-roof-instance",
     });
     uploadLevelInstances();
-    // The character's instance is uploaded fresh every frame (stream_update).
+
     game.render.character_instance = sg.makeBuffer(.{
         .size = @sizeOf(Instance),
         .usage = .{ .stream_update = true },
@@ -265,7 +254,7 @@ pub fn initRenderer() void {
         .usage = .{ .stream_update = true },
         .label = "character-map-save-instances",
     });
-    // The hunter is a second dynamic single-instance buffer, drawn in red.
+
     game.render.hunter_instance = sg.makeBuffer(.{
         .size = @sizeOf(Instance),
         .usage = .{ .stream_update = true },
@@ -309,8 +298,7 @@ pub fn initRenderer() void {
     });
 
     var layout: sg.VertexLayoutState = .{};
-    // Buffer 0 = shared mesh (positions + normals), buffer 1 = per-instance
-    // transform records (one per copy of the mesh, stepped PER_INSTANCE).
+
     layout.buffers[0] = sshape.vertexBufferLayoutState(builder);
     layout.buffers[1] = .{ .step_func = .PER_INSTANCE, .stride = @sizeOf(Instance) };
     layout.attrs[shd.ATTR_display_position] = sshape.positionVertexAttrState(builder);
@@ -348,9 +336,7 @@ pub fn initRenderer() void {
         .layout = actor_layout,
         .depth = .{ .write_enabled = true, .compare = .LESS_EQUAL },
         .index_type = .UINT16,
-        // Strong bends can briefly invert a projected triangle at grazing
-        // camera angles. Actors are tiny meshes, so render them double-sided
-        // instead of allowing one of their six faces to disappear.
+
         .cull_mode = .NONE,
         .label = "character-deformed-actor-pipeline",
     });
@@ -372,9 +358,7 @@ pub fn initRenderer() void {
         .cull_mode = .BACK,
         .label = "character-map-route-pipeline",
     });
-    // Map item markers are a schematic overlay: always draw them on top of the
-    // level geometry so pickups sitting under an overhang or upstairs ledge are
-    // still visible (they only stand out when debug/discovery reveals them).
+
     game.render.map_item_pipeline = sg.makePipeline(.{
         .shader = route_shader,
         .layout = route_layout,
@@ -443,8 +427,6 @@ pub fn initRenderer() void {
     game.render.post_bindings.samplers[shd.SMP_scene_sampler] = game.render.scene_sampler;
     recreateSceneTargets(@max(sapp.width(), 1), @max(sapp.height(), 1));
 
-    // Depth-only 2048x2048 texture seen from the sun. Only depth is written,
-    // so the shadow pixel format is DEPTH (no color).
     const shadow_image = sg.makeImage(.{
         .usage = .{ .depth_stencil_attachment = true },
         .width = shadow_map_size,
@@ -507,7 +489,7 @@ pub fn initRenderer() void {
     });
 
     const light_position = Vec3{ .x = 20, .y = 32, .z = -24 };
-    // Directional light = orthographic projection centered on the world origin.
+
     const light_view = Mat4.lookAtRh(light_position, .{}, .{ .y = 1 });
     const light_projection = Mat4.orthoOffCenterRh(-38, 38, -38, 38, 1, 100);
     game.render.light_view_projection = Mat4.mul(light_view, light_projection);
@@ -565,7 +547,7 @@ pub fn recreateSceneTargets(width: i32, height: i32) void {
 pub fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
     recreateSceneTargets(@max(sapp.width(), 1), @max(sapp.height(), 1));
     const hunter_enabled = level.hunterEnabled();
-    // Rebuild the character's instance record from its interpolated position.
+
     const fall = game.condition.fallAmount(game.condition_config);
     const instance = makeYawPitchedInstance(
         .{
@@ -576,7 +558,7 @@ pub fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         character_half_extents,
         game.character.yaw,
         fall * std.math.pi * 0.5,
-        rgb(0.20, 0.694, 1.0), // Oxocarbon blue: #33B1FF
+        rgb(0.20, 0.694, 1.0),
     );
     sg.updateBuffer(game.render.character_instance, sg.asRange(&instance));
     const direction_instances = makeMapDirectionInstances(position, game.character.yaw);
@@ -592,17 +574,14 @@ pub fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         );
     }
     sg.updateBuffer(game.render.map_save_instances, sg.asRange(save_instances[0..level.current.save_target_count]));
-    // Interpolate during gameplay, but use the authoritative pose while paused
-    // so the clock's cycling alpha cannot replay the hunter's last movement.
+
     const hunter_render = if ((game.map.active and game.map.hunter_paused) or game.menu.kind != .none or game.inventory_ui.active or game.condition.hunter_watch_timer > 0)
         game.hunter.position
     else
         hunter.interpolatedPosition(game.hunter, game.clock.alpha());
     if (game.debug.draw_physics) updateCapsuleInstances(position, hunter_render);
     const knocked_down = game.combat.hunterKnockedDown();
-    // The hunter's capsule is taller than his visible rectangle. Keep the
-    // capsule seated on the floor for collision, but lower the rendered body
-    // by the difference so its visible feet meet the same ground plane.
+
     const hunter_capsule_half_height = game.hunter_config.capsule_half_segment + game.hunter_config.capsule_radius;
     const hunter_visual_ground_offset = @max(0, hunter_capsule_half_height - hunter_half_extents.y);
     const hunter_center = Vec3{
@@ -668,9 +647,6 @@ pub fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
     hunter_pose.squash += knockdown * 0.055 + breath * 0.008;
     hunter_pose.foot_pitch += knockdown * 0.045;
 
-    // Pass 1: render everything from the sun's viewpoint, depth-only, to the
-    // shadow map. The character draws as a second single-instance call. The
-    // roof is skipped in map mode so the interior is lit from above.
     const shadow_params: shd.ShadowVsParams = .{ .light_view_projection = game.render.light_view_projection };
     sg.beginPass(game.render.shadow_pass);
     sg.applyPipeline(game.render.shadow_pipeline);
@@ -700,8 +676,6 @@ pub fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
     }
     sg.endPass();
 
-    // Pass 2: render the same instances to the window with full lighting, and
-    // sample the shadow map to darken surfaces the sun can't see.
     const vs_params: shd.DisplayVsParams = .{
         .view_projection = game.camera.view_projection,
         .light_view_projection = game.render.light_view_projection,
@@ -709,7 +683,7 @@ pub fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
     const fs_params: shd.DisplayFsParams = .{
         .light_direction = Vec3.normalized(.{ .x = 20, .y = 32, .z = -24 }),
         .eye_position = game.camera.eye,
-        // Fixture positions and radii are derived from authored room bounds.
+
         .indoor_light_0 = level.current.lights[0],
         .indoor_light_1 = level.current.lights[1],
         .indoor_light_2 = level.current.lights[2],
@@ -739,15 +713,12 @@ pub fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
         drawInstances(game.render.map_save_instances, game.render.box_range, 0, level.current.save_target_count, false);
         if (game.render.map_item_instance_count > 0) {
             sg.applyPipeline(game.render.map_item_pipeline);
-            // The map-item pipeline also skips depth testing, but note that a
-            // fresh applyPipeline() requires re-feeding the uniform block (and
-            // drawInstances only re-applies bindings).
+
             sg.applyUniforms(shd.UB_route_vs_params, sg.asRange(&route_params));
             drawInstances(game.render.map_item_instances, game.render.box_range, 0, game.render.map_item_instance_count, false);
         }
         drawInstances(game.render.map_direction_instances, game.render.box_range, 0, map_direction_instance_count, false);
 
-        // Map actors use flat instance colors while still writing depth.
         sg.applyPipeline(game.render.map_actor_pipeline);
         sg.applyUniforms(shd.UB_route_vs_params, sg.asRange(&route_params));
         drawInstances(game.render.character_instance, game.render.box_range, 0, 1, false);
@@ -1204,7 +1175,7 @@ pub fn updateCapsuleInstances(player_position: b3.b3Pos, hunter_position: b3.b3P
 pub fn drawHud(position: b3.b3Pos) void {
     const frame_duration = sapp.frameDuration();
     const fps = if (frame_duration > 0) 1.0 / frame_duration else 0;
-    const text_width = 11.0; // "FPS: " plus a six-character numeric field.
+    const text_width = 11.0;
     sdtx.canvas(sapp.widthf(), sapp.heightf());
     if (game.menu.kind == .pause) {
         drawRootMenuText("PAUSED", &.{ "RETURN TO GAME", "LOAD GAME", "QUIT GAME" });
@@ -1581,8 +1552,7 @@ pub fn makeOrientedInstance(box: level.Box) Instance {
 pub fn makeScaledInstance(center: Vec3, scale: Vec3, yaw: f32, color: Vec4) Instance {
     const c = @cos(yaw);
     const s = @sin(yaw);
-    // Each row maps the unit box directly into world space. Scale is baked in,
-    // so the shader needs no per-object uniform or matrix multiplication.
+
     return .{
         .x = .{ .x = scale.x * c, .y = 0, .z = scale.z * s, .w = center.x },
         .y = .{ .x = 0, .y = scale.y, .z = 0, .w = center.y },

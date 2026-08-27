@@ -1,10 +1,3 @@
-//! Shared presentation and resolution helpers used by both the gameplay
-//! orchestrator and the renderer (door pose math, item/door colours & names,
-//! inventory and menu layout). This module is the common seam so the renderer
-//! never has to import the orchestrator, which would create a cycle.
-//!
-//! Receives the scene state once via `init`.
-
 const std = @import("std");
 const sokol = @import("sokol");
 const math = @import("math.zig");
@@ -20,7 +13,6 @@ const Mat4 = math.Mat4;
 
 var game: *state.GameState = undefined;
 
-/// Inject the shared scene state. Called once from the orchestrator's init.
 pub fn init(g: *state.GameState) void {
     game = g;
 }
@@ -138,9 +130,7 @@ pub fn doorKey(lock: level.DoorLock) ?inventory.ItemKind {
 
 pub fn boxDropPosition(index: usize) Vec3 {
     const box = game.breakable_defs[index].position;
-    // Drops rest on the walk surface. The old test level had its floor top at
-    // y = 0; the authored blockout sits a full metre higher, so an absolute
-    // height here would bury the item inside the floor slab.
+
     return .{ .x = box.x, .y = level.current.ground_y + 0.18, .z = box.z };
 }
 
@@ -281,7 +271,6 @@ pub fn mapWorldAtScreen(screen_x: f32, screen_y: f32) Vec3 {
     };
 }
 
-
 pub fn nearSaveFixture() bool {
     const radius_squared = save_interaction_radius * save_interaction_radius;
     for (level.current.save_fixtures[0..level.current.save_fixture_count]) |fixture| {
@@ -291,4 +280,3 @@ pub fn nearSaveFixture() bool {
     }
     return false;
 }
-

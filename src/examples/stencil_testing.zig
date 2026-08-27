@@ -1,9 +1,3 @@
-//------------------------------------------------------------------------------
-// LearnOpenGL: Advanced OpenGL / Stencil testing
-//
-// Click either cube to select it. Click empty space to clear the selection.
-// The selected cube gets an outline made with the stencil buffer.
-//------------------------------------------------------------------------------
 const std = @import("std");
 const model_image = @import("model_image");
 const sokol = @import("sokol");
@@ -74,8 +68,6 @@ export fn init() void {
     var desc = basePipelineDesc(sg.makeShader(shd.texturedShaderDesc(sg.queryBackend())));
     state.scene_pipeline = sg.makePipeline(desc);
 
-    // GL_ALWAYS + GL_REPLACE + glStencilMask(0xFF): passing cube fragments
-    // replace the stencil value with ref (1).
     desc.stencil = .{
         .enabled = true,
         .front = .{ .compare = .ALWAYS, .pass_op = .REPLACE },
@@ -86,8 +78,6 @@ export fn init() void {
     };
     state.stencil_write_pipeline = sg.makePipeline(desc);
 
-    // GL_NOTEQUAL + glStencilMask(0x00): keep only enlarged fragments outside
-    // the original cube and do not alter the stencil buffer.
     desc.shader = sg.makeShader(shd.outlineShaderDesc(sg.queryBackend()));
     desc.depth = .{ .compare = .ALWAYS, .write_enabled = false };
     desc.stencil = .{
@@ -143,23 +133,17 @@ export fn frame() void {
 
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
 
-    // The floor never writes stencil values.
     sg.applyPipeline(state.scene_pipeline);
     sg.applyBindings(state.floor_bindings);
     drawObject(view_projection, Mat4.identity(), floor_indices.len);
 
-    // Draw both cubes normally. Only the selected one uses the pipeline that
-    // writes 1 into stencil pixels where both stencil and depth tests pass.
     for (cube_positions, 0..) |position, index| {
         sg.applyPipeline(if (state.selected_cube == index) state.stencil_write_pipeline else state.scene_pipeline);
-        // Applying a pipeline invalidates the previously applied bindings and
-        // uniforms, so every pipeline switch is followed by fresh bindings.
+
         sg.applyBindings(state.cube_bindings);
         drawObject(view_projection, Mat4.translate(position), cube_indices.len);
     }
 
-    // Draw the selected cube again at 1.1x size. NOT_EQUAL rejects the middle
-    // (stencil == 1), leaving only the enlarged shell visible as an outline.
     if (state.selected_cube) |index| {
         sg.applyPipeline(state.outline_pipeline);
         sg.applyBindings(state.cube_bindings);
@@ -198,8 +182,7 @@ fn pickCube(mouse_x: f32, mouse_y: f32) ?usize {
     const up = Vec3.cross(right, forward);
     const ndc_x = 2.0 * mouse_x / sapp.widthf() - 1.0;
     const ndc_y = 1.0 - 2.0 * mouse_y / sapp.heightf();
-    // Mat4.persp() in cube_math.zig takes a horizontal field of view:
-    // x spans +/-tan(fov/2), while y is divided by the viewport aspect.
+
     const half_width = @tan(field_of_view_degrees * std.math.pi / 360.0);
     const aspect = sapp.widthf() / sapp.heightf();
     const ray_direction = Vec3.norm(Vec3.add(forward, Vec3.add(
@@ -255,8 +238,7 @@ pub fn main() void {
         .event_cb = input,
         .width = 800,
         .height = 600,
-        // Sokol App defaults to a depth-only attachment. Stencil testing needs
-        // the combined depth-stencil swapchain format explicitly requested.
+
         .depth_format = .DEPTH_STENCIL,
         .sample_count = 4,
         .icon = .{ .sokol_default = true },

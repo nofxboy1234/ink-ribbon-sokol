@@ -47,8 +47,6 @@ pub const Vec4 = extern struct {
     w: f32 = 0.0,
 };
 
-/// Row-major matrices with row-vector multiplication, matching vecmath.h from
-/// sokol-samples. The shader compiler emits the corresponding transpositions.
 pub const Mat4 = extern struct {
     m: [4][4]f32 = @splat(@splat(0.0)),
 

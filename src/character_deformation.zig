@@ -1,10 +1,3 @@
-//! Procedural secondary motion for the cuboid actors.
-//!
-//! Gameplay owns the rigid capsule pose. This module samples that pose at
-//! render cadence and produces a small bend/twist/squash pose for the GPU.
-//! The spring state deliberately trails acceleration and turns, which gives
-//! the tall box the weighted, flexible motion seen on RE2R's Tofu character.
-
 const std = @import("std");
 const math = @import("math.zig");
 
@@ -66,8 +59,6 @@ const Spring = struct {
     value: f32 = 0,
     velocity: f32 = 0,
 
-    // Stable implicit damped spring. Unlike a naive Euler spring, this remains
-    // well behaved through an occasional long render frame.
     fn update(self: *Spring, target: f32, frequency: f32, damping: f32, dt: f32) void {
         const omega = 2.0 * std.math.pi * frequency;
         const f = 1.0 + 2.0 * dt * damping * omega;
@@ -158,10 +149,7 @@ pub const State = struct {
             -config.max_squash,
             config.max_squash,
         );
-        // The reference block does not have literal legs. Its lower corners
-        // alternately load and unload like feet, while the upper mass trails.
-        // Drive that lower pivot from gait at a snappier frequency than the
-        // body spring so it remains readable from a high camera angle.
+
         const foot_activity = @sqrt(activity);
         const target_foot_roll = std.math.clamp(
             foot_scale * gait * config.foot_roll * foot_activity,

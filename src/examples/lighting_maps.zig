@@ -1,9 +1,3 @@
-//------------------------------------------------------------------------------
-// LearnOpenGL: Lighting / Lighting maps
-//
-// The previous lesson gave one material to an entire object. Here, texture maps
-// give every fragment its own diffuse color and specular reflection strength.
-//------------------------------------------------------------------------------
 const std = @import("std");
 const sokol = @import("sokol");
 const slog = sokol.log;
@@ -38,7 +32,7 @@ const state = struct {
     var pass_action: sg.PassAction = .{};
 
     const light_position = vec3{ .x = 1.2, .y = 1.0, .z = 2.0 };
-    // Static pose inferred from the chapter's specular-map reference image.
+
     const camera_position = vec3{ .x = -1.40, .y = -0.73, .z = 3.59 };
     const camera_target = vec3{ .x = 0.32, .y = -0.05, .z = 1.26 };
     const view = mat4.lookat(camera_position, camera_target, vec3.up());
@@ -50,42 +44,37 @@ export fn init() void {
         .logger = .{ .func = slog.func },
     });
 
-    // Each vertex now has position, normal, and UV texture coordinates. UVs map
-    // each cube face across the complete 0..1 range of both texture images.
     state.bind.vertex_buffers[0] = sg.makeBuffer(.{
         .data = sg.asRange(&[_]Vertex{
-            // zig fmt: off
-            // -Z face
-            .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{  0.0,  0.0, -1.0 }, .uv = .{ 0.0, 0.0 } },
-            .{ .position = .{  0.5, -0.5, -0.5 }, .normal = .{  0.0,  0.0, -1.0 }, .uv = .{ 1.0, 0.0 } },
-            .{ .position = .{  0.5,  0.5, -0.5 }, .normal = .{  0.0,  0.0, -1.0 }, .uv = .{ 1.0, 1.0 } },
-            .{ .position = .{ -0.5,  0.5, -0.5 }, .normal = .{  0.0,  0.0, -1.0 }, .uv = .{ 0.0, 1.0 } },
-            // +Z face
-            .{ .position = .{ -0.5, -0.5,  0.5 }, .normal = .{  0.0,  0.0,  1.0 }, .uv = .{ 0.0, 0.0 } },
-            .{ .position = .{  0.5, -0.5,  0.5 }, .normal = .{  0.0,  0.0,  1.0 }, .uv = .{ 1.0, 0.0 } },
-            .{ .position = .{  0.5,  0.5,  0.5 }, .normal = .{  0.0,  0.0,  1.0 }, .uv = .{ 1.0, 1.0 } },
-            .{ .position = .{ -0.5,  0.5,  0.5 }, .normal = .{  0.0,  0.0,  1.0 }, .uv = .{ 0.0, 1.0 } },
-            // -X face
-            .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{ -1.0,  0.0,  0.0 }, .uv = .{ 0.0, 0.0 } },
-            .{ .position = .{ -0.5,  0.5, -0.5 }, .normal = .{ -1.0,  0.0,  0.0 }, .uv = .{ 1.0, 0.0 } },
-            .{ .position = .{ -0.5,  0.5,  0.5 }, .normal = .{ -1.0,  0.0,  0.0 }, .uv = .{ 1.0, 1.0 } },
-            .{ .position = .{ -0.5, -0.5,  0.5 }, .normal = .{ -1.0,  0.0,  0.0 }, .uv = .{ 0.0, 1.0 } },
-            // +X face
-            .{ .position = .{  0.5, -0.5, -0.5 }, .normal = .{  1.0,  0.0,  0.0 }, .uv = .{ 0.0, 0.0 } },
-            .{ .position = .{  0.5,  0.5, -0.5 }, .normal = .{  1.0,  0.0,  0.0 }, .uv = .{ 1.0, 0.0 } },
-            .{ .position = .{  0.5,  0.5,  0.5 }, .normal = .{  1.0,  0.0,  0.0 }, .uv = .{ 1.0, 1.0 } },
-            .{ .position = .{  0.5, -0.5,  0.5 }, .normal = .{  1.0,  0.0,  0.0 }, .uv = .{ 0.0, 1.0 } },
-            // -Y face
-            .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{  0.0, -1.0,  0.0 }, .uv = .{ 0.0, 0.0 } },
-            .{ .position = .{ -0.5, -0.5,  0.5 }, .normal = .{  0.0, -1.0,  0.0 }, .uv = .{ 1.0, 0.0 } },
-            .{ .position = .{  0.5, -0.5,  0.5 }, .normal = .{  0.0, -1.0,  0.0 }, .uv = .{ 1.0, 1.0 } },
-            .{ .position = .{  0.5, -0.5, -0.5 }, .normal = .{  0.0, -1.0,  0.0 }, .uv = .{ 0.0, 1.0 } },
-            // +Y face
-            .{ .position = .{ -0.5,  0.5, -0.5 }, .normal = .{  0.0,  1.0,  0.0 }, .uv = .{ 0.0, 0.0 } },
-            .{ .position = .{ -0.5,  0.5,  0.5 }, .normal = .{  0.0,  1.0,  0.0 }, .uv = .{ 1.0, 0.0 } },
-            .{ .position = .{  0.5,  0.5,  0.5 }, .normal = .{  0.0,  1.0,  0.0 }, .uv = .{ 1.0, 1.0 } },
-            .{ .position = .{  0.5,  0.5, -0.5 }, .normal = .{  0.0,  1.0,  0.0 }, .uv = .{ 0.0, 1.0 } },
-            // zig fmt: on
+            .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{ 0.0, 0.0, -1.0 }, .uv = .{ 0.0, 0.0 } },
+            .{ .position = .{ 0.5, -0.5, -0.5 }, .normal = .{ 0.0, 0.0, -1.0 }, .uv = .{ 1.0, 0.0 } },
+            .{ .position = .{ 0.5, 0.5, -0.5 }, .normal = .{ 0.0, 0.0, -1.0 }, .uv = .{ 1.0, 1.0 } },
+            .{ .position = .{ -0.5, 0.5, -0.5 }, .normal = .{ 0.0, 0.0, -1.0 }, .uv = .{ 0.0, 1.0 } },
+
+            .{ .position = .{ -0.5, -0.5, 0.5 }, .normal = .{ 0.0, 0.0, 1.0 }, .uv = .{ 0.0, 0.0 } },
+            .{ .position = .{ 0.5, -0.5, 0.5 }, .normal = .{ 0.0, 0.0, 1.0 }, .uv = .{ 1.0, 0.0 } },
+            .{ .position = .{ 0.5, 0.5, 0.5 }, .normal = .{ 0.0, 0.0, 1.0 }, .uv = .{ 1.0, 1.0 } },
+            .{ .position = .{ -0.5, 0.5, 0.5 }, .normal = .{ 0.0, 0.0, 1.0 }, .uv = .{ 0.0, 1.0 } },
+
+            .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{ -1.0, 0.0, 0.0 }, .uv = .{ 0.0, 0.0 } },
+            .{ .position = .{ -0.5, 0.5, -0.5 }, .normal = .{ -1.0, 0.0, 0.0 }, .uv = .{ 1.0, 0.0 } },
+            .{ .position = .{ -0.5, 0.5, 0.5 }, .normal = .{ -1.0, 0.0, 0.0 }, .uv = .{ 1.0, 1.0 } },
+            .{ .position = .{ -0.5, -0.5, 0.5 }, .normal = .{ -1.0, 0.0, 0.0 }, .uv = .{ 0.0, 1.0 } },
+
+            .{ .position = .{ 0.5, -0.5, -0.5 }, .normal = .{ 1.0, 0.0, 0.0 }, .uv = .{ 0.0, 0.0 } },
+            .{ .position = .{ 0.5, 0.5, -0.5 }, .normal = .{ 1.0, 0.0, 0.0 }, .uv = .{ 1.0, 0.0 } },
+            .{ .position = .{ 0.5, 0.5, 0.5 }, .normal = .{ 1.0, 0.0, 0.0 }, .uv = .{ 1.0, 1.0 } },
+            .{ .position = .{ 0.5, -0.5, 0.5 }, .normal = .{ 1.0, 0.0, 0.0 }, .uv = .{ 0.0, 1.0 } },
+
+            .{ .position = .{ -0.5, -0.5, -0.5 }, .normal = .{ 0.0, -1.0, 0.0 }, .uv = .{ 0.0, 0.0 } },
+            .{ .position = .{ -0.5, -0.5, 0.5 }, .normal = .{ 0.0, -1.0, 0.0 }, .uv = .{ 1.0, 0.0 } },
+            .{ .position = .{ 0.5, -0.5, 0.5 }, .normal = .{ 0.0, -1.0, 0.0 }, .uv = .{ 1.0, 1.0 } },
+            .{ .position = .{ 0.5, -0.5, -0.5 }, .normal = .{ 0.0, -1.0, 0.0 }, .uv = .{ 0.0, 1.0 } },
+
+            .{ .position = .{ -0.5, 0.5, -0.5 }, .normal = .{ 0.0, 1.0, 0.0 }, .uv = .{ 0.0, 0.0 } },
+            .{ .position = .{ -0.5, 0.5, 0.5 }, .normal = .{ 0.0, 1.0, 0.0 }, .uv = .{ 1.0, 0.0 } },
+            .{ .position = .{ 0.5, 0.5, 0.5 }, .normal = .{ 0.0, 1.0, 0.0 }, .uv = .{ 1.0, 1.0 } },
+            .{ .position = .{ 0.5, 0.5, -0.5 }, .normal = .{ 0.0, 1.0, 0.0 }, .uv = .{ 0.0, 1.0 } },
         }),
     });
     state.bind.index_buffer = sg.makeBuffer(.{

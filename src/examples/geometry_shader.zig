@@ -1,8 +1,3 @@
-//! Portable demonstrations of LearnOpenGL's Geometry Shader chapter.
-//!
-//! sokol_gfx has no geometry-shader stage. This scene recreates the chapter's
-//! results with CPU-expanded geometry and ordinary vertex shaders.
-
 const std = @import("std");
 const sokol = @import("sokol");
 const sapp = sokol.app;
@@ -38,28 +33,24 @@ const state = struct {
     var time: f32 = 0.0;
 };
 
-// Four input points became four houses in the OpenGL geometry shader. Here the
-// CPU has already expanded each conceptual point into three triangles.
 const house_vertices = makeHouses();
 
-// Four separate vertices per face let every face carry one flat face normal.
 const cube_vertices = [_]MeshVertex{
-    // -Z
     v(-0.5, -0.5, -0.5, 0, 0, -1), v(0.5, -0.5, -0.5, 0, 0, -1),
     v(0.5, 0.5, -0.5, 0, 0, -1),   v(-0.5, 0.5, -0.5, 0, 0, -1),
-    // +Z
+
     v(-0.5, -0.5, 0.5, 0, 0, 1),   v(0.5, -0.5, 0.5, 0, 0, 1),
     v(0.5, 0.5, 0.5, 0, 0, 1),     v(-0.5, 0.5, 0.5, 0, 0, 1),
-    // -X
+
     v(-0.5, -0.5, -0.5, -1, 0, 0), v(-0.5, 0.5, -0.5, -1, 0, 0),
     v(-0.5, 0.5, 0.5, -1, 0, 0),   v(-0.5, -0.5, 0.5, -1, 0, 0),
-    // +X
+
     v(0.5, -0.5, -0.5, 1, 0, 0),   v(0.5, 0.5, -0.5, 1, 0, 0),
     v(0.5, 0.5, 0.5, 1, 0, 0),     v(0.5, -0.5, 0.5, 1, 0, 0),
-    // -Y
+
     v(-0.5, -0.5, -0.5, 0, -1, 0), v(-0.5, -0.5, 0.5, 0, -1, 0),
     v(0.5, -0.5, 0.5, 0, -1, 0),   v(0.5, -0.5, -0.5, 0, -1, 0),
-    // +Y
+
     v(-0.5, 0.5, -0.5, 0, 1, 0),   v(-0.5, 0.5, 0.5, 0, 1, 0),
     v(0.5, 0.5, 0.5, 0, 1, 0),     v(0.5, 0.5, -0.5, 0, 1, 0),
 };

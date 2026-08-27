@@ -1,5 +1,3 @@
-//! Static, vertically subdivided cuboid used by the procedural actor shader.
-
 const std = @import("std");
 const math = @import("math.zig");
 
@@ -114,7 +112,7 @@ test "subdivided box has valid closed geometry" {
         if (vertex.position.y == -0.5) bottom_count += 1;
         if (vertex.position.y == 0.5) top_count += 1;
     }
-    // Eight side vertices plus four cap vertices at each end.
+
     try std.testing.expectEqual(@as(usize, 12), bottom_count);
     try std.testing.expectEqual(@as(usize, 12), top_count);
 }

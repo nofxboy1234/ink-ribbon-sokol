@@ -1,5 +1,3 @@
-// LearnOpenGL Light Casters: point light.
-// A point light shines in every direction and fades with distance.
 const sokol = @import("sokol");
 const lesson = @import("light_casters.zig");
 

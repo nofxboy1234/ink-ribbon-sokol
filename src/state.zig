@@ -1,10 +1,3 @@
-//! Shared scene state and declarations for the character mover.
-//!
-//! All subsystems render to and mutate the same runtime state. This module
-//! owns the record (types + constants + the `game` value) so the orchestrator,
-//! renderer, and UI can depend on it without importing one another. Systems
-//! receive `*GameState` by dependency injection and never read a hidden global.
-
 const std = @import("std");
 const b3 = @import("box3d");
 const sokol = @import("sokol");
@@ -26,29 +19,23 @@ const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
 const Mat4 = math.Mat4;
 
-/// Boolean -> 0.0/1.0, used to weight short-lived presentation factors.
 pub fn fbool(value: bool) f32 {
     return @floatFromInt(@intFromBool(value));
 }
 
-/// Smoothstep easing, clamped to [0, 1].
 pub fn smoothstep(value: f32) f32 {
     const t = std.math.clamp(value, 0, 1);
     return t * t * (3.0 - 2.0 * t);
 }
 
-/// Pack a colour into an opaque Vec4 (alpha = 1).
 pub fn rgb(r: f32, g: f32, b: f32) Vec4 {
     return .{ .x = r, .y = g, .z = b, .w = 1 };
 }
 
-/// True while the player is locked into a kick or pickup animation.
 pub fn playerActionActive() bool {
     return game.kick.active or game.pickup_action.active;
 }
 
-/// Pixel-space layout of the grid inventory, used by both the UI logic and the
-/// drawing code.
 pub const InventoryLayout = struct {
     left: f32,
     top: f32,
@@ -56,7 +43,6 @@ pub const InventoryLayout = struct {
     gap: f32,
 };
 
-/// Axis-aligned screen rectangle.
 pub const ScreenRect = struct {
     x: f32,
     y: f32,
@@ -68,27 +54,20 @@ pub const ScreenRect = struct {
     }
 };
 
-// Physics advances in fixed 1/60 s ticks; the clock accumulates real frame
-// time and releases ticks at that rate, so simulation speed is frame-rate
-// independent. max_* bounds how much backlog a slow frame may process.
 pub const fixed_dt: f64 = 1.0 / 60.0;
 pub const max_frame_dt: f64 = 0.1;
 pub const max_ticks_per_frame = 6;
 pub const shadow_map_size = 2048;
-// Half the character box's size along each axis (full size = 2x this).
+
 pub const character_half_extents = Vec3{ .x = 0.32, .y = 0.9, .z = 0.22 };
 
-// The hunter is a larger, red Tyrant-style box.
 pub const hunter_half_extents = Vec3{ .x = 0.45, .y = 1.25, .z = 0.30 };
 pub const hunter_color = Vec4{ .x = 0.92, .y = 0.12, .z = 0.14, .w = 1 };
 
-// Capsule centre heights match each actor's capsule geometry, so they sit on
-// the floor at the room-derived spawn points.
 pub const player_spawn_y: f32 = 0.9;
 pub const hunter_spawn_y: f32 = 1.5;
 pub const save_interaction_radius: f32 = 2.0;
 
-// How long a HUD notice (catch / save result) stays on screen.
 pub const notice_seconds: f32 = 3;
 pub const impact_capacity = 32;
 pub const impact_seconds: f32 = 0.35;
@@ -98,7 +77,6 @@ pub const hunter_knockdown_enter_seconds: f32 = 0.75;
 pub const hunter_knockdown_exit_seconds: f32 = 1.15;
 pub const shot_recoil_radians: f32 = 0.008;
 
-// Transient centered HUD messages.
 pub const HudNotice = enum {
     none,
     caught,
@@ -117,15 +95,14 @@ pub const HudNotice = enum {
     door_unlocked,
 };
 
-// Top-down map view tuning.
-pub const map_pan_speed: f32 = 25.0; // metres/second the map pans with WASD
+pub const map_pan_speed: f32 = 25.0;
 pub const map_margin: f32 = 2.0;
 pub const map_route_capacity = navmesh.level_cols * navmesh.level_rows;
 pub const map_route_width: f32 = 0.16;
 pub const map_route_height: f32 = 0.04;
 pub const map_route_danger_radius: f32 = 6.0;
 pub const map_route_danger_penalty: f32 = 4.0;
-pub const map_direction_color = rgb(0.741, 0.576, 0.976); // Dracula purple #BD93F9
+pub const map_direction_color = rgb(0.741, 0.576, 0.976);
 pub const map_direction_instance_count = 3;
 pub const map_save_capacity = 2;
 
@@ -230,8 +207,6 @@ pub const Debris = struct {
 };
 
 pub const Instance = extern struct {
-    // One GPU instance record: 3 transform axes (xyz) + origin (w), then color.
-    // Matches the vec4 attributes declared in character.glsl (inst_x/y/z/color).
     x: Vec4,
     y: Vec4,
     z: Vec4,
@@ -241,21 +216,16 @@ pub const Instance = extern struct {
 pub const Clock = struct {
     accumulator: f64 = 0,
 
-    // Add this frame's duration, clamped so a single slow frame can't flood
-    // the physics backlog.
     pub fn addFrame(self: *Clock, frame_time: f64) void {
         self.accumulator += @min(frame_time, max_frame_dt);
     }
 
-    // Pop one fixed tick whenever a full tick's worth of time has accrued.
     pub fn consumeTick(self: *Clock) bool {
         if (self.accumulator < fixed_dt) return false;
         self.accumulator -= fixed_dt;
         return true;
     }
 
-    // Fraction of the way toward the next tick — used to interpolate the
-    // character's render position between two physics states.
     pub fn alpha(self: Clock) f32 {
         return @floatCast(self.accumulator / fixed_dt);
     }
@@ -276,15 +246,12 @@ pub const InputState = struct {
         return self.forward or self.back or self.left or self.right;
     }
 
-    // Turn held keys into a movement intent. x is strafe (right-left),
-    // y is forward-back (positive = toward where the camera looks).
     pub fn characterInput(self: *InputState) controller.Input {
         const move: controller.Vec2 = .{
             .x = @as(f32, @floatFromInt(@intFromBool(self.right))) - @as(f32, @floatFromInt(@intFromBool(self.left))),
             .y = @as(f32, @floatFromInt(@intFromBool(self.forward))) - @as(f32, @floatFromInt(@intFromBool(self.back))),
         };
-        // Running is armed by Shift but only applies while a direction is held;
-        // releasing the direction keys falls back to walking and disarms it.
+
         const running = self.run and !self.aiming and (move.x != 0 or move.y != 0);
         if (!running) self.run = false;
         return .{
@@ -329,7 +296,7 @@ pub const HunterReaction = struct {
     pub fn amount(self: HunterReaction) f32 {
         if (!self.active() or self.duration <= 0) return 0;
         const t = std.math.clamp(self.elapsed / self.duration, 0, 1);
-        // A fast recoil followed by a longer ease back to the neutral pose.
+
         if (t < 0.18) return smoothstep(t / 0.18);
         return 1.0 - smoothstep((t - 0.18) / 0.82);
     }
@@ -365,8 +332,6 @@ pub const DebugState = struct {
 
 pub const MapRouteStatus = enum { none, found, arrived, no_path };
 
-// Typewriter save/load windows. While open they freeze the round exactly like
-// map mode does; navigation is keyboard-only.
 pub const MenuKind = enum { none, save, load, pause, results };
 pub const MenuState = struct {
     kind: MenuKind = .none,
@@ -386,8 +351,6 @@ pub const InventoryUi = struct {
     popup_cell: ?usize = null,
 };
 
-// Top-down map overlay state. The route is rebuilt from the current actor poses
-// whenever the map opens, then remains fixed while the player is paused.
 pub const MapState = struct {
     active: bool = false,
     hunter_paused: bool = true,
@@ -403,8 +366,6 @@ pub const MapState = struct {
     cursor: math.Vec2 = .{},
 };
 
-// Smooth directional quick-turn (RE2R): the character and camera swing toward
-// the held backward direction over a short animation instead of snapping.
 pub const QuickTurn = struct {
     active: bool = false,
     timer: f32 = 0,
@@ -416,13 +377,12 @@ pub const QuickTurn = struct {
 };
 
 pub const RenderState = struct {
-    // Shared mesh geometry (all shapes built into one vertex/index buffer).
     vertex_buffer: sg.Buffer = .{},
     index_buffer: sg.Buffer = .{},
-    // The actors use a separate vertically subdivided mesh so only they bend.
+
     actor_vertex_buffer: sg.Buffer = .{},
     actor_index_buffer: sg.Buffer = .{},
-    // Per-instance transform buffers: static level, dynamic character, debug capsule.
+
     level_instances: sg.Buffer = .{},
     roof_instance: sg.Buffer = .{},
     character_instance: sg.Buffer = .{},
@@ -467,7 +427,7 @@ pub const RenderState = struct {
     shadow_view: sg.View = .{},
     shadow_sampler: sg.Sampler = .{},
     light_view_projection: Mat4 = Mat4.identity(),
-    // Element ranges into the shared buffers for each shape type.
+
     box_range: sshape.ElementRange = .{},
     capsule_cylinder_range: sshape.ElementRange = .{},
     capsule_sphere_range: sshape.ElementRange = .{},
@@ -495,7 +455,7 @@ pub const GameState = struct {
     inventory_ui: InventoryUi = .{},
     run_stats: RunStats = .{},
     inventory: inventory.State = .{},
-    // Authored world-item layout, rebuilt from the level when it is loaded.
+
     pickup_count: usize = 0,
     pickup_defs: [max_pickups]PickupDef = undefined,
     breakable_count: usize = 0,
@@ -530,14 +490,13 @@ pub const GameState = struct {
     player_deformation: deformation.State = .{},
     hunter_deformation: deformation.State = .{},
     hunter_friendly: bool = false,
-    // Debug hold (F4): freezes just the hunter's simulation while the player
-    // keeps moving, so route and door behaviour can be tested uninterrupted.
+
     hunter_hold: bool = false,
     audio: game_audio.System = .{},
     audio_buffer: [audio_buffer_frames * audio_channel_count]f32 = @splat(0),
     player_step_distance: f32 = 0,
     hunter_step_distance: f32 = 0,
-    // Current transient HUD message and its remaining seconds.
+
     notice: HudNotice = .none,
     notice_timer: f32 = 0,
     quick_turn: QuickTurn = .{},
@@ -551,8 +510,7 @@ pub var game: GameState = .{};
 
 fn initialCharacter() controller.State {
     var character = controller.State.init(.{ .x = 0, .y = 0.9, .z = 17 });
-    // The initial camera looks toward -Z, so the character must face -Z too for
-    // the shoulder camera to begin behind it rather than in front of it.
+
     character.yaw = std.math.pi;
     return character;
 }
@@ -560,4 +518,3 @@ fn initialCharacter() controller.State {
 fn initialHunter() hunter.State {
     return hunter.State.init(.{ .x = 0, .y = 1.5, .z = -17 });
 }
-

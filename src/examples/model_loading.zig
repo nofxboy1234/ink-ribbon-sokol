@@ -1,12 +1,3 @@
-//------------------------------------------------------------------------------
-// LearnOpenGL Model Loading, using the same architecture as cgltf-sapp.c:
-//
-//   sokol.fetch loads files -> cgltf parses the glTF scene description
-//   -> the loader creates Sokol buffers, textures, bindings and draw data.
-//
-// Sokol deliberately does not prescribe a model format. cgltf is the small,
-// idiomatic companion library used by the upstream Sokol C sample for glTF.
-//------------------------------------------------------------------------------
 const std = @import("std");
 const builtin = @import("builtin");
 const cgltf = @import("cgltf");
@@ -131,8 +122,6 @@ fn parseGltf(file: sfetch.Range) void {
         return;
     }
 
-    // The glTF document, rather than Zig source code, selects the buffer and
-    // material images. This is the key architectural change from @embedFile.
     sendAsset(data.buffers[0].uri, vertexBufferFetched, &state.vertex_bytes);
     const material = primitive.material.*;
     sendAsset(
@@ -224,7 +213,6 @@ export fn frame() void {
     sfetch.dowork();
     var pass_action = state.pass_action;
     if (state.failed) {
-        // Match cgltf-sapp.c's unmistakable visual signal for loading errors.
         pass_action.colors[0].clear_value = .{ .r = 0.35, .g = 0, .b = 0, .a = 1 };
     }
     sg.beginPass(.{ .action = pass_action, .swapchain = sglue.swapchain() });

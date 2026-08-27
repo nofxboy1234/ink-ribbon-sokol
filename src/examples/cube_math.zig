@@ -1,11 +1,3 @@
-//------------------------------------------------------------------------------
-//  math.zig
-//
-//  minimal vector math helper functions, just the stuff needed for
-//  the sokol-samples
-//
-//  Ported from HandmadeMath.h
-//------------------------------------------------------------------------------
 const assert = @import("std").debug.assert;
 const math = @import("std").math;
 
