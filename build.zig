@@ -64,7 +64,7 @@ const Options = struct {
     anti_aliasing_mod: *Build.Module,
     basic_lighting_mod: *Build.Module,
     box3d_mod: *Build.Module,
-    character_mod: *Build.Module,
+    game_mod: *Build.Module,
     colors_mod: *Build.Module,
     cube_mod: *Build.Module,
     depth_testing_mod: *Build.Module,
@@ -541,8 +541,8 @@ pub fn build(b: *Build) !void {
             .{ .name = "math", .module = math_mod },
         },
     });
-    const character_mod = b.createModule(.{
-        .root_source_file = b.path("src/character.zig"),
+    const game_mod = b.createModule(.{
+        .root_source_file = b.path("src/game.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -552,7 +552,7 @@ pub fn build(b: *Build) !void {
             .{ .name = "cgltf", .module = cgltf_bindings },
         },
     });
-    character_mod.addAnonymousImport("level_glb", .{
+    game_mod.addAnonymousImport("level_glb", .{
         .root_source_file = b.path("level/level.glb"),
     });
     const basic_lighting_mod = b.createModule(.{
@@ -733,7 +733,7 @@ pub fn build(b: *Build) !void {
         .anti_aliasing_mod = anti_aliasing_mod,
         .basic_lighting_mod = basic_lighting_mod,
         .box3d_mod = box3d_mod,
-        .character_mod = character_mod,
+        .game_mod = game_mod,
         .colors_mod = colors_mod,
         .cube_mod = cube_mod,
         .depth_testing_mod = depth_testing_mod,
@@ -902,8 +902,8 @@ fn buildNative(b: *Build, opts: Options) void {
     b.installArtifact(box3d_exe);
 
     const character_exe = b.addExecutable(.{
-        .name = "ink_ribbon_character",
-        .root_module = opts.character_mod,
+        .name = "ink_ribbon_game",
+        .root_module = opts.game_mod,
     });
     character_exe.step.dependOn(opts.character_shdc_step);
     b.installArtifact(character_exe);
@@ -1137,7 +1137,7 @@ fn buildNative(b: *Build, opts: Options) void {
     const run_box3d_tests = b.addRunArtifact(box3d_tests);
 
     const character_tests = b.addTest(.{
-        .root_module = opts.character_mod,
+        .root_module = opts.game_mod,
     });
     character_tests.step.dependOn(opts.character_shdc_step);
     const run_character_tests = b.addRunArtifact(character_tests);
@@ -1323,8 +1323,8 @@ fn buildWeb(b: *Build, opts: Options) !void {
     });
     box3d_lib.step.dependOn(opts.box3d_shdc_step);
     const character_lib = b.addLibrary(.{
-        .name = "ink_ribbon_character",
-        .root_module = opts.character_mod,
+        .name = "ink_ribbon_game",
+        .root_module = opts.game_mod,
     });
     character_lib.step.dependOn(opts.character_shdc_step);
     const colors_lib = b.addLibrary(.{
@@ -1502,8 +1502,8 @@ fn buildWeb(b: *Build, opts: Options) !void {
 
     const character_link_step = try sokol.emLinkStep(b, .{
         .lib_main = character_lib,
-        .target = opts.character_mod.resolved_target.?,
-        .optimize = opts.character_mod.optimize.?,
+        .target = opts.game_mod.resolved_target.?,
+        .optimize = opts.game_mod.optimize.?,
         .emsdk = emsdk,
         .use_webgl2 = true,
         .use_emmalloc = true,
@@ -1765,7 +1765,7 @@ fn buildWeb(b: *Build, opts: Options) !void {
     b.step("run-box3d", "Run the Box3D example").dependOn(&run_box3d.step);
     b.step("run", "Run the Box3D example").dependOn(&run_box3d.step);
 
-    const run_character = sokol.emRunStep(b, .{ .name = "ink_ribbon_character", .emsdk = emsdk });
+    const run_character = sokol.emRunStep(b, .{ .name = "ink_ribbon_game", .emsdk = emsdk });
     run_character.step.dependOn(&character_link_step.step);
     b.step("run-character", "Run the character mover scene").dependOn(&run_character.step);
 

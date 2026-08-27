@@ -42,6 +42,11 @@ pub fn rgb(r: f32, g: f32, b: f32) Vec4 {
     return .{ .x = r, .y = g, .z = b, .w = 1 };
 }
 
+/// True while the player is locked into a kick or pickup animation.
+pub fn playerActionActive() bool {
+    return game.kick.active or game.pickup_action.active;
+}
+
 /// Pixel-space layout of the grid inventory, used by both the UI logic and the
 /// drawing code.
 pub const InventoryLayout = struct {
