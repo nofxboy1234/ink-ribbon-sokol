@@ -648,7 +648,7 @@ fn allRequiredDoorsUnlocked() bool {
 }
 
 fn hoverMenu(x: f32, y: f32) void {
-    const count: usize = if (game.menu.kind == .results) 2 else 3;
+    const count = presentation.rootMenuItemCount();
     for (0..count) |index| {
         if (rootMenuItemRect(index).contains(x, y)) {
             game.menu.slot = index;
@@ -722,7 +722,7 @@ fn inventoryClick(x: f32, y: f32) void {
 
 fn moveMenuSlot(delta: i32) void {
     const count: i32 = switch (game.menu.kind) {
-        .pause => 3,
+        .pause => 4,
         .results => 2,
         .save, .load => saves.slot_count,
         .none => return,
@@ -789,7 +789,8 @@ fn confirmMenu() void {
             switch (game.menu.slot) {
                 0 => closeMenu(),
                 1 => game.menu = .{ .kind = .load, .load_returns_to_pause = true },
-                2 => sapp.requestQuit(),
+                2 => game.render_resolution = presentation.cycleResolutionChoice(game.render_resolution),
+                3 => sapp.requestQuit(),
                 else => unreachable,
             }
             return;

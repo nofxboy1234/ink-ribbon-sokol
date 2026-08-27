@@ -148,8 +148,31 @@ pub fn kickAmount() f32 {
     return @sin(std.math.pi * std.math.clamp(game.kick.timer / action_duration, 0, 1));
 }
 
+pub const resolution_options = [3]struct { width: i32, height: i32, label: []const u8 }{
+    .{ .width = 1280, .height = 720, .label = "1280 x 720" },
+    .{ .width = 1920, .height = 1080, .label = "1920 x 1080" },
+    .{ .width = 2560, .height = 1440, .label = "2560 x 1440" },
+};
+
+pub fn resolutionOption(choice: state.ResolutionChoice) *const @TypeOf(resolution_options[0]) {
+    return &resolution_options[@backingInt(choice)];
+}
+
+pub fn cycleResolutionChoice(current: state.ResolutionChoice) state.ResolutionChoice {
+    const next = (@backingInt(current) + 1) % resolution_options.len;
+    return @fromBackingInt(@as(u8, @intCast(next)));
+}
+
+pub fn rootMenuItemCount() usize {
+    return switch (game.menu.kind) {
+        .results => 2,
+        .pause => 4,
+        else => 3,
+    };
+}
+
 pub fn rootMenuItemRect(index: usize) ScreenRect {
-    const count: usize = if (game.menu.kind == .results) 2 else 3;
+    const count = rootMenuItemCount();
     const width: f32 = 320;
     const height: f32 = 48;
     const gap: f32 = 12;

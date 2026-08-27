@@ -551,7 +551,10 @@ pub fn recreateSceneTargets(width: i32, height: i32) void {
 }
 
 pub fn draw(position: b3.b3Pos, frame_time: f32, gameplay_active: bool) void {
-    recreateSceneTargets(@max(sapp.width(), 1), @max(sapp.height(), 1));
+    // render internally at the chosen resolution; the post pass upscales to the
+    // native swapchain, Steam-settings-menu style
+    const option = presentation.resolutionOption(game.render_resolution);
+    recreateSceneTargets(@min(@max(sapp.width(), 1), option.width), @min(@max(sapp.height(), 1), option.height));
     const hunter_enabled = level.hunterEnabled();
 
     const fall = game.condition.fallAmount(game.condition_config);
@@ -1158,7 +1161,7 @@ pub fn drawRootMenuRects() void {
         .{},
         0,
     );
-    const count: usize = if (game.menu.kind == .results) 2 else 3;
+    const count = presentation.rootMenuItemCount();
     for (0..count) |index| {
         const selected = game.menu.slot == index;
         drawUiRect(
@@ -1223,7 +1226,13 @@ pub fn drawHud(position: b3.b3Pos) void {
     const fps = if (frame_duration > 0) 1.0 / frame_duration else 0;
     sdtx.canvas(sapp.widthf(), sapp.heightf());
     if (game.menu.kind == .pause) {
-        drawRootMenuText("PAUSED", &.{ "RETURN TO GAME", "LOAD GAME", "QUIT GAME" });
+        var resolution_buffer: [48]u8 = undefined;
+        const resolution_text = std.fmt.bufPrint(
+            &resolution_buffer,
+            "RESOLUTION: {s}",
+            .{presentation.resolutionOption(game.render_resolution).label},
+        ) catch unreachable;
+        drawRootMenuText("PAUSED", &.{ "RETURN TO GAME", "LOAD GAME", resolution_text, "QUIT GAME" });
         sdtx.draw();
         return;
     }

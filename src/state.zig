@@ -330,6 +330,8 @@ pub const DebugState = struct {
     draw_physics: bool = false,
 };
 
+pub const ResolutionChoice = enum(u8) { x720 = 0, x1080 = 1, x1440 = 2 };
+
 pub const MapRouteStatus = enum { none, found, arrived, no_path };
 
 pub const MenuKind = enum { none, save, load, pause, results };
@@ -451,6 +453,7 @@ pub const GameState = struct {
     clock: Clock = .{},
     input: InputState = .{},
     debug: DebugState = .{},
+    render_resolution: ResolutionChoice = .x1080,
     map: MapState = .{},
     menu: MenuState = .{},
     inventory_ui: InventoryUi = .{},
