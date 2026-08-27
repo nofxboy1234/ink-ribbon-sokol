@@ -529,29 +529,12 @@ fn approachAngle(value: f32, target: f32, amount: f32) f32 {
     return value + delta;
 }
 
-fn add(a: b3.b3Vec3, b: b3.b3Vec3) b3.b3Vec3 {
-    return .{ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z };
-}
-
-fn scale(v: b3.b3Vec3, s: f32) b3.b3Vec3 {
-    return .{ .x = v.x * s, .y = v.y * s, .z = v.z * s };
-}
-
-fn lengthSquared(v: b3.b3Vec3) f32 {
-    return v.x * v.x + v.y * v.y + v.z * v.z;
-}
-
-fn length(v: b3.b3Vec3) f32 {
-    return @sqrt(lengthSquared(v));
-}
-
-fn offset(p: b3.b3Pos, v: b3.b3Vec3) b3.b3Pos {
-    return .{ .x = p.x + v.x, .y = p.y + v.y, .z = p.z + v.z };
-}
-
-fn subPos(a: b3.b3Pos, b: b3.b3Pos) b3.b3Vec3 {
-    return .{ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z };
-}
+const add = controller.add;
+const scale = controller.scale;
+const length = controller.length;
+const lengthSquared = controller.lengthSquared;
+const offset = controller.offset;
+const subPos = controller.subPos;
 
 test "random range stays within bounds" {
     seedRandom(123);

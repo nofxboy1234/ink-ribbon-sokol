@@ -237,23 +237,32 @@ fn approachAngle(value: f32, target: f32, amount: f32) f32 {
     return value + delta;
 }
 
-fn add(a: b3.b3Vec3, b: b3.b3Vec3) b3.b3Vec3 {
+/// Shared vector/position arithmetic over Box3D's native types. These are
+/// equivalent to the Vec3 methods in math.zig, but operate on b3.b3Vec3 and
+/// b3.b3Pos so the mover and hunter systems can compose without converting.
+/// b3.b3Pos is a b3.b3Vec3 with an extra padding member, so a position offset
+/// is the same component-wise addition used by the physics query movers.
+pub fn add(a: b3.b3Vec3, b: b3.b3Vec3) b3.b3Vec3 {
     return .{ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z };
 }
 
-fn scale(v: b3.b3Vec3, s: f32) b3.b3Vec3 {
+pub fn scale(v: b3.b3Vec3, s: f32) b3.b3Vec3 {
     return .{ .x = v.x * s, .y = v.y * s, .z = v.z * s };
 }
 
-fn lengthSquared(v: b3.b3Vec3) f32 {
+pub fn lengthSquared(v: b3.b3Vec3) f32 {
     return v.x * v.x + v.y * v.y + v.z * v.z;
 }
 
-fn offset(p: b3.b3Pos, v: b3.b3Vec3) b3.b3Pos {
+pub fn length(v: b3.b3Vec3) f32 {
+    return @sqrt(lengthSquared(v));
+}
+
+pub fn offset(p: b3.b3Pos, v: b3.b3Vec3) b3.b3Pos {
     return .{ .x = p.x + v.x, .y = p.y + v.y, .z = p.z + v.z };
 }
 
-fn subPos(a: b3.b3Pos, b: b3.b3Pos) b3.b3Vec3 {
+pub fn subPos(a: b3.b3Pos, b: b3.b3Pos) b3.b3Vec3 {
     return .{ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z };
 }
 
